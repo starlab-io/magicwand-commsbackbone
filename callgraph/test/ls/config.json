@@ -1,0 +1,1 @@
+{"args": ["", "-l", "-la", "-lf", "--help"], "command": "ls", "targets": ["/bin", "/bin/ls", "test/ls/input/many_files", "test/ls/input/permission_denied", "test/ls/input/does_not_exist", ""], "nproc": 8, "count": 10, "outdir": "results/ls"}
