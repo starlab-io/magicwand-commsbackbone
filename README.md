@@ -32,7 +32,25 @@ cd gocode
 ./goloris -victimUrl-="http://192.168.33.10/"
 ```
 
+### See the impact
+
+On the machine:
+
+```
+cd test-harness/apache
+vagrant ssh
+
+# Maxes out around 256 processes
+ps aux | grep httpd | wc -l
+```
+
+Or by fetching the web page from your host machine
+
+http://192.168.33.10
+
 ### Installing an old version of nginx (not currently used)
 
+```
 http://hg.nginx.org/nginx/archive/release-1.5.8.tar.gz
 ./auto/configure --without-http_rewrite_module --without-http_gzip_module
+```
