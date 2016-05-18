@@ -27,7 +27,5 @@ sudo apachectl stop
 ### Check out output files
 ```
 ls ~/output
-### Attack Apache with goloris
-
 ```
 Files should be labeled "trace.<pid>"
