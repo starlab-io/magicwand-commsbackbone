@@ -49,4 +49,4 @@ total 13884
 -rw-r--r-- 1 root root  448828 May 19 22:37 trace.21496
 -rw-r--r-- 1 root root  448098 May 19 22:37 trace.21497
 ```
-Files should be labeled "trace.<pid>"
+Files should be labeled "trace.\<pid\>"
