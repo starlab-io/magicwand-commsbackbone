@@ -56,7 +56,7 @@ BOOL FollowChild(CHILD_PROCESS childProcess, VOID * userData) {
 /* ===================================================================== */
 
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool",
-    "o", "output/trace", "specify output file name");
+    "o", "/home/vagrant/output/trace", "specify output file name");
 
 //==============================================================
 //  Analysis Routines

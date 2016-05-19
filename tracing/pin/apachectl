@@ -45,7 +45,7 @@ ARGV="$@"
 # 
 # the path to your httpd binary, including options if necessary
 HTTPD='/usr/local/apache2/bin/httpd'
-PIN="pin -t /vagrant/pin/obj-ia32/calltrace.so --"
+PIN="pin -follow_execv -t /vagrant/pin/obj-ia32/calltrace.so --"
 #
 # pick up any necessary environment variables
 if test -f /usr/local/apache2/bin/envvars; then
