@@ -12,7 +12,7 @@ Vagrant.configure(2) do |config|
 
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://atlas.hashicorp.com/search.
-  config.vm.box = "ubuntu/trusty32" # Ubuntu 14.04 LTS
+  config.vm.box = "ubuntu/trusty64" # Ubuntu 14.04 LTS
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
@@ -91,10 +91,10 @@ Vagrant.configure(2) do |config|
  
     # build pin tool
     cd /vagrant/pin/
-    make PIN_ROOT=~/pin-current obj-ia32/calltrace.so
+    make PIN_ROOT=~/pin-current obj-intel64/calltrace.so
     
     # modify build script
-    sudo ln -s /vagrant/pin/apachectl /bin/apachectl
+    sudo ln -s /vagrant/pin/apachectl64 /bin/apachectl
     
     # output directory for pin
     cd ~
