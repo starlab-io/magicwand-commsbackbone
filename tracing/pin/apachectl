@@ -45,7 +45,15 @@ ARGV="$@"
 # 
 # the path to your httpd binary, including options if necessary
 HTTPD='/usr/local/apache2/bin/httpd'
-PIN="pin -follow_execv -t /vagrant/pin/obj-ia32/calltrace.so --"
+PIN="pin -follow_execv -t /vagrant/pin/obj-intel64/calltrace.so --"
+PINSTREAM="pin -follow_execv -t /vagrant/pin/obj-intel64/calltrace_streaming.so --"
+if [ `uname -m` = "x86_64" ]; then
+    PIN="pin -follow_execv -t /vagrant/pin/obj-intel64/calltrace.so --"
+    PINSTREAM="pin -follow_execv -t /vagrant/pin/obj-intel64/calltrace_streaming.so --"
+else
+    PIN="pin -follow_execv -t /vagrant/pin/obj-ia32/calltrace.so --" 
+    PINSTREAM="pin -follow_execv -t /vagrant/pin/obj-ia32/calltrace_streaming.so --"
+fi
 #
 # pick up any necessary environment variables
 if test -f /usr/local/apache2/bin/envvars; then
@@ -87,6 +95,11 @@ start|stop|restart|graceful|graceful-stop)
 pin)
     echo Starting httpd with pin instrumenation tool: $PIN
     $PIN $HTTPD -k start
+    ERROR=$?
+    ;;
+pin-stream)
+    echo Starting httpd with streaming pin instrumenation tool: $PINSTREAM
+    $PINSTREAM $HTTPD -k start
     ERROR=$?
     ;;
 startssl|sslstart|start-SSL)

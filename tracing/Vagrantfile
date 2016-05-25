@@ -1,5 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
+bitness = "64"
+#bitness = "32"
 
 # All Vagrant configuration is done below. The "2" in Vagrant.configure
 # configures the configuration version (we support older styles for
@@ -12,7 +14,11 @@ Vagrant.configure(2) do |config|
 
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://atlas.hashicorp.com/search.
-  config.vm.box = "ubuntu/trusty32" # Ubuntu 14.04 LTS
+  if bitness == "64"
+    config.vm.box = "ubuntu/trusty64"
+  else
+    config.vm.box = "ubuntu/trusty32" # Ubuntu 14.04 LTS
+  end
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
@@ -91,7 +97,14 @@ Vagrant.configure(2) do |config|
  
     # build pin tool
     cd /vagrant/pin/
-    make PIN_ROOT=~/pin-current obj-ia32/calltrace.so
+    # make will not run for the unused architecture
+    if [ `uname -m` = "x86_64" ]; then
+        make PIN_ROOT=~/pin-current obj-intel64/calltrace.so
+        make PIN_ROOT=~/pin-current obj-intel64/calltrace_streaming.so
+    else
+        make PIN_ROOT=~/pin-current obj-ia32/calltrace.so
+        make PIN_ROOT=~/pin-current obj-ia32/calltrace_streaming.so
+    fi
     
     # modify build script
     sudo ln -s /vagrant/pin/apachectl /bin/apachectl
@@ -102,7 +115,8 @@ Vagrant.configure(2) do |config|
     chmod 777 output
 
     # start httpd server with PIN instrumentation
-    sudo apachectl pin
+    #sudo apachectl pin
+    sudo apachectl pin-stream
     # still stopped in the same way: 
     #sudo apachectl stop
     # see output directory for traces
