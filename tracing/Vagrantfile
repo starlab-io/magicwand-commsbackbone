@@ -1,7 +1,7 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
-bitness = "64"
-#bitness = "32"
+#bitness = "64"
+bitness = "32"
 
 # All Vagrant configuration is done below. The "2" in Vagrant.configure
 # configures the configuration version (we support older styles for
@@ -99,9 +99,11 @@ Vagrant.configure(2) do |config|
     cd /vagrant/pin/
     # make will not run for the unused architecture
     if [ `uname -m` = "x86_64" ]; then
+        mkdir obj-intel64
         make PIN_ROOT=~/pin-current obj-intel64/calltrace.so
         make PIN_ROOT=~/pin-current obj-intel64/calltrace_streaming.so
     else
+        mkdir obj-ia32
         make PIN_ROOT=~/pin-current obj-ia32/calltrace.so
         make PIN_ROOT=~/pin-current obj-ia32/calltrace_streaming.so
     fi

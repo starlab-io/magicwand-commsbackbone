@@ -49,7 +49,7 @@ using namespace std;
 /* ===================================================================== */
 
 BOOL FollowChild(CHILD_PROCESS childProcess, VOID * userData) {
-    fprintf(stdout, "before child:%u\n", getpid());
+    fprintf(stdout, "Follow before child:%u\n", PIN_GetPid());
     return TRUE;
 }        
 
@@ -101,7 +101,7 @@ static TLS_KEY tls_key;
 
 // After process fork, reset pid, thread local storage (tls), and output file
 VOID AfterForkInChild(THREADID threadid, const CONTEXT* ctxt, VOID * arg) {
-    fprintf(stdout, "After Fork in Child %u\n", getpid());
+    fprintf(stdout, "After Fork in Child %u\n", PIN_GetPid());
     pid = PIN_GetPid();    
     // reset tls information
     // TODO: I don't know if this is completely necessary
@@ -120,6 +120,7 @@ VOID AfterForkInChild(THREADID threadid, const CONTEXT* ctxt, VOID * arg) {
 
 // This routine is executed every time a thread is created.
 VOID ThreadStart(THREADID threadid, CONTEXT *ctxt, INT32 flags, VOID *v) {
+    fprintf(stdout, "Thread %u started\n", PIN_GetTid());
     FUN_START_END * fun = new FUN_START_END;
     fun->_address = (ADDRINT) 0;
     fun->call = 1;
@@ -140,8 +141,8 @@ VOID ThreadStart(THREADID threadid, CONTEXT *ctxt, INT32 flags, VOID *v) {
 }
 
 // This routine is executed every time a thread is destroyed.
-VOID ThreadFini(THREADID threadid, const CONTEXT *ctxt, INT32 code, VOID *v)
-{
+VOID ThreadFini(THREADID threadid, const CONTEXT *ctxt, INT32 code, VOID *v) {
+    fprintf(stdout, "Thread %u finished\n", PIN_GetTid());
     FUN_START_END * fun = new FUN_START_END;
     fun->_address = (ADDRINT) 0;
     fun->call = 0;
@@ -188,8 +189,7 @@ const char * StripPath(const char * path) {
 //====================================================================
 
 // Pin calls this function every time a new rtn is executed
-VOID Routine(RTN rtn, VOID *v)
-{
+VOID Routine(RTN rtn, VOID *v) {
     // Allocate a structure for this routine
     RTN_COUNT * rc = new RTN_COUNT;
     rc->_address = RTN_Address(rtn);
@@ -216,7 +216,7 @@ VOID Routine(RTN rtn, VOID *v)
 // This function is called when the application exits
 // It prints the name and count for each procedure
 VOID Fini(INT32 code, VOID *v) {
-    fprintf(stdout, "Application Finish %u\n", getpid());
+    fprintf(stdout, "Application Finish %u\n", PIN_GetTid());
 
     outFile << setw(30) << "Procedure" << " "
             << setw(20) << "Image"     << " "
@@ -269,7 +269,7 @@ INT32 Usage()
 /* ===================================================================== */
 
 int main(int argc, char * argv[]) {
-    fprintf(stdout, "entering main\n");
+    fprintf(stdout, "Application main %u\n", PIN_GetTid());
     // Initialize the pin lock
     PIN_InitLock(&lock);
     
@@ -281,7 +281,6 @@ int main(int argc, char * argv[]) {
     // Follow child processes
     PIN_AddFollowChildProcessFunction(FollowChild, 0);
 
-// TODO: Need a different output file for child and forked processes 
     pid = PIN_GetPid();    
     numThreads = 0;
 
@@ -292,8 +291,6 @@ int main(int argc, char * argv[]) {
     outFile.open((KnobOutputFile.Value() + "." + pid_name).c_str());
     //outFile.open("proccount.out");
     //out = fopen(KnobOutputFile.Value().c_str(), "w");
-
-    fprintf(stdout, "current process:%s\n", pid_name.c_str());
 
     tls_key = PIN_CreateThreadDataKey(0);
 
