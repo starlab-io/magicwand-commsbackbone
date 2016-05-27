@@ -5,7 +5,7 @@ MAGICWAND Tracing Data Generation
 
 ```
 cd /vagrant/tracing/datagen
-./run.sh conf/ls.conf 
+python run.py conf/ls.conf 
 ```
 
 ### Currently set to output data to /vagrant/tracing/datagen/results

@@ -11,8 +11,3 @@ set softtabstop=4
 filetype indent plugin on
 filetype indent on
 syntax on
-
-"set smartindent
-"set tabstop=4
-"set shiftwidth=4
-"set expandtab
