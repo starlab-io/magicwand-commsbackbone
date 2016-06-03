@@ -14,7 +14,7 @@ all: single_static single_uniform single_exp multi_dtmc multi_ctmc multi_semi
 single_static: single_static.o
 	$(CC) $(CFLAGS) -o single_static single_static.o $(LDFLAGS)
 
-single_uniform: single_uniform.o
+single_uniform: single_uniform.o random.o
 	$(CC) $(CFLAGS) -o single_uniform single_uniform.o random.o $(LDFLAGS)
 
 single_exp: single_exp.o
