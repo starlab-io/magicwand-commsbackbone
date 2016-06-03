@@ -5,13 +5,14 @@
 
 #include <unistd.h>
 #include "random.h"
-#include <stdio.h>
+//#include <stdio.h>
 
 typedef int bool;
 #define true 1
 #define false 0
 
-const static int SIZE = 4;
+#define SIZE 4
+//const static int SIZE = 4;
 static double p0[] = {0, 0.4, 0.6, 0};
 static double p1[] = {0, 0, 1.0, 0};
 static double p2[] = {0.35, 0.3, 0, 0.35};
@@ -25,17 +26,17 @@ int fun1();
 int fun2();
 
 int fun0() {
-    usleep(uniformInt(0, 200000));
+    usleep(uniformInt(0, 2000));
     return choice(c0, SIZE);
 }
 
 int fun1() {
-    usleep(uniformInt(0, 1600000));
+    usleep(uniformInt(0, 16000));
     return choice(c1, SIZE);
 }
 
 int fun2() {
-    usleep(uniformInt(0, 600000));
+    usleep(uniformInt(0, 6000));
     return choice(c2, SIZE);
 }
 
@@ -48,7 +49,7 @@ int main() {
     int next = 0;
     bool condition = true;
     while (condition) {
-        printf("Function %d\n", next);
+        //printf("Function %d\n", next);
         switch (next) {
             case 0:
                 next = fun0();

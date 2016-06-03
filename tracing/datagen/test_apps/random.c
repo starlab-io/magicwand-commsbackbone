@@ -51,7 +51,8 @@ int choice(double cdf[], int size) {
     }
 
     double d = uniform();
-    for (int i = 0; i < size - 1; i++) {
+    int i;
+    for (i = 0; i < size - 1; i++) {
         if (d < cdf[i]) { // linear search is fast for small n
             return i;
         }
@@ -62,7 +63,8 @@ int choice(double cdf[], int size) {
 void pdfToCdf(double pdf[], double cdf[], int size) {
     if (size > 0) {
         cdf[0] = pdf[0];
-        for (int i = 1; i < size - 1; i++) {
+        int i;
+        for (i = 1; i < size - 1; i++) {
             cdf[i] = cdf[i - 1] + pdf[i];
         }
         cdf[size - 1] = 1.0; // ensure the last entry is 1.0

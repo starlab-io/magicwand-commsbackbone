@@ -9,12 +9,12 @@ void fun1();
 void fun2();
 
 void fun1() {
-    usleep(uniformInt(0, 2000000));
+    usleep(uniformInt(0, 20000));
     return;
 }
 
 void fun2() {
-    usleep(uniformInt(0, 4000000));
+    usleep(uniformInt(0, 40000));
     return;
 }
 
