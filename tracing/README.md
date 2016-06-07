@@ -1,6 +1,10 @@
 MAGICWAND Tracing 
 =======
 
+## Relevant Directories
+
+The callgrind directory is there only for historical reasons. I may actually remove it soon. The real tracing tool is called "callgraph" (which is actually a horrible name, because it generates a trace, not a graph), and is found in the pin directory. The datagen directory contains toy executable code and scripts to generate trace data from them. 
+
 ## Start the Apache 2.2.11 server VM and log in
 
 ```
