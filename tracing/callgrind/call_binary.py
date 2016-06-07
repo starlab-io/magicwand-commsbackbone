@@ -8,6 +8,7 @@ import logging
 
 from common import config, set_config, call
 
+#def run(config_path, callgrind='valgrind --tool=callgrind --callgrind-out-file={} --compress-strings=no'):
 def run(config_path, callgrind='valgrind --tool=callgrind --callgrind-out-file={}'):
     '''Run a series of processes with callgrind to generate output'''
     # get config
@@ -25,7 +26,8 @@ def run(config_path, callgrind='valgrind --tool=callgrind --callgrind-out-file={
     logging.debug(conf)
     
     # create command line arguments and output directory 
-    runs = [x for x in itertools.product([command], args, targets)]
+    
+    runs = [x for x in itertools.product(*[x for x in [[command], args, targets] if x])]
     runs = [[i for i in x if i] for x in runs] # filter out empty args
     outputs = ['{}.callgrind'.format(x) for x in range(len(runs))]
     for directory in (os.path.join(outdir, 'callgrind'),):
