@@ -1,0 +1,13 @@
+version: '2'
+services:
+  apache:
+    build: "./apache"
+    ports:
+      - "9000:80"
+  goloris:
+    build: "./goloris"
+    depends_on:
+      - apache
+    links:
+      - apache
+    command: /goloris -victimUrl="http://apache"
