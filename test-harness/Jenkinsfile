@@ -27,13 +27,55 @@ node {
 
                 sh "docker-compose up --no-build -d"
 
-                stage "Waiting for data"
-
-                sh "sleep 60"
-
-                stage "Collecting data"
+                stage "Collection 01"
 
                 sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 02"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 03"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 04"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 05"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 06"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 07"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 08"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 09"
+
+                sh "./stats.sh"
+                sh "sleep 5"
+
+                stage "Collection 10"
+
+                sh "./stats.sh"
+                sh "sleep 5"
 
                 stage "Spin down"
 
