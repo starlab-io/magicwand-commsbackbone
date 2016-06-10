@@ -15,7 +15,7 @@ node {
 		// checkout our content
 		stage 'Checkout'
 
-		sh 'git -c http.sslVerify=false clone https://gitlab.labs/patrick.dwyer/{$REPO}.git'
+		sh "git -c http.sslVerify=false clone https://gitlab.labs/patrick.dwyer/${REPO}.git"
 
         dir(REPO) {
             dir ("test-harness") {
@@ -35,14 +35,10 @@ node {
 
                 sh "docker-compose down"
             }
-
         }
-
 		slackSend channel: '#xd3-magicwand', message: "Test ${REPO}/${IMAGE} # ${env.BUILD_NUMBER} succeeded", teamDomain: 'invincealabs', token: 'IO6gEo9GXsCiperPGx0XPIKk'
-
 	}
 	catch (err) {
 		slackSend channel: '#xd3-magicwand', message: "Test ${REPO}/${IMAGE} # ${env.BUILD_NUMBER} failed", teamDomain: 'invincealabs', token: 'IO6gEo9GXsCiperPGx0XPIKk'
-
 	}
 }
