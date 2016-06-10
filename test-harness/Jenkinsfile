@@ -1,0 +1,44 @@
+
+node {
+
+    def IMAGE = "ta3-slow-loris"
+    def REPO = "magicwand-mirror"
+
+	slackSend channel: '#xd3-magicwand', message: "Building ${REPO}/${IMAGE} # ${env.BUILD_NUMBER}", teamDomain: 'invincealabs', token: 'IO6gEo9GXsCiperPGx0XPIKk'
+
+	try {
+		// clean previous instances of magicwand
+		stage 'Clear old instances'
+
+		sh "rm -rf ${REPO}"
+
+		// checkout our content
+		stage 'Checkout'
+
+		sh "git -c http.sslVerify=false clone https://gitlab.labs/patrick.dwyer/${REPO}.git"
+
+        dir(REPO) {
+            dir ("test-harness") {
+                stage "Docker Compose"
+
+                sh "docker-compose up -d"
+
+                stage "Waiting for data"
+
+                sh "sleep 60"
+
+                stage "Collecting data"
+
+                sh "./stats.sh"
+
+                stage "Spin down"
+
+                sh "docker-compose down"
+            }
+        }
+		slackSend channel: '#xd3-magicwand', message: "Test ${REPO}/${IMAGE} # ${env.BUILD_NUMBER} succeeded", teamDomain: 'invincealabs', token: 'IO6gEo9GXsCiperPGx0XPIKk'
+	}
+	catch (err) {
+		slackSend channel: '#xd3-magicwand', message: "Test ${REPO}/${IMAGE} # ${env.BUILD_NUMBER} failed", teamDomain: 'invincealabs', token: 'IO6gEo9GXsCiperPGx0XPIKk'
+	}
+}
