@@ -29,7 +29,7 @@ sudo /usr/local/apache2/bin/apachectl start
 cd test-harness/goloris
 vagrant ssh
 cd gocode/bin
-./goloris -victimUrl="http://192.168.33.10/"
+./goloris -victimUrl="http://192.168.33.10:80"
 ```
 
 ### See the impact
