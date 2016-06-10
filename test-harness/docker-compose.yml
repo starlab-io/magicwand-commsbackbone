@@ -1,5 +1,4 @@
 version: '2'
-network_mode: 'host'
 services:
   apache:
     build: "./apache"
