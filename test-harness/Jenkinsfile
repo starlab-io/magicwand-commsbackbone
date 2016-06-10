@@ -19,9 +19,13 @@ node {
 
         dir(REPO) {
             dir ("test-harness") {
+                stage "Downloading images"
+                sh "docker pull patricknevindwyer/apache-harness:latest"
+                sh "docker pull patricknevindwyer/goloris-harness:latest"
+
                 stage "Docker Compose"
 
-                sh "docker-compose up -d"
+                sh "docker-compose up --no-build -d"
 
                 stage "Waiting for data"
 

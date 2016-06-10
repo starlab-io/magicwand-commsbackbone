@@ -1,11 +1,11 @@
 version: '2'
 services:
   apache:
-    build: "./apache"
+    image: patricknevindwyer/apache-harness:latest
     ports:
       - "9000:80"
   goloris:
-    build: "./goloris"
+    image: patricknevindwyer/goloris-harness:latest
     depends_on:
       - apache
     links:
