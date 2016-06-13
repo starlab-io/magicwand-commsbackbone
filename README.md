@@ -50,14 +50,19 @@ docker rm apache-harness
 
 
 ## Running the Tests
-
+history
 Running the test harness is fairly simple - from the *test-harness* directory:
 
 ```sh
 docker-compose up -d
 ```
 
-starts the tests. You can then check on Apache with the *stats.sh* script:
+starts the tests. 
+
+> Note that the version of docker-compose installed by apt is out-of-date. To install a sufficient version: sudo apt install python-pip; pip install --upgrade pip; sudo pip install docker-compose
+
+
+You can then check on Apache with the *stats.sh* script:
 
 ```sh
 ./stats.sh
@@ -146,7 +151,7 @@ The Apache image _has_ a default command to spin up the web server, so
 you can start the Apache image with:
 
 ```sh
-docer run -d --name apache  -p 9000:80 -t patricknevindwyer/apache-harness:latest
+docker run -d --name apache  -p 9000:80 -t patricknevindwyer/apache-harness:latest
 ```
 
 ### Logging into Apache environment
