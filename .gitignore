@@ -1,2 +1,3 @@
 .vagrant
 .idea
+test-harness/log/
