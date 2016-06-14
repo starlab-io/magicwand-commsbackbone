@@ -28,7 +28,36 @@ with `docker-compose`
 docker-compose logs httperf
 ```
 
-# Sample Output
+## Logs
+
+When run via `docker-compose` the *HTTPerf* measurements will be saved to
+the docker host in the relative directory (relative to _magicwand/test-harness_) 
+_log/httperf/_. The raw output from *HTTPerf* will be in the _performance.log_
+
+## Basic Workflow
+
+When working on or with the HTTPerf container, a simple workflow is:
+
+```sh
+docker-compose up -d apache httperf
+```
+
+to start the containers. Follow immediately with:
+
+```sh
+docker-compose logs -f httperf
+```
+
+to tail follow the logs from *HTTPerf*. Once *HTTPerf* outputs it's exit code, the
+ test run is complete.
+ 
+ Log files should be available in `./log/httperf/`. Clean up with:
+ 
+ ```sh
+ docker-compose down
+ ```
+
+### Sample Output
 
 ```sh
 httperf_1  | Starting HTTPERF
