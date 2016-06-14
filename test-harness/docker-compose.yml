@@ -11,3 +11,9 @@ services:
     links:
       - apache
     command: /goloris -victimUrl="http://apache"
+  httperf:
+    image: patricknevindwyer/httperf:latest
+    depends_on:
+      - apache
+    links:
+      - apache
