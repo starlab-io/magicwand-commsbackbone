@@ -35,7 +35,7 @@ WORKDIR /root/tmp
 RUN wget http://software.intel.com/sites/landingpage/pintool/downloads/pin-3.0-76991-gcc-linux.tar.gz
 RUN tar -zxvf pin-3.0-76991-gcc-linux.tar.gz
 RUN ln -s pin-3.0-76991-gcc-linux pin-current
-RUN ln -s /root/pin-current/pin /bin/pin
+RUN ln -s /root/tmp/pin-current/pin /bin/pin
 
 # build a PIN tool
 WORKDIR /root/pin
@@ -45,9 +45,13 @@ RUN make PIN_ROOT=/root/tmp/pin-current obj-intel64/calltrace.so
 RUN make PIN_ROOT=/root/tmp/pin-current obj-intel64/calltrace_streaming.so
 
 RUN ln -s /root/pin/apachectl /bin/apachectl
+RUN chmod ugo+x /root/pin/apachectl
 
 # setup trace output
 RUN mkdir /root/output
 RUN chmod ugo+rwx /root/output
 
-CMD ["apachectl pin-stream"]
+# Set the output volume
+VOLUME ["/root/output"]
+
+CMD apachectl pin
