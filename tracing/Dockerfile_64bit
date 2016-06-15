@@ -11,6 +11,7 @@ RUN mkdir /root/tmp
 RUN mkdir /root/pin
 
 ADD ./pin/* /root/pin/
+RUN mv /root/pin/apachectl64 /root/pin/apachectl
 
 # Install apache
 WORKDIR /root/tmp
@@ -40,8 +41,8 @@ RUN ln -s /root/pin-current/pin /bin/pin
 WORKDIR /root/pin
 
 RUN mkdir obj-intel64
-RUN make PIN_ROOT=/root/pin-current obj-intel64/calltrace.so
-RUN make PIN_ROOT=/root/pin-current obj-intel64/calltrace_streaming.so
+RUN make PIN_ROOT=/root/tmp/pin-current obj-intel64/calltrace.so
+RUN make PIN_ROOT=/root/tmp/pin-current obj-intel64/calltrace_streaming.so
 
 RUN ln -s /root/pin/apachectl /bin/apachectl
 

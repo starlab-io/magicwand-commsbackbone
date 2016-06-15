@@ -21,12 +21,12 @@
 #
 # Apache control script designed to allow an easy command line interface
 # to controlling Apache.  Written by Marc Slemko, 1997/08/23
-# 
+#
 # The exit codes returned are:
 #   XXX this doc is no longer correct now that the interesting
 #   XXX functions are handled by httpd
 #	0 - operation completed successfully
-#	1 - 
+#	1 -
 #	2 - usage error
 #	3 - httpd could not be started
 #	4 - httpd could not be stopped
@@ -42,18 +42,12 @@ ARGV="$@"
 #
 # |||||||||||||||||||| START CONFIGURATION SECTION  ||||||||||||||||||||
 # --------------------                              --------------------
-# 
+#
 # the path to your httpd binary, including options if necessary
 HTTPD='/usr/local/apache2/bin/httpd'
-PIN="pin -follow_execv -t /root/pin/obj-intel64/calltrace.so --"
-PINSTREAM="pin -follow_execv -t /root/pin/obj-intel64/calltrace_streaming.so --"
-if [ `uname -m` = "x86_64" ]; then
-    PIN="pin -follow_execv -t /root/pin/obj-intel64/calltrace.so --"
-    PINSTREAM="pin -follow_execv -t /root/pin/obj-intel64/calltrace_streaming.so --"
-else
-    PIN="pin -follow_execv -t /root/pin/obj-ia32/calltrace.so --"
-    PINSTREAM="pin -follow_execv -t /root/pin/obj-ia32/calltrace_streaming.so --"
-fi
+PIN="pin -follow_execv -t /root/pin/obj-ia32/calltrace.so --"
+PINSTREAM="pin -follow_execv -t /root/pin/obj-ia32/calltrace_streaming.so --"
+
 #
 # pick up any necessary environment variables
 if test -f /usr/local/apache2/bin/envvars; then
@@ -62,7 +56,7 @@ fi
 #
 # a command that outputs a formatted text version of the HTML at the
 # url given on the command line.  Designed for lynx, however other
-# programs may work.  
+# programs may work.
 LYNX="lynx -dump"
 #
 # the URL to your server's mod_status status page.  If you do not
@@ -83,7 +77,7 @@ if [ "x$ULIMIT_MAX_FILES" != "x" ] ; then
 fi
 
 ERROR=0
-if [ "x$ARGV" = "x" ] ; then 
+if [ "x$ARGV" = "x" ] ; then
     ARGV="-h"
 fi
 
