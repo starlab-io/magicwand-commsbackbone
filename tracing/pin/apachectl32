@@ -91,9 +91,19 @@ pin)
     $PIN $HTTPD -k start
     ERROR=$?
     ;;
+pin-foreground)
+    echo Starting httpd with pin instrumentation tool: $PIN in foreground
+    exec $PIN $HTTPD -k start -DFOREGROUND
+    ERROR=$?
+    ;;
 pin-stream)
     echo Starting httpd with streaming pin instrumenation tool: $PINSTREAM
     $PINSTREAM $HTTPD -k start
+    ERROR=$?
+    ;;
+pin-stream-foreground)
+    echo Starting http with streaming pin instrumentation tool $PINSTREAM
+    exec $PINSTREAM $HTTPD -k start -DFOREGROUND
     ERROR=$?
     ;;
 startssl|sslstart|start-SSL)

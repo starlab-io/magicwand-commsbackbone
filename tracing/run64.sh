@@ -1,6 +1,6 @@
 #!/bin/sh
 
-echo "Starting Apache with PIN"
+echo "Starting Apache with PIN - 64bit"
 mkdir output
 chmod ugo+rwx output
 docker stop apache-pin
