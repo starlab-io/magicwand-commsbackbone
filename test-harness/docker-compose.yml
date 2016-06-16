@@ -1,9 +1,12 @@
 version: '2'
 services:
   apache:
-    image: patricknevindwyer/apache-harness:latest
+    # image: patricknevindwyer/apache-harness:latest
+    image: wbradmoore/apacheperf
     ports:
       - "9000:80"
+    volumes:
+      - ./log/apacheperf:/var/log/apacheperf
   goloris:
     image: patricknevindwyer/goloris-harness:latest
     depends_on:
