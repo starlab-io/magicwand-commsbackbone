@@ -3,6 +3,11 @@ MAINTAINER patricknevindwyer@gmail.com
 
 USER root
 
+RUN cp /bin/uname /root/uname_old
+ADD ./uname_override /root/uname
+RUN chmod +x /root/uname
+RUN ln -sf /root/uname /bin/uname
+
 # install our basic toolset
 RUN apt-get update
 RUN apt-get install -y g++ wget make

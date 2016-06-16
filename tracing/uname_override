@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+if [ $1 == "-m" ]; then
+    echo "i386"
+else
+    exec /root/uname_old $1
+fi
