@@ -14,7 +14,7 @@ INT32 Usage() {
 }
 
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool",
-    "o", "/home/vagrant/output/trace", "specify output file name");
+    "o", "/root/output/trace", "specify output file name");
 
 //==============================================================
 //  Analysis Routines

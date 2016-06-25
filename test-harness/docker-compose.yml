@@ -1,13 +1,24 @@
 version: '2'
 services:
   apache:
-    image: patricknevindwyer/apache-harness:latest
+    # image: patricknevindwyer/apache-harness:latest
+    image: wbradmoore/apacheperf
     ports:
       - "9000:80"
+    volumes:
+      - ./log/apacheperf:/var/log/apacheperf
   goloris:
     image: patricknevindwyer/goloris-harness:latest
     depends_on:
       - apache
     links:
       - apache
-    command: /goloris -victimUrl="http://apache"
+    command: /bin/bash -c 'sleep 20 ; /goloris -victimUrl="http://apache"'
+  httperf:
+    image: patricknevindwyer/httperf:latest
+    depends_on:
+      - apache
+    links:
+      - apache
+    volumes:
+      - ./log/httperf:/var/log/httperf
