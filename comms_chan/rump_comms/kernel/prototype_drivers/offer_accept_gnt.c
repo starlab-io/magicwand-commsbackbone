@@ -4,7 +4,7 @@
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
-#include <mini-os/offer_gnttab.h>
+#include <mini-os/offer_accept_gnt.h>
 
 #include <xen/sched.h>
 #include <mini-os/xenbus.h>
@@ -370,7 +370,7 @@ static int run_client(void)
 	return 0;
 }
 
-int offer_gnttab_init(void)
+int offer_accept_gnt_init(void)
 {
 	/* Initialize the Globals */
         page = NULL;
@@ -386,7 +386,7 @@ int offer_gnttab_init(void)
 	return 0;
 }
 
-void offer_gnttab_fini(void)
+void offer_accept_gnt_fini(void)
 {
 	if(gntmap_map) {
 		gntmap_fini(gntmap_map);	
