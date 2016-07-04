@@ -21,12 +21,18 @@ RUN make
 RUN mv vmstat /usr/bin/vmstat
 
 COPY httpd-foreground /usr/local/bin
-COPY run_apacheperf.sh /usr/local/bin
+COPY startscript.sh /usr/local/bin
 COPY parse_apacheperf.py /usr/local/bin
+COPY expand.sh /usr/local/bin
 COPY performance_plot.gp /usr/local/src
-RUN chmod ugo+x /usr/local/bin/run_apacheperf.sh
+RUN chmod ugo+x /usr/local/bin/startscript.sh
+RUN chmod ugo+x /usr/local/bin/expand.sh
 RUN chmod ugo+x /usr/local/bin/parse_apacheperf.py
 RUN chmod ugo+x /usr/local/bin/httpd-foreground
+
+#cgi:
+COPY cgiDatPy /usr/local/apache2/cgi-bin
+RUN chmod 555 /usr/local/apache2/cgi-bin/cgiDatPy
 
 ENV PATH $PATH:/httpd-2.2.11
 
@@ -34,4 +40,6 @@ EXPOSE 80
 
 VOLUME ["/var/log/apacheperf"]
 
-CMD ["run_apacheperf.sh"]
+CMD ["startscript.sh"]
+
+# docker stop apacheperf1; docker rm apacheperf1; docker build -t wbradmoore/apacheperf .;docker run -p 80:80 --name apacheperf1 -d wbradmoore/apacheperf; docker exec -it --user root apacheperf1 bash
