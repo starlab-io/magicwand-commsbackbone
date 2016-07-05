@@ -4,7 +4,7 @@
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
-#include <mini-os/offer_accept_gnt.h>
+#include <mini-os/offer_gnttab.h>
 
 #include <xen/sched.h>
 #include <mini-os/xenbus.h>
@@ -19,22 +19,51 @@
 #include <bmk-core/memalloc.h>
 #include <bmk-core/pgalloc.h>
 
-/* Domain IDs are generally one digit */
-#define MAX_DOMID_SZ          5
-/* Grant References are generally five digits */
-#define MAX_GNT_REF_SZ        15
-/* Default reset value for protocol keys */
-#define KEY_RESET_VAL         "0"
-/* Default number of Grant Refs */
-#define DEFAULT_NMBR_GNT_REF  1
+/************************************
+*
+* XenStore Keys and Specs 
+*
+*************************************/
+/* DomId max digit width */ 
+#define MAX_DOMID_WIDTH           5
+/* Grant ref max digit width */ 
+#define MAX_GNT_REF_WIDTH         15
+/* Default key reset value */
+#define KEY_RESET_VAL             "0"
+/* Define out-of-band keys */
+#define SERVER_ID_PATH            "/unikernel/random/serverid" 
+#define CLIENT_ID_PATH            "/unikernel/random/clientid" 
+#define PRIVATE_ID_PATH           "domid"
+#define GRANT_REF_PATH            "/unikernel/random/gnt_ref"
+#define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
+
+/************************************
+*
+*  Grant Mapping Variables 
+*
+*************************************/
+/* Default Nmbr of Grant Refs */
+#define DEFAULT_NMBR_GNT_REF      1
 /* Default Stride */
-#define DEFAULT_STRIDE        1
-/* Write access to shared memory */
-#define WRITE_ACCESS_ON       1
+#define DEFAULT_STRIDE            1
+/* Write access to shared mem */
+#define WRITE_ACCESS_ON           1
 /* First Domain Slot */
-#define FIRST_DOM_SLOT        0 
+#define FIRST_DOM_SLOT            0 
 /* First Grant Ref */
-#define FIRST_GNT_REF         0 
+#define FIRST_GNT_REF             0 
+
+/************************************
+*
+* Test Message Variables and Specs 
+*
+*************************************/
+/* Test Message Size */
+#define TEST_MSG_SZ               64
+/* Max Message Width  */
+#define MAX_MSG_WIDTH             5
+/* Test Message */
+#define TEST_MSG                  "The abyssal plain is flat.\n"
 
 /*
 * For testing purposes, the same module is used 
@@ -53,9 +82,20 @@
 */
 #define IS_SERVER            0 
 
-void *page;
+/* Shared memory */
+static void *server_page;
+static void *client_page;
+
+/* Grant map */
 static struct gntmap *gntmap_map;
 
+/* Key writer utility function
+*
+*  path -  Specifies path to XenStore key where data is written
+*  value - Value to write to XenStore key
+*
+*  return - 0 if successful, or 1 if not
+*/
 static int write_to_key(const char *path, const char *value)
 {
 
@@ -90,6 +130,18 @@ static int write_to_key(const char *path, const char *value)
 	return res;
 }
 	
+/* Key reader utility function 
+*
+*  path - Path to XenStore key where data is read
+*
+*  return - Dynamically allocated memory where 
+*           value for key is stored, if successful.
+*           If not, the function returns a NULL pointer. 
+*
+*  note   - Caller is responsible for freeing char pointer
+            upon successful execution.
+*             
+*/
 static char *read_from_key(const char *path)
 {
 	xenbus_transaction_t txn;
@@ -124,26 +176,49 @@ static char *read_from_key(const char *path)
 	return cfg;
 }
 
-static grant_ref_t offer_gnttab_test(unsigned int my_domu_id,
-			             unsigned int domu_friend_id) 
+/* Server-side function that grants a page of memory 
+*  to share with the client. 
+*
+*  domu_client_id - Domain Id of the client
+*
+*  return - Grant reference to shared memory
+*/
+static grant_ref_t offer_grant(unsigned int domu_client_id)
 {
-    	unsigned long mfn;
-	grant_ref_t ref;
+    	unsigned long  mfn;
+	grant_ref_t    ref;
 
-	page = bmk_pgalloc_one();
-    	minios_printk("\tPage address: %p\n", page);
-    	mfn = virt_to_mfn(page);
+
+	server_page = bmk_pgalloc_one();
+    	minios_printk("\tServer page address: %p\n", server_page);
+
+	bmk_memset(server_page, 0, PAGE_SIZE);	
+    	bmk_memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
+
+    	mfn = virt_to_mfn(server_page);
     	minios_printk("\tBase Frame: %x\n", mfn);
 
-	ref = gnttab_grant_access(domu_friend_id, mfn, 0);
+	ref = gnttab_grant_access(domu_client_id, mfn, 0);
 	
     	minios_printk("\tGrant Ref for Interdomain: %u\n", ref);
 
 	return ref;
 }
 
-static int map_gnttab_test(domid_t     server_id, 
-		           grant_ref_t client_grant_ref)
+/* Client-side function that maps in a page of memory 
+*  granted by the server. 
+*
+*  domu_server_id   - Domain Id of the server 
+*  client_grant_ref - Client grant reference to 
+*                     shared memory
+*  msg_len          - Length of data the server writes
+*                     to shared memory
+*
+*  return - 0 if successful, 1 if not 
+*/
+static int accept_grant(domid_t      domu_server_id, 
+	                grant_ref_t  client_grant_ref,
+			unsigned int msg_len)
 {
 
 	uint32_t       count;
@@ -151,54 +226,56 @@ static int map_gnttab_test(domid_t     server_id,
 	int            domids_stride;
 	grant_ref_t    grant_refs[DEFAULT_NMBR_GNT_REF];
 	int            write;
-	unsigned long* addr;
+
+	if (msg_len > PAGE_SIZE)
+		return 1;
+
+	unsigned char  read_buf[TEST_MSG_SZ];
+
+	bmk_memset(read_buf, 0, TEST_MSG_SZ);
 
 	gntmap_map = (struct gntmap *)bmk_pgalloc_one();
 	
 	gntmap_init(gntmap_map);
 
 	count = DEFAULT_NMBR_GNT_REF;
-	domids[FIRST_DOM_SLOT] = server_id;
+	domids[FIRST_DOM_SLOT] = domu_server_id;
 	domids_stride = DEFAULT_STRIDE;
 	grant_refs[FIRST_GNT_REF] = client_grant_ref;
 	write = WRITE_ACCESS_ON;
 
-	addr = NULL;
-	addr = (unsigned long *)gntmap_map_grant_refs(gntmap_map,
-		                                      count,
-			                              domids,
-						      domids_stride,
-						      grant_refs,
-						      write);
-	if (!addr) {
+	client_page = (unsigned char *)gntmap_map_grant_refs(gntmap_map,
+		                                      	     count,
+			                                     domids,
+						             domids_stride,
+						             grant_refs,
+						             write);
+	if (!client_page) {
 		minios_printk("\tMapping in the Memory bombed out!\n");
 		return 1;
 	}
 
-	minios_printk("\tShared Mem: %p\n",addr);
+	minios_printk("\tShared Mem: %p\n", client_page);
+
+    	bmk_memcpy(read_buf, client_page, msg_len);
+
+	minios_printk("\tBuffer: %s\n",read_buf);
+
 	return 0;
 }
 
 static int run_server(void)
 {
 	unsigned int 		  domid;
-	char                      domid_str[MAX_DOMID_SZ];
+	char                      domid_str[MAX_DOMID_WIDTH];
     	struct xenbus_event_queue events;
     	char*                     err;
     	char*                     msg;
 	int                       res;
-	char*                     client_id_path;
-	char*                     server_id_path;
-	char*                     private_server_id_path;
-	char*                     grant_ref_path;
 	unsigned int              client_id;
 	grant_ref_t               grant_ref;
-	char                      grant_ref_str[MAX_GNT_REF_SZ];
-
-	client_id_path = "/unikernel/random/clientid";
-	server_id_path = "/unikernel/random/serverid";
-	private_server_id_path = "domid";
-	grant_ref_path =  "/unikernel/random/gnt_state";
+	char                      grant_ref_str[MAX_GNT_REF_WIDTH];
+	char                      msg_len_str[MAX_MSG_WIDTH];
 
         err = NULL;
         msg = NULL;
@@ -207,21 +284,21 @@ static int run_server(void)
 
 	/* Get DomId for the Server */
 
-	msg = read_from_key(private_server_id_path);
+	msg = read_from_key(PRIVATE_ID_PATH);
 	if (!msg) {
 		return 1;
 	}
 	domid = bmk_strtoul(msg, NULL, 10);
 	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
 
-	minios_printk("\tRead my DomId from Key: %u\n", domid);
+	minios_printk("\tRead Server DomId from Key: %u\n", domid);
 
 	/* Write Server DomId to Key */
 
-	bmk_memset(domid_str, 0, MAX_DOMID_SZ);
-	bmk_snprintf(domid_str, MAX_DOMID_SZ, "%u", domid);
+	bmk_memset(domid_str, 0, MAX_DOMID_WIDTH);
+	bmk_snprintf(domid_str, MAX_DOMID_WIDTH, "%u", domid);
 
-	res = write_to_key(server_id_path, domid_str);
+	res = write_to_key(SERVER_ID_PATH, domid_str);
 	if (res) {
 		return res;
 	}
@@ -230,21 +307,21 @@ static int run_server(void)
 	
     	xenbus_event_queue_init(&events);
 
-        xenbus_watch_path_token(XBT_NIL, client_id_path, client_id_path, &events);
-        while ((err = xenbus_read(XBT_NIL, client_id_path, &msg)) != NULL ||  msg[0] == '0') {
+        xenbus_watch_path_token(XBT_NIL, CLIENT_ID_PATH, CLIENT_ID_PATH, &events);
+        while ((err = xenbus_read(XBT_NIL, CLIENT_ID_PATH, &msg)) != NULL ||  msg[0] == '0') {
             bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
             bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
             xenbus_wait_for_watch(&events);
         }
 
-    	xenbus_unwatch_path_token(XBT_NIL, client_id_path, client_id_path);
+    	xenbus_unwatch_path_token(XBT_NIL, CLIENT_ID_PATH, CLIENT_ID_PATH);
 
 	minios_printk("\tAction on Client Id key\n");
 	
 	/* Get Client DomId */
 	
 	msg = NULL;
-	msg = read_from_key(client_id_path);
+	msg = read_from_key(CLIENT_ID_PATH);
 	if (!msg) {
 		return 1;
 	}
@@ -254,19 +331,28 @@ static int run_server(void)
 	minios_printk("\tRead Cliient Id from Key: %u\n", client_id);
 	
 	/* Reset Client Id */
-	res = write_to_key(client_id_path, KEY_RESET_VAL);
+	res = write_to_key(CLIENT_ID_PATH, KEY_RESET_VAL);
+	if (res) {
+		return res;
+	}
+
+	/* Write Message Length */
+	bmk_memset(msg_len_str, 0, MAX_MSG_WIDTH);
+	bmk_snprintf(msg_len_str, MAX_MSG_WIDTH, "%u", TEST_MSG_SZ);
+	
+	res = write_to_key(MSG_LENGTH_PATH, msg_len_str);
 	if (res) {
 		return res;
 	}
 
 	/* Execute the Grant */
-	grant_ref = offer_gnttab_test(domid, client_id);
+	grant_ref = offer_grant(client_id);
 
-	bmk_memset(grant_ref_str, 0, MAX_GNT_REF_SZ);
-	bmk_snprintf(grant_ref_str, MAX_GNT_REF_SZ, "%u", grant_ref);
+	bmk_memset(grant_ref_str, 0, MAX_GNT_REF_WIDTH);
+	bmk_snprintf(grant_ref_str, MAX_GNT_REF_WIDTH, "%u", grant_ref);
 	
-	/* Set Grant State Key */
-	write_to_key(grant_ref_path, grant_ref_str);
+	/* Set Grant Ref Key */
+	write_to_key(GRANT_REF_PATH, grant_ref_str);
 	if (res) {
 		return res;
 	}
@@ -277,53 +363,46 @@ static int run_server(void)
 static int run_client(void)
 {
 	domid_t                   domid;
-	char                      domid_str[MAX_DOMID_SZ];
+	char                      domid_str[MAX_DOMID_WIDTH];
     	char*                     err;
     	char*                     msg;
 	int                       res;
-	char*                     client_id_path;
-	char*                     private_client_id_path;
-	char*                     server_id_path;
-	char*                     gnt_path;
 	domid_t                   server_id;
     	struct xenbus_event_queue events;
 	grant_ref_t		  client_grant_ref;
-
-	server_id_path = "/unikernel/random/serverid";
-	client_id_path = "/unikernel/random/clientid";
-	private_client_id_path = "domid";
-	gnt_path = "/unikernel/random/gnt_state";
+	unsigned int              msg_len;
 
         err = NULL;
         msg = NULL;
 	res = 0;
 	server_id = 0;
 	domid = 0;
+	msg_len = 0;
 
 	/* Get DomId for the Client */
 
-	msg = read_from_key(private_client_id_path);
+	msg = read_from_key(PRIVATE_ID_PATH);
 	if (!msg) {
 		return 1;
 	}
 	domid = bmk_strtoul(msg, NULL, 10);
 	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
 
-	minios_printk("\tRead my DomId from Key: %u\n", domid);
+	minios_printk("\tRead Client DomId from Key: %u\n", domid);
 
 	/* Write Client DomId to Key */
 
-	bmk_memset(domid_str, 0, MAX_DOMID_SZ);
-	bmk_snprintf(domid_str, MAX_DOMID_SZ, "%u", domid);
+	bmk_memset(domid_str, 0, MAX_DOMID_WIDTH);
+	bmk_snprintf(domid_str, MAX_DOMID_WIDTH, "%u", domid);
 
-	res = write_to_key(client_id_path, domid_str);
+	res = write_to_key(CLIENT_ID_PATH, domid_str);
 	if (res) {
 		return res;
 	}
 	
 	/* Read Server Id from Key */
 
-	msg = read_from_key(server_id_path);
+	msg = read_from_key(SERVER_ID_PATH);
 	if (!msg) {
 		return 1;
 	}
@@ -336,20 +415,20 @@ static int run_client(void)
 
     	xenbus_event_queue_init(&events);
 
-        xenbus_watch_path_token(XBT_NIL, gnt_path, gnt_path, &events);
-        while ((err = xenbus_read(XBT_NIL, gnt_path, &msg)) != NULL ||  msg[0] == '0') {
+        xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
+        while ((err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL ||  msg[0] == '0') {
             bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
             bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
             xenbus_wait_for_watch(&events);
         }
 
-    	xenbus_unwatch_path_token(XBT_NIL, gnt_path, gnt_path);
+    	xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
 
 	minios_printk("\tAction on Grant State Key\n");
 
 	/* Read in Grant Ref */
 
-	msg = read_from_key(gnt_path);
+	msg = read_from_key(GRANT_REF_PATH);
 	if (!msg) {
 		return 1;
 	}
@@ -359,21 +438,41 @@ static int run_client(void)
 	minios_printk("\tRead Grant Ref from Key: %u\n", client_grant_ref);
 	
 	/* Reset Grant State Key */
-	res = write_to_key(gnt_path, KEY_RESET_VAL);
+	res = write_to_key(GRANT_REF_PATH, KEY_RESET_VAL);
 	if (res) {
 		return res;
 	}
 
+	/* Read in the Message Length */
+
+	msg = read_from_key(MSG_LENGTH_PATH);
+	if (!msg) {
+		return 1;
+	}
+	msg_len = bmk_strtoul(msg, NULL, 10);
+	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+
+	minios_printk("\tRead Msg Length from Key: %u\n", msg_len);
+
 	/* Map the Grant */
-	res =  map_gnttab_test(server_id, 
-			       client_grant_ref); 
+	res =  accept_grant(server_id, 
+		            client_grant_ref,
+			    msg_len); 
+
+	/* Clear value of message length key */
+	res = write_to_key(MSG_LENGTH_PATH, KEY_RESET_VAL);
+	if (res) {
+		return res;
+	}
+
 	return 0;
 }
 
-int offer_accept_gnt_init(void)
+int offer_gnttab_init(void)
 {
 	/* Initialize the Globals */
-        page = NULL;
+        server_page = NULL;
+	client_page = NULL;
 	gntmap_map = NULL;
 
 	/* Execute mode: Server or Client */
@@ -386,14 +485,17 @@ int offer_accept_gnt_init(void)
 	return 0;
 }
 
-void offer_accept_gnt_fini(void)
+void offer_gnttab_fini(void)
 {
 	if(gntmap_map) {
 		gntmap_fini(gntmap_map);	
     		bmk_memfree(gntmap_map, BMK_MEMWHO_WIREDBMK);
 	}
 
-	if(page)
-    		bmk_memfree(page, BMK_MEMWHO_WIREDBMK);
+	if(server_page)
+    		bmk_memfree(server_page, BMK_MEMWHO_WIREDBMK);
+
+	if(client_page)
+    		bmk_memfree(client_page, BMK_MEMWHO_WIREDBMK);
 }
 
