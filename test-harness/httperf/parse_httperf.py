@@ -1,5 +1,7 @@
 #!/usr/bin/python
 import sys
+import json
+import datetime
 
 def parse_samples(filename):
     """
@@ -22,7 +24,35 @@ def parse_samples(filename):
                 samples.append((time, rate))
     return samples
 
-def dump_samples(samples, filename):
+def dump_samples_json(samples, filename):
+    """
+    While the data may be fairly basic, we can still dump to a JSON file
+    for usability. The output looks roughly like:
+
+        {
+            "samples": [...],
+            "collated_at": <collation timestamp>,
+            "min_timestamp": "MINIMUM OBSERVED TIMESTAMP",
+            "max_timestamp": "MAXIMUM OBSERVED TIMESTAMP"
+        }
+
+    :param samples:
+    :param filename:
+    :return:
+    """
+
+    with open(filename, "w") as file:
+        json.dump(
+            {
+                "samples": samples,
+                "collated_at": str(datetime.datetime.now()),
+                "min_timestamp": samples[0][0],
+                "max_timestamp": samples[-1][0]
+            },
+            file
+        )
+
+def dump_samples_csv(samples, filename):
     """
     Output the samples of the reply rate to the given file. We're hand-jamming CSV
     because at this point we know the exact format of the data. This can only cause
@@ -32,6 +62,8 @@ def dump_samples(samples, filename):
     :return: None
     """
     with open(filename, 'w') as file:
+        file.write("mm:ss elapsed,reply rate\n")
+        
         for sample in samples:
 
             # for output we're formatting in M:S
@@ -43,14 +75,19 @@ def dump_samples(samples, filename):
 if __name__ == "__main__":
 
     input_file = "/var/log/httperf/performance.log"
-    output_file = "/var/log/httperf/performance.csv"
+    csv_output_file = "/var/log/httperf/performance.csv"
+    json_output_file = "/var/log/httperf/performance.json"
 
     # poor mans arg parse
     if len(sys.argv) > 1:
         input_file = sys.argv[1]
 
     if len(sys.argv) > 2:
-        output_file = sys.argv[2]
+        csv_output_file = sys.argv[2]
+
+    if len(sys.argv) > 3:
+        json_output_file = sys.argv[3]
 
     samples = parse_samples(input_file)
-    dump_samples(samples, output_file)
+    dump_samples_csv(samples, csv_output_file)
+    dump_samples_json(samples, json_output_file)

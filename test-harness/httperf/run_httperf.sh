@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+rm /var/log/httperf/done
+
 PERF_PORT=80
 PERF_SERVER="apache"
 PERF_NUM_CONNS=12000
@@ -18,3 +20,7 @@ echo "    options: $PERF_RUN_OPTS"
 httperf $PERF_RUN_OPTS --server $PERF_SERVER --port $PERF_PORT --num-conns $PERF_NUM_CONNS --rate $PERF_RATE --timeout $PERF_TIMEOUT > /var/log/httperf/performance.log
 parse_httperf.py /var/log/httperf/performance.log /var/log/httperf/performance.csv
 gnuplot /usr/local/src/performance_plot.gp
+
+echo "DONE"
+
+touch /var/log/httperf/done
