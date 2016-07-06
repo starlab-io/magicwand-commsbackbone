@@ -13,18 +13,21 @@ echo "Monitoring test (sync interval $SYNC_INTERVAL seconds)..."
 
 while [ ! -f ./log/httperf/done ] ; do
     sleep $SYNC_INTERVAL
-    echo "... running"
+    echo "  > running"
 done
 
 echo "  + collating HTTPerf results"
 
 while [ ! -f ./log/apacheperf/done ] ; do
     sleep $SYNC_INTERVAL
-    echo "... running"
+    echo "  > running"
 done
 
 echo "  + collating ApachePerf results"
 ./apacheperf/parse_apacheperf.py ./log/apacheperf/performance.log ./log/apacheperf/performance.csv ./log/apacheperf/performance.json
 
-echo "  ✅ done"
+echo "  ! Tearing down test harness containers"
 
+docker-compose down
+
+echo "  . done"
