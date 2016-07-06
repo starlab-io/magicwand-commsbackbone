@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 
-export LORIS_TEST_DURATION=120
+if [ -z "$TEST_DURATION" ]; then
+    LORIS_TEST_DURACTION=120
+else
+    LORIS_TEST_DURATION=$TEST_DURATION
+fi
+
+export LORIS_TEST_DURATION
+
 SYNC_INTERVAL=$(expr $LORIS_TEST_DURATION / 10)
 
 echo "Preparing..."
@@ -42,7 +49,7 @@ echo "Point your browser to http://localhost:8080 for performance data"
 
 pushd display
 
-python -M SimpleHTTPServer 8080
+python -m SimpleHTTPServer 8080
 
 popd
 
