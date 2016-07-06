@@ -10,18 +10,36 @@ def parse_samples(filename):
     the rough timestamps (from a time of 0), which we'll create and track along with the
     sample rate
 
+    In an attempt to get accurate time stamps, the start of the performance log file will
+    have an entry that looks like:
+
+        start-time 2016-07-06T14:20:21
+
+    We use this as the base time in our calculations. Given that, we increment the time
+    by five seconds for each parsed "reply-rate" entry. We can assume this time interval
+    because of the _RATE_INTERVAL_ sampling log rate defined in
+    the [httperf source](https://github.com/httperf/httperf/blob/cc888437e4572ec29a4a7209f34fbd39c31600f5/src/httperf.c#L90)
+
     :param filename: HTTPerf log file
     :return: A list of 2-tuples, each tuple being the sample time and throughput rate.
     """
     samples = []
     time = 0
+    basetime = datetime.datetime.now()
 
     with open(filename) as file:
         for line in file:
+            if line.startswith("start-time"):
+                basetime_string = line.strip().split(" ")[1]
+
+                # convert this to a usable time object
+                basetime = datetime.datetime.strptime(basetime_string, "%Y-%m-%dT%H:%M:%S")
+
             if line.startswith("reply-rate"):
                 rate = line.strip().split(" = ")[1]
                 time += 5
-                samples.append((time, rate))
+                replyrate_time = basetime + datetime.timedelta(seconds=time)
+                samples.append((replyrate_time.strftime("%Y-%m-%dT%H:%M:%S"), rate))
     return samples
 
 def dump_samples_json(samples, filename):
@@ -66,11 +84,9 @@ def dump_samples_csv(samples, filename):
 
         for sample in samples:
 
-            # for output we're formatting in M:S
-            minute = sample[0] / 60
-            second = sample[0] % 60
-            tfmt = "%02d:%02d" % (minute, second)
-            file.write("%s,%s\n" % (tfmt, sample[1]))
+            # the only change we're introducing to the sample data is to force
+            # a timezone via the Z block
+            file.write("%sZ,%s\n" % sample)
 
 if __name__ == "__main__":
 

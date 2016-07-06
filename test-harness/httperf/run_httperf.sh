@@ -24,7 +24,9 @@ echo "       rate: $PERF_RATE"
 echo "    timeout: $PERF_TIMEOUT"
 echo "    options: $PERF_RUN_OPTS"
 
-httperf $PERF_RUN_OPTS --server $PERF_SERVER --port $PERF_PORT --num-conns $PERF_NUM_CONNS --rate $PERF_RATE --timeout $PERF_TIMEOUT > /var/log/httperf/performance.log
+# We don't get useful timestamps from httperf, so we need to estimate with a bounding start time
+echo start-time `date -u +%Y-%m-%dT%H:%M:%S` > /var/log/httperf/performance.log
+httperf $PERF_RUN_OPTS --server $PERF_SERVER --port $PERF_PORT --num-conns $PERF_NUM_CONNS --rate $PERF_RATE --timeout $PERF_TIMEOUT >> /var/log/httperf/performance.log
 parse_httperf.py /var/log/httperf/performance.log /var/log/httperf/performance.csv
 gnuplot /usr/local/src/performance_plot.gp
 
