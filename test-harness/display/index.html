@@ -1,0 +1,104 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <meta name="author" content="Patrick Nevin Dwyer (patricknevindwyer@gmail.com)">
+
+    <title>Performance Testing Results</title>
+    <!-- Latest compiled and minified CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" integrity="sha384-1q8mTJOASx8j1Au+a5WDVnPi2lkFfwwEAa8hDDdjZlpLegxhjVME1fgjWPGmkzs7" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-2.2.4.min.js"></script>
+    <!-- Latest compiled and minified JavaScript -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js" integrity="sha384-0mSbJDEHialfmuBBQP6A4Qrprq5OVfW37PRR3j5ELqxss1yVqOtnepnHVP9aJ7xS" crossorigin="anonymous"></script>
+    <script src="https://d3js.org/d3.v4.min.js"></script>
+      <style>
+         h4 {
+            margin-top: 25px;
+         }
+        .row {
+            margin-bottom: 20px;
+        }
+        .row .row {
+            margin-top: 10px;
+            margin-bottom: 0;
+        }
+        [class*="col-"] {
+          padding-top: 15px;
+          padding-bottom: 15px;
+        }
+
+        hr {
+          margin-top: 40px;
+          margin-bottom: 40px;
+        }
+      </style>
+<style>
+
+svg {
+  font: 10px sans-serif;
+}
+
+.axis path,
+.axis line {
+  fill: none;
+  stroke: #000;
+  shape-rendering: crispEdges;
+}
+
+.x.axis path {
+  display: none;
+}
+
+.line {
+  fill: none;
+  stroke: steelblue;
+  stroke-width: 1.5px;
+}
+
+</style>
+
+  </head>
+
+  <body>
+    <div class="container">
+
+      <div class="page-header">
+        <h1>Apache Performance Data</h1>
+        <p class="lead">Collected from multiple tools. Time resolution is approximate.</p>
+      </div>
+
+      <div class="row">
+        <div class="col-md-2">HTTPerf</div>
+        <div id="httperf-svg" class="col-md-10"></div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-2">Apache CPU usage</div>
+        <div id="apacheperf-cpu-svg" class="col-md-10"></div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-2">Apache Memory usage</div>
+        <div id="apacheperf-memory-svg" class="col-md-10"></div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-2">Apache host performance</div>
+        <div id="apacheperf-system-svg" class="col-md-10"></div>
+      </div>
+
+
+    </div> <!-- /container -->
+
+
+    <script src="js/httperf.js"></script>
+    <script src="js/apacheperf-cpu.js"></script>
+    <script src="js/apacheperf-memory.js"></script>
+    <script src="js/apacheperf-system.js"></script>
+  </body>
+</html>
+

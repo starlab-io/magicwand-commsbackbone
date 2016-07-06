@@ -21,6 +21,7 @@ RUN make
 RUN mv vmstat /usr/bin/vmstat
 
 COPY httpd-foreground /usr/local/bin
+COPY httpd-background /usr/local/bin
 COPY startscript.sh /usr/local/bin
 COPY parse_apacheperf.py /usr/local/bin
 COPY expand.sh /usr/local/bin
@@ -29,6 +30,7 @@ RUN chmod ugo+x /usr/local/bin/startscript.sh
 RUN chmod ugo+x /usr/local/bin/expand.sh
 RUN chmod ugo+x /usr/local/bin/parse_apacheperf.py
 RUN chmod ugo+x /usr/local/bin/httpd-foreground
+RUN chmod ugo+x /usr/local/bin/httpd-background
 
 #cgi:
 COPY cgiDatPy /usr/local/apache2/cgi-bin
