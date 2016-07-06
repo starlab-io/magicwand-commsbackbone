@@ -4,6 +4,8 @@ export LORIS_TEST_DURATION=10
 SYNC_INTERVAL=$(expr $LORIS_TEST_DURATION / 10)
 
 echo "Preparing..."
+echo "  ! running performance collection for $LORIS_TEST_DURATION seconds"
+
 rm ./log/httperf/done
 
 echo "Spinning up test instances"
