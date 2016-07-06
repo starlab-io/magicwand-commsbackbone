@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export LORIS_TEST_DURATION=10
+export LORIS_TEST_DURATION=120
 SYNC_INTERVAL=$(expr $LORIS_TEST_DURATION / 10)
 
 echo "Preparing..."
@@ -31,5 +31,19 @@ echo "  + collating ApachePerf results"
 echo "  ! Tearing down test harness containers"
 
 docker-compose down
+
+echo "  > moving performance data for display"
+
+cp ./log/httperf/performance.csv ./display/data/httperf/
+cp ./log/apacheperf/performance.csv ./display/data/apacheperf/
+
+
+echo "Point your browser to http://localhost:8080 for performance data"
+
+pushd display
+
+python -M SimpleHTTPServer 8080
+
+popd
 
 echo "  . done"
