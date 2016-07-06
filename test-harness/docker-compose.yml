@@ -2,13 +2,17 @@ version: '2'
 services:
   apache:
     # image: patricknevindwyer/apache-harness:latest
-    image: wbradmoore/apacheperf
+    image: patricknevindwyer/apacheperf:latest
+    environment:
+      LORIS_TEST_DURATION:
     ports:
       - "9000:80"
     volumes:
       - ./log/apacheperf:/var/log/apacheperf
   goloris:
     image: patricknevindwyer/goloris-harness:latest
+    environment:
+      LORIS_TEST_DURATION:
     depends_on:
       - apache
     links:
@@ -16,6 +20,8 @@ services:
     command: /bin/bash -c 'sleep 20 ; /goloris -victimUrl="http://apache"'
   httperf:
     image: patricknevindwyer/httperf:latest
+    environment:
+      LORIS_TEST_DURATION:
     depends_on:
       - apache
     links:

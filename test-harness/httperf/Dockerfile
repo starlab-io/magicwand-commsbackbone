@@ -3,7 +3,7 @@ MAINTAINER patricknevindwyer@gmail.com
 
 USER root
 
-RUN apt-get update
+RUN apt-get update && apt-get upgrade -y
 RUN apt-get install -y g++ gcc make wget unzip dh-autoreconf python gnuplot
 
 # Get HTTPERF and build it

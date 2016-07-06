@@ -2,14 +2,21 @@
 
 rm /var/log/httperf/done
 
+if [ -z "$LORIS_TEST_DURATION" ]; then
+    TEST_DURACTION=120
+else
+    TEST_DURATION=$LORIS_TEST_DURATION
+fi
+
 PERF_PORT=80
 PERF_SERVER="apache"
-PERF_NUM_CONNS=12000
 PERF_RATE=100
+PERF_NUM_CONNS=$(expr $PERF_RATE \* $TEST_DURATION)
 PERF_TIMEOUT=5
 PERF_RUN_OPTS="-v"
 
 echo "Starting HTTPERF"
+echo "   duration: $TEST_DURATION"
 echo "     server: $PERF_SERVER"
 echo "       port: $PERF_PORT"
 echo "      conns: $PERF_NUM_CONNS"

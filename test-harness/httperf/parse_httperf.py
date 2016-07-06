@@ -63,7 +63,7 @@ def dump_samples_csv(samples, filename):
     """
     with open(filename, 'w') as file:
         file.write("mm:ss elapsed,reply rate\n")
-        
+
         for sample in samples:
 
             # for output we're formatting in M:S
