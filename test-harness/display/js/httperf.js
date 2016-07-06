@@ -3,7 +3,7 @@
 (function () {
 var margin = {top: 20, right: 20, bottom: 30, left: 50},
     width = 960 - margin.left - margin.right,
-    height = 500 - margin.top - margin.bottom;
+    height = 400 - margin.top - margin.bottom;
 
 var formatDate = d3.timeParse("%Y-%m-%dT%H:%M:%SZ");
 

@@ -8,7 +8,7 @@ var margin = {top: 20, right: 20, bottom: 30, left: 50},
     height = 200 - margin.top - margin.bottom;
 
 
-var svg = d3.select("#apacheperf-cpu-svg").append("svg")
+var svg = d3.select("#apacheperf-memory-svg").append("svg")
     .attr("width", width + margin.left + margin.right)
     .attr("height", height + margin.top + margin.bottom);
 
@@ -30,7 +30,7 @@ var g = svg.append("g")
 d3.csv("/data/apacheperf/performance.csv", type, function(error, data) {
   if (error) throw error;
 
-  var keys = data.columns.filter( (e) => e.startsWith("cpu"));
+  var keys = data.columns.filter( (e) => e.startsWith("memory"));
     console.log(keys);
   x.domain(d3.extent(data, function(d) { return d.date; }));
   z.domain(keys);
@@ -69,9 +69,16 @@ function type(d, i, columns) {
 
 var e = {};
   e.date = parseDate(d.timestamp);
+  var max_mem = 0;
   for (var i = 1, n = columns.length; i < n; ++i) {
-     if (columns[i].startsWith("cpu")) {
-        e[columns[i]] = d[columns[i]] / 100.0;
+     if (columns[i].startsWith("memory")) {
+        max_mem += +d[columns[i]];
+     }
+  }
+
+  for (var i = 1, n = columns.length; i < n; ++i) {
+     if (columns[i].startsWith("memory")) {
+        e[columns[i]] = d[columns[i]] / max_mem;
      }
   }
   return e;
