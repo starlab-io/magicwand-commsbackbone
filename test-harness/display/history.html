@@ -69,8 +69,25 @@ svg {
         <h1>Historic Performance Data</h1>
         <p class="lead">Found <span id="archive-size">0</span> history entries collected from multiple tools. Time resolution is approximate.</p>
       </div>
-      <div id="history-container"></div>
-        <div class="row"><div class="col-md-8 col-md-offset-2"><h2>{date}</h2><p>{message}</p></div></div>
+      <div id="history-table">
+        <table class="table table-condensed table-striped table-hover">
+          <thead>
+            <tr>
+              <th>Test ID</th>
+              <th>Created At</th>
+              <th>Duration</th>
+              <th>Message</th>
+              <th>Sources</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+
+          </tbody>
+
+        </table>
+
+      </div>
+
     </div> <!-- /container -->
 
 

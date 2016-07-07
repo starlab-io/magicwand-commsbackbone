@@ -7,8 +7,13 @@
 
         data.archive.forEach(
             function (historic) {
-                $("#history-container").append(
-                    "<div class='row'><div class='col-md-8 col-md-offset-2'><h2>" + historic["addedAt"] + "</h2><p>" + historic["message"] + "</p></div></div>"
+                $("#history-table-body").append(
+                    "<tr>" +
+                    "<td>" + "<a href='/index.html?test=" + historic.archiveName + "'>"+ historic.archiveName + "</a></td>" +
+                    "<td>" + historic.addedAt + "</td>" +
+                    "<td>" + historic.testDuration + " seconds</td>" +
+                    "<td>" + historic.message + "</td>" +
+                    "<td>" + $.map(historic.files, (v, k) => k).join(", ") + "</td>"
                 )
             }
         );

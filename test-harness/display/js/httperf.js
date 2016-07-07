@@ -29,7 +29,8 @@ var httperfSvg = d3.select("#httperf-svg").append("svg")
   .append("g")
     .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-d3.csv("/data/httperf/performance.csv", httperfType, function(error, data) {
+// we know from the app layer which test we're trying to view
+d3.csv("/data/httperf/" + window.application.query.test + ".csv", httperfType, function(error, data) {
   if (error) throw error;
 
   x.domain(d3.extent(data, function(d) { return d.date; }));

@@ -17,7 +17,6 @@ RUN make install
 
 COPY run_httperf.sh /usr/local/bin
 COPY parse_httperf.py /usr/local/bin
-COPY performance_plot.gp /usr/local/src
 
 RUN chmod ugo+x /usr/local/bin/run_httperf.sh
 RUN chmod ugo+x /usr/local/bin/parse_httperf.py

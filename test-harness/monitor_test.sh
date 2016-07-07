@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 if [ -z "$TEST_DURATION" ]; then
-    LORIS_TEST_DURACTION=120
+    LORIS_TEST_DURATION=120
 else
     LORIS_TEST_DURATION=$TEST_DURATION
 fi

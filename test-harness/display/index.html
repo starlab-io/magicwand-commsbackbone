@@ -94,6 +94,17 @@ svg {
 
     </div> <!-- /container -->
 
+    <script>
+        var query = window.location.search.replace("?", "");
+        var params = query.split("&");
+        var paramDict = {};
+        params.forEach(function (param) {
+            var bits = param.split("=");
+            paramDict[bits[0]] = bits[1];
+        });
+
+        window.application = {query: paramDict};
+    </script>
 
     <script src="js/httperf.js"></script>
     <script src="js/apacheperf-cpu.js"></script>

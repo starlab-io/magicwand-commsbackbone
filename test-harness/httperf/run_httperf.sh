@@ -3,7 +3,7 @@
 rm /var/log/httperf/done
 
 if [ -z "$LORIS_TEST_DURATION" ]; then
-    TEST_DURACTION=120
+    TEST_DURATION=120
 else
     TEST_DURATION=$LORIS_TEST_DURATION
 fi
@@ -26,6 +26,7 @@ echo "    options: $PERF_RUN_OPTS"
 
 # We don't get useful timestamps from httperf, so we need to estimate with a bounding start time
 echo start-time `date -u +%Y-%m-%dT%H:%M:%S` > /var/log/httperf/performance.log
+echo test-duration $TEST_DURATION >> /var/log/httperf/performance.log
 httperf $PERF_RUN_OPTS --server $PERF_SERVER --port $PERF_PORT --num-conns $PERF_NUM_CONNS --rate $PERF_RATE --timeout $PERF_TIMEOUT >> /var/log/httperf/performance.log
 parse_httperf.py /var/log/httperf/performance.log /var/log/httperf/performance.csv
 

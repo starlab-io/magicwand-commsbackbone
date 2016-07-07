@@ -1,1 +1,30 @@
-{"archive": [{"files": {"apacheperf": ["display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.csv", "display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.json", "display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.log"], "httperf": ["display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.csv", "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.json", "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.log", "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.05.59.png"]}, "message": "Adding the first archived test data.\n\n    \n", "archiveName": "Patricks-MacBook-Pro.local-2016.07.07T09.05.59", "addedAt": "2016-07-07 09:06:12.618783", "metadata": {"kernel": "Darwin Kernel Version 15.5.0: Tue Apr 19 18:36:36 PDT 2016; root:xnu-3248.50.21~8/RELEASE_X86_64", "archive_time": "2016-07-07 09:06:12.618604", "hostname": "Patricks-MacBook-Pro.local", "arch": "x86_64"}}], "createdAt": "2016-07-07 09:05:59.757046", "updatedAt": "2016-07-07 09:06:12.618761"}
+{
+  "archive": [
+    {
+      "files": {
+        "apacheperf": [
+          "display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.csv",
+          "display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.json",
+          "display/data/apacheperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.log"
+        ],
+        "httperf": [
+          "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.csv",
+          "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.json",
+          "display/data/httperf/Patricks-MacBook-Pro.local-2016.07.07T09.44.59.log"
+        ]
+      },
+      "archiveName": "Patricks-MacBook-Pro.local-2016.07.07T09.44.59",
+      "addedAt": "2016-07-07 09:45:09.739966",
+      "testDuration": 120,
+      "message": "Adding a well formed entry as our first archive item.\n    \n",
+      "metadata": {
+        "kernel": "Darwin Kernel Version 15.5.0: Tue Apr 19 18:36:36 PDT 2016; root:xnu-3248.50.21~8/RELEASE_X86_64",
+        "archive_time": "2016-07-07 09:45:09.739757",
+        "hostname": "Patricks-MacBook-Pro.local",
+        "arch": "x86_64"
+      }
+    }
+  ],
+  "createdAt": "2016-07-07 09:44:59.726727",
+  "updatedAt": "2016-07-07 09:45:09.739955"
+}

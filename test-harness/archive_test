@@ -52,6 +52,17 @@ def archiveFrom(test_directory, archive_name):
     return dest_files
 
 
+def getTestDuration(test_directory):
+    """
+    Get the test duration from one of the JSON output files for the test being archived.
+
+    :param test_directory: httperf, apacheperf, etc
+    :return: Integer representing test duration in seconds
+    """
+    test_data = json.load(open("log/" + test_directory + "/performance.json", "r"))
+    return test_data["test_duration"]
+
+
 def getArchiveMessage(archive_name, filemap):
     """
     Open the user defined editor and get a commit message that will get tagged along
@@ -103,7 +114,7 @@ def collectLocaleMetadata():
     return metadata
 
 
-def updateHistory(hist_file, message, archive_name, filemap, metadata):
+def updateHistory(hist_file, message, archive_name, test_duration, filemap, metadata):
     """
     Given the commit message, the archive basename, and the relative list of file paths, add
     to the test history.
@@ -130,7 +141,8 @@ def updateHistory(hist_file, message, archive_name, filemap, metadata):
             "archiveName": archive_name,
             "addedAt": str(datetime.now()),
             "metadata": metadata,
-            "files": filemap
+            "files": filemap,
+            "testDuration": test_duration
         }
     )
 
@@ -254,7 +266,9 @@ if __name__ == "__main__":
 
     metadata = collectLocaleMetadata()
 
-    updated = updateHistory(HISTORY_FILE, archive_message, archive_name, file_map, metadata)
+    test_duration = getTestDuration("httperf")
+
+    updated = updateHistory(HISTORY_FILE, archive_message, archive_name, test_duration, file_map, metadata)
 
     if not updated:
         print "There was an error updating the test history"
