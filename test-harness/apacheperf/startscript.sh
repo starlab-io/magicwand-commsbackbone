@@ -10,7 +10,8 @@ fi
 
 echo "Starting Apache Performance Logging (logging for $TEST_DURATION seconds)"
 expand.sh
-`vmstat 1 $TEST_DURATION -t > /var/log/apacheperf/performance.log &` ; httpd-background
+echo "test-duration $TEST_DURATION" > /var/log/apacheperf/performance.log
+`vmstat 1 $TEST_DURATION -t >> /var/log/apacheperf/performance.log &` ; httpd-background
 
 echo "Waiting $TEST_DURATION seconds for log generation"
 

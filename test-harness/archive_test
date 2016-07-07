@@ -1,0 +1,276 @@
+#!/usr/bin/python
+
+import sys
+import tempfile
+import os
+from subprocess import call
+from datetime import datetime
+import shutil
+import json
+
+"""
+Our general goal here is to check for new files from the test log directory, and then rename them
+and copy them over to the history directory of the _display_ directory. At the same time we want
+to get a possible commit/edit message from the user.
+
+The files will get saved, in bulk to the _display/data/(test type) directory, while the commit
+message and links to the historic files will be added to the _display/data/history.json_ file.
+"""
+
+def archiveName():
+    """
+    Choose a time stamp based name for the archived files.
+
+    :return: basename for the archive files
+    """
+    datestr = os.uname()[1] + "-" + datetime.now().strftime("%Y.%m.%dT%H.%M.%S")
+    datestr = datestr.replace(" ", "")
+    return datestr
+
+def archiveFrom(test_directory, archive_name):
+    """
+    Given a test directory (for instance, _httperf_) and the archiving name for the files,
+    copy the test results files into the archive.
+
+    :param test_directory: Source directory name (httperf, apacheperf, etc)
+    :param archive_name: Basename for achived files
+    :return: List of relative archive file paths
+    """
+    dest_dir = "display/data/" + test_directory + "/"
+    src_dir = "log/" + test_directory + "/"
+
+    dest_files = []
+
+    # Copy files and save the resulting names
+    for src_file in os.listdir(src_dir):
+        if src_file.startswith("performance"):
+            src_file_ext = os.path.splitext(src_file)[1]
+            dest_file = dest_dir + archive_name + src_file_ext
+            dest_files.append(dest_file)
+            shutil.copy(src_dir + src_file, dest_file)
+
+    return dest_files
+
+
+def getTestDuration(test_directory):
+    """
+    Get the test duration from one of the JSON output files for the test being archived.
+
+    :param test_directory: httperf, apacheperf, etc
+    :return: Integer representing test duration in seconds
+    """
+    test_data = json.load(open("log/" + test_directory + "/performance.json", "r"))
+    return test_data["test_duration"]
+
+
+def getArchiveMessage(archive_name, filemap):
+    """
+    Open the user defined editor and get a commit message that will get tagged along
+    with the other data in the history.
+
+    :param archive_name: basename for the archived files
+    :param filemap: Map by test directory type with value of List of relative file paths for the archived files
+    :return: Text of the commit/archive message
+    """
+    EDITOR = os.environ.get("EDITOR", "vim")
+    commit_msg = """
+    # Created performance test archive [%s]
+    # Lines beginning with # will not be included in the archive message.
+    """ % (archive_name,)
+
+    tf = tempfile.NamedTemporaryFile(suffix=".tmp", delete=False)
+    tf_name = tf.name
+    tf.write(commit_msg)
+    tf.flush()
+    tf.close()
+    call([EDITOR, tf_name])
+
+    with open(tf_name, "r") as tf:
+        commit_msg = tf.read()
+        print "raw commit msg:\n"
+        print commit_msg
+
+    # post processing of the commit message
+    commit_msg = "\n".join([line for line in commit_msg.split("\n") if not line.strip().startswith("#")])
+
+    return commit_msg
+
+
+def collectLocaleMetadata():
+    """
+    Collect relevant metadata about the current system and test environment.
+
+    :return: Dictionary of metadata that will be added to the test history
+    """
+    metadata = {
+        "hostname": os.uname()[1],
+        "kernel": os.uname()[3],
+        "arch": os.uname()[4],
+        "archive_time": str(datetime.now())
+    }
+
+    metadata.update(getGitState())
+
+    return metadata
+
+
+def updateHistory(hist_file, message, archive_name, test_duration, filemap, metadata):
+    """
+    Given the commit message, the archive basename, and the relative list of file paths, add
+    to the test history.
+
+    :param hist_file: History file to update
+    :param message: Archive commit message
+    :param archive_name: basename of the archive
+    :param filemap: Map of test directory/type to list of Filepaths of the new archive files
+    :param metadata: Relavent environmental information
+    :return: boolean - was history written
+    """
+
+    # get our history data
+    history = {}
+
+    with open(hist_file, "rw") as file:
+        history = json.load(file)
+
+    # update our history
+    history["updatedAt"] = str(datetime.now())
+    history["archive"].append(
+        {
+            "message": message,
+            "archiveName": archive_name,
+            "addedAt": str(datetime.now()),
+            "metadata": metadata,
+            "files": filemap,
+            "testDuration": test_duration
+        }
+    )
+
+    with open(hist_file, "w") as file:
+        json.dump(history, file)
+
+    return True
+
+
+def seedHistory(hist_file):
+    """
+    If a history file doesn't exist, seed the basic structure. The general structure of
+    the history looks like:
+
+    {
+        "archive": [
+            {
+                "message": "TEXT OF MESSAGE",
+                "archiveName": "DATE NAME OF ARCHIVE",
+                "addedAt": "DATE OF ADD",
+                "metadata": {},
+                "files": {
+                    "httperf": ["file.csv", "file.log", "file.json"],
+                    "apacheperf": ["file.csv", "file.log", "file.json"]
+                }
+            }
+        ],
+        "updatedAt": "",
+        "createdAt": ""
+    }
+
+    :return: None
+    """
+    seedling = {
+        "archive": [],
+        "updatedAt": str(datetime.now()),
+        "createdAt": str(datetime.now())
+    }
+
+    with open(hist_file, "w") as file:
+        json.dump(seedling, file)
+
+
+def sanityCheckHistory(hist_file):
+    """
+    Do some basic sanity checks, like:
+
+        1. Make sure a history file exists
+        2. Make sure the history file is valid JSON
+
+    :param hist_file: History file
+    :return: True if a sane history file is now in place
+    """
+
+    # History file doesn't exist
+    if not os.path.exists(hist_file):
+        print "Archive history file not found, creating new history file"
+        seedHistory(hist_file)
+        return True
+    else:
+        try:
+            with open(hist_file, "r") as file:
+                obj = json.load(file)
+
+                # if we've gotten here we're good to go, sortof
+                return True
+        except ValueError:
+            # we've got garbage, save it off and reseed
+            backup = hist_file + "_" + datetime.now().strftime("%Y.%m.%dT%H.%M.%S")
+            shutil.copy(hist_file, backup)
+            print "! Corrupted archive history file"
+            print "  - backed up archive to %s" % (backup,)
+            print "  - created new history file"
+            seedHistory(hist_file)
+            return True
+
+    # bork bork bork
+    return False
+
+
+def getGitState():
+    """
+    Attempt to get the current git state/branch/etc for the metadata log.
+
+    :return: Dictionary of git info
+    """
+    git_meta = {}
+    try:
+        branch_raw = subprocess.check_output("git status", shell=True)
+        branch = branch_raw.split("\n")[0].replace("On branch ", "")
+
+        commit_raw = subprocess.check_output("git log -n 1", shell=True)
+        commit = commit_raw.split("\n")[0].replave("commit ", "")
+
+        git_meta = {
+            "branch": branch,
+            "commit": commit
+        }
+    except:
+        pass
+
+    return git_meta
+
+
+if __name__ == "__main__":
+
+    HISTORY_FILE = "./display/data/history.json"
+
+    sanityCheckHistory(HISTORY_FILE)
+
+    archive_name = archiveName()
+    print "Creating archive as [%s]" % (archive_name,)
+
+    # get the various archive files
+    file_map = {
+        "httperf": archiveFrom("httperf", archive_name),
+        "apacheperf": archiveFrom("apacheperf", archive_name)
+    }
+
+    archive_message = getArchiveMessage(archive_name, file_map)
+
+    metadata = collectLocaleMetadata()
+
+    test_duration = getTestDuration("httperf")
+
+    updated = updateHistory(HISTORY_FILE, archive_message, archive_name, test_duration, file_map, metadata)
+
+    if not updated:
+        print "There was an error updating the test history"
+    else:
+        print "Updated history labeled [%s]" % (archive_name,)

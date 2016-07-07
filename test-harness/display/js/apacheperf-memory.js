@@ -27,7 +27,7 @@ var area = d3.area()
 var g = svg.append("g")
     .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
-d3.csv("/data/apacheperf/performance.csv", type, function(error, data) {
+d3.csv("/data/apacheperf/" + window.application.query.test + ".csv", type, function(error, data) {
   if (error) throw error;
 
   var keys = data.columns.filter( (e) => e.startsWith("memory"));

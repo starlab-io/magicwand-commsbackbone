@@ -22,12 +22,16 @@ def parse_samples(filename):
     :return: A list of dictionaries of performance data
     """
     samples = []
+    test_duration = 0
 
     with open(filename) as file:
         for line in file:
 
             # only parse the lines that aren't headers
-            if line.strip()[0] in "1234567890":
+            if line.startswith("test-duration"):
+                test_duration = int(line.strip().split(" ")[1])
+
+            elif line.strip()[0] in "1234567890":
 
                 # hooo-boy. This is admittedly ugly. So sorry. Because the timestamp has a space in it, we need
                 # do shift some fields around and collapse white space
@@ -70,9 +74,10 @@ def parse_samples(filename):
                     }
                 )
 
-    return samples
+    return test_duration, samples
 
-def dump_samples_csv(samples, filename):
+
+def dump_samples_csv(test_duration, samples, filename):
     """
     Output the samples of the reply rate to the given file. We're hand-jamming CSV
     because at this point we know the exact format of the data. This can only cause
@@ -109,7 +114,8 @@ def dump_samples_csv(samples, filename):
                     write_data.append(sample[write_key[0]])
             file.write(",".join([str(wd) for wd in write_data]) + "\n")
 
-def dump_samples_json(samples, filename):
+
+def dump_samples_json(test_duration, samples, filename):
     """
     Dump the test data to a sane JSON format that looks like:
 
@@ -117,7 +123,8 @@ def dump_samples_json(samples, filename):
             "samples": [....],
             "collated_at": <created timestamp>,
             "min_timestamp": "MINUMUM OBSERVED TIMESTAMP",
-            "max_timestamp": "MAXIMUM OBSERVED TIMESTAMP"
+            "max_timestamp": "MAXIMUM OBSERVED TIMESTAMP",
+            "test_duration": #
         }
 
     :param samples:
@@ -130,7 +137,8 @@ def dump_samples_json(samples, filename):
                 "samples": samples,
                 "collated_at": str(datetime.datetime.now()),
                 "min_timestamp": samples[0]["timestamp"],
-                "max_timestamp": samples[-1]["timestamp"]
+                "max_timestamp": samples[-1]["timestamp"],
+                "test_duration": test_duration
             },
             file
         )
@@ -152,6 +160,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 3:
         json_output_file = sys.argv[3]
 
-    samples = parse_samples(input_file)
-    dump_samples_csv(samples, csv_output_file)
-    dump_samples_json(samples, json_output_file)
+    test_duration, samples = parse_samples(input_file)
+    dump_samples_csv(test_duration, samples, csv_output_file)
+    dump_samples_json(test_duration, samples, json_output_file)

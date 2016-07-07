@@ -65,10 +65,49 @@ svg {
 
   <body>
     <div class="container">
-
+      <br/>
+      <a href="/history.html" class="btn btn-sm btn-info" role="button"><span class="glyphicon glyphicon-chevron-left"></span>  View History</a>
       <div class="page-header">
-        <h1>Apache Performance Data</h1>
+        <h1>Apache Performance Data Summary</h1>
         <p class="lead">Collected from multiple tools. Time resolution is approximate.</p>
+      </div>
+
+      <div class="row">
+          <div class="col-md-2">
+              <div class="panel panel-default">
+                <div class="panel-heading"><h3 class="panel-title">Test Data</h3></div>
+                <table id="test-data-download" class="table table-condensed table-striped">
+
+                </table>
+              </div>
+          </div>
+          <div class="col-md-5">
+              <div class="panel panel-default">
+                  <div class="panel-heading"><h3 class="panel-title">Metadata</h3></div>
+                  <table id="test-metadata" class="table table-condensed table-striped">
+                      <tr><th>key</th><th>value</th></tr>
+                  </table>
+              </div>
+          </div>
+          <div class="col-md-5">
+              <div class="panel panel-default">
+                  <div class="panel-heading"><h3 class="panel-title">Configuration</h3></div>
+                  <table id="test-config" class="table table-condensed table-striped">
+
+                  </table>
+              </div>
+          </div>
+
+      </div>
+      <div class="row">
+          <div class="col-md-10 col-md-offset-1">
+              <div class="well" id="test-message">
+
+              </div>
+          </div>
+      </div>
+      <div class="page-header">
+        <h1>Data Graphs</h1>
       </div>
 
       <div class="row">
@@ -94,7 +133,7 @@ svg {
 
     </div> <!-- /container -->
 
-
+    <script src="js/index.js"></script>
     <script src="js/httperf.js"></script>
     <script src="js/apacheperf-cpu.js"></script>
     <script src="js/apacheperf-memory.js"></script>

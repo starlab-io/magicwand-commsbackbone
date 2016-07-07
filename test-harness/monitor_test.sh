@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 if [ -z "$TEST_DURATION" ]; then
-    LORIS_TEST_DURACTION=120
+    LORIS_TEST_DURATION=120
 else
     LORIS_TEST_DURATION=$TEST_DURATION
 fi
@@ -39,18 +39,8 @@ echo "  ! Tearing down test harness containers"
 
 docker-compose down
 
-echo "  > moving performance data for display"
-
-cp ./log/httperf/performance.csv ./display/data/httperf/
-cp ./log/apacheperf/performance.csv ./display/data/apacheperf/
-
-
-echo "Point your browser to http://localhost:8080 for performance data"
-
-pushd display
-
-python -m SimpleHTTPServer 8080
-
-popd
-
 echo "  . done"
+
+echo "!! If you want to save these test results don't forget to run ./archive_test"
+
+echo "!! Archived test results can be viewed using ./view_tests.sh"

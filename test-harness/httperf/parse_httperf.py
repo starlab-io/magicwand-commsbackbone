@@ -24,6 +24,7 @@ def parse_samples(filename):
     :return: A list of 2-tuples, each tuple being the sample time and throughput rate.
     """
     samples = []
+    test_duration = 0
     time = 0
     basetime = datetime.datetime.now()
 
@@ -35,14 +36,18 @@ def parse_samples(filename):
                 # convert this to a usable time object
                 basetime = datetime.datetime.strptime(basetime_string, "%Y-%m-%dT%H:%M:%S")
 
-            if line.startswith("reply-rate"):
+            elif line.startswith("reply-rate"):
                 rate = line.strip().split(" = ")[1]
                 time += 5
                 replyrate_time = basetime + datetime.timedelta(seconds=time)
                 samples.append((replyrate_time.strftime("%Y-%m-%dT%H:%M:%S"), rate))
-    return samples
+            elif line.startswith("test-duration"):
+                test_duration = int(line.strip().split(" ")[1])
 
-def dump_samples_json(samples, filename):
+    return test_duration, samples
+
+
+def dump_samples_json(test_duration, samples, filename):
     """
     While the data may be fairly basic, we can still dump to a JSON file
     for usability. The output looks roughly like:
@@ -51,9 +56,11 @@ def dump_samples_json(samples, filename):
             "samples": [...],
             "collated_at": <collation timestamp>,
             "min_timestamp": "MINIMUM OBSERVED TIMESTAMP",
-            "max_timestamp": "MAXIMUM OBSERVED TIMESTAMP"
+            "max_timestamp": "MAXIMUM OBSERVED TIMESTAMP",
+            "test_duration": #
         }
 
+    :param test_duration:
     :param samples:
     :param filename:
     :return:
@@ -65,12 +72,14 @@ def dump_samples_json(samples, filename):
                 "samples": samples,
                 "collated_at": str(datetime.datetime.now()),
                 "min_timestamp": samples[0][0],
-                "max_timestamp": samples[-1][0]
+                "max_timestamp": samples[-1][0],
+                "test_duration": test_duration
             },
             file
         )
 
-def dump_samples_csv(samples, filename):
+
+def dump_samples_csv(test_duration, samples, filename):
     """
     Output the samples of the reply rate to the given file. We're hand-jamming CSV
     because at this point we know the exact format of the data. This can only cause
@@ -104,6 +113,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 3:
         json_output_file = sys.argv[3]
 
-    samples = parse_samples(input_file)
-    dump_samples_csv(samples, csv_output_file)
-    dump_samples_json(samples, json_output_file)
+    test_duration, samples = parse_samples(input_file)
+    dump_samples_csv(test_duration, samples, csv_output_file)
+    dump_samples_json(test_duration, samples, json_output_file)
