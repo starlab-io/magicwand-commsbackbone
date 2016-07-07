@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# make sure log directories exist
+mkdir -p ./log/httperf/
+mkdir -p ./log/apacheperf/
+mkdir -p ./log/apachepin/
+
 if [ -z "$TEST_DURATION" ]; then
     LORIS_TEST_DURATION=120
 else

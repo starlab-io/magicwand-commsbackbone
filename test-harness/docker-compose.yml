@@ -2,13 +2,15 @@ version: '2'
 services:
   apache:
     # image: patricknevindwyer/apache-harness:latest
-    image: patricknevindwyer/apacheperf:latest
+    image: patricknevindwyer/pinned-apache:latest
     environment:
       LORIS_TEST_DURATION:
     ports:
       - "9000:80"
     volumes:
       - ./log/apacheperf:/var/log/apacheperf
+      - ./log/apachepin:/root/output
+    privileged: true
   goloris:
     image: patricknevindwyer/goloris-harness:latest
     environment:
