@@ -11,9 +11,9 @@ fi
 echo "Starting Apache Performance Logging (logging for $TEST_DURATION seconds)"
 expand.sh
 echo "test-duration $TEST_DURATION" > /var/log/apacheperf/performance.log
-`vmstat 1 $TEST_DURATION -t > /var/log/apacheperf/performance.log &` ; apachectl pin
+`vmstat 1 $TEST_DURATION -t >> /var/log/apacheperf/performance.log &` ; apachectl pin
 
-echo "Waiting $TEST_DURATION seconds for log generation"
+echo "Waiting $(expr $TEST_DURATION /10) seconds for log generation"
 
 sleep $(expr $TEST_DURATION / 10)
 
