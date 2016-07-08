@@ -1,6 +1,5 @@
 #!/usr/bin/python
 
-import sys
 import tempfile
 import os
 from subprocess import call
@@ -8,6 +7,8 @@ from datetime import datetime
 import shutil
 import json
 import subprocess
+from zipfile import ZipFile
+import glob
 
 """
 Our general goal here is to check for new files from the test log directory, and then rename them
@@ -53,6 +54,38 @@ def archiveFrom(test_directory, archive_name):
 
     return dest_files
 
+
+def zipAndThen(test_directory, archive_name, pattern, zipName, nextFunc):
+    """
+    Given a test directory and a file matching pattern, create a zip file
+    in the same test directory with the given _zipName_. Once the ZIP is
+    complete, run the next function with the test_directory and archive
+    name parameters. This is basically a wrapper around the archiveFrom
+    function to make it easy to zip a set of files up before archiving.
+
+    Typical usage would be:
+
+        archivedFiles = zipAndThen("apachepin", "archival name", "trace.*", "performance.zip", archiveFrom)
+
+    :param test_directory:
+    :param pattern:
+    :param zipName:
+    :return:
+    """
+
+    # build our set of files for the zip
+    files = glob.glob("log/" + test_directory + "/" + pattern)
+
+    # construct the path of our zip file
+    zippath = "log/" + test_directory + "/" + zipName
+
+    # write
+    with ZipFile(zippath, "w") as zipfile:
+        [zipfile.write(file) for file in files]
+
+
+    # call arciveFrom
+    return archiveFrom(test_directory, archive_name)
 
 def getTestDuration(test_directory):
     """
@@ -262,7 +295,8 @@ if __name__ == "__main__":
     # get the various archive files
     file_map = {
         "httperf": archiveFrom("httperf", archive_name),
-        "apacheperf": archiveFrom("apacheperf", archive_name)
+        "apacheperf": archiveFrom("apacheperf", archive_name),
+        "apachepin": zipAndThen("apachepin", archive_name, "trace.*", "performance.zip", archiveFrom)
     }
 
     archive_message = getArchiveMessage(archive_name, file_map)
