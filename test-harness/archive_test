@@ -7,6 +7,7 @@ from subprocess import call
 from datetime import datetime
 import shutil
 import json
+import subprocess
 
 """
 Our general goal here is to check for new files from the test log directory, and then rename them
@@ -26,6 +27,7 @@ def archiveName():
     datestr = os.uname()[1] + "-" + datetime.now().strftime("%Y.%m.%dT%H.%M.%S")
     datestr = datestr.replace(" ", "")
     return datestr
+
 
 def archiveFrom(test_directory, archive_name):
     """
@@ -235,14 +237,15 @@ def getGitState():
         branch = branch_raw.split("\n")[0].replace("On branch ", "")
 
         commit_raw = subprocess.check_output("git log -n 1", shell=True)
-        commit = commit_raw.split("\n")[0].replave("commit ", "")
+        commit = commit_raw.split("\n")[0].replace("commit ", "")
 
         git_meta = {
-            "branch": branch,
-            "commit": commit
+            "git branch": branch,
+            "git commit": commit
         }
-    except:
-        pass
+    except Exception as e:
+        print e
+        print "! couldn't determine GIT state"
 
     return git_meta
 
