@@ -4,6 +4,7 @@
 mkdir -p ./log/httperf/
 mkdir -p ./log/apacheperf/
 mkdir -p ./log/apachepin/
+mkdir -p ./log/goloris/
 
 # clean out any historic PIN files
 rm ./log/apachepin/trace.*
