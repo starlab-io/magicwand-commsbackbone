@@ -6,6 +6,11 @@ mkdir -p ./log/apacheperf/
 mkdir -p ./log/apachepin/
 mkdir -p ./log/goloris/
 
+mkdir -p ./display/data/httperf/
+mkdir -p ./display/data/apacheperf/
+mkdir -p ./display/data/apachepin/
+mkdir -p ./display/data/goloris/
+
 # clean out any historic PIN files
 rm ./log/apachepin/trace.*
 
