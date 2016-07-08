@@ -116,17 +116,21 @@ svg {
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache CPU usage</div>
+          <div class="col-md-2">Slow Loris Connections</br><small>GoLoris</small></div>
+          <div id="goloris-connections-svg" class="col-md-10"></div>
+      </div>
+      <div class="row">
+        <div class="col-md-2">Apache CPU usage </br><small>vmstat</small></div>
         <div id="apacheperf-cpu-svg" class="col-md-10"></div>
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache Memory usage</div>
+        <div class="col-md-2">Apache Memory usage</br><small>vmstat</small></div>
         <div id="apacheperf-memory-svg" class="col-md-10"></div>
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache host performance</div>
+        <div class="col-md-2">Apache host performance</br><small>vmstat</small></div>
         <div id="apacheperf-system-svg" class="col-md-10"></div>
       </div>
 
@@ -135,6 +139,7 @@ svg {
 
     <script src="js/index.js"></script>
     <script src="js/httperf.js"></script>
+    <script src="js/goloris-connections.js"></script>
     <script src="js/apacheperf-cpu.js"></script>
     <script src="js/apacheperf-memory.js"></script>
     <script src="js/apacheperf-system.js"></script>
