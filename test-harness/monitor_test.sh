@@ -45,6 +45,9 @@ done
 echo "  + collating ApachePerf results"
 ./apacheperf/parse_apacheperf.py ./log/apacheperf/performance.log ./log/apacheperf/performance.csv ./log/apacheperf/performance.json
 
+echo "  + collating GoLoris results"
+./goloris/parse_goloris.py ./log/goloris/performance.log ./log/goloris/performance.csv ./log/goloris/performance.json
+
 echo "  ! Tearing down test harness containers"
 
 docker-compose down

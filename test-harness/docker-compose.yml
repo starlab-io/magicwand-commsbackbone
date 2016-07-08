@@ -21,7 +21,7 @@ services:
       - apache
     volumes:
       - ./log/goloris:/var/log/goloris
-    command: /bin/bash -c 'sleep 2 ; /goloris -victimUrl="http://apache" -testDuration=0h0m${LORIS_TEST_DURATION}s &> /var/log/goloris/loris.log'
+    command: /bin/bash -c 'sleep 2 ; /goloris -victimUrl="http://apache" -testDuration=0h0m${LORIS_TEST_DURATION}s &> /var/log/goloris/performance.log'
   httperf:
     image: patricknevindwyer/httperf:latest
     environment:

@@ -296,7 +296,8 @@ if __name__ == "__main__":
     file_map = {
         "httperf": archiveFrom("httperf", archive_name),
         "apacheperf": archiveFrom("apacheperf", archive_name),
-        "apachepin": zipAndThen("apachepin", archive_name, "trace.*", "performance.zip", archiveFrom)
+        "apachepin": zipAndThen("apachepin", archive_name, "trace.*", "performance.zip", archiveFrom),
+        "goloris": archiveFrom("goloris", archive_name)
     }
 
     archive_message = getArchiveMessage(archive_name, file_map)
