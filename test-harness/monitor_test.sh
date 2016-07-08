@@ -5,6 +5,9 @@ mkdir -p ./log/httperf/
 mkdir -p ./log/apacheperf/
 mkdir -p ./log/apachepin/
 
+# clean out any historic PIN files
+rm ./log/apachepin/trace.*
+
 if [ -z "$TEST_DURATION" ]; then
     LORIS_TEST_DURATION=120
 else
@@ -31,6 +34,8 @@ while [ ! -f ./log/httperf/done ] ; do
 done
 
 echo "  + collating HTTPerf results"
+
+echo "  ! waiting for PIN & vmstat to complete tracing (this could take awhile)"
 
 while [ ! -f ./log/apacheperf/done ] ; do
     sleep $SYNC_INTERVAL
