@@ -8,12 +8,21 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "vmsg-limits.h"
 
 /* A vmsg is an opaque type usable through the functions in this library. */
 struct vmsg;
 
+
+/* ########### TODO #############
+ * Define how an error due to a NULL pointer will be returned to the caller.
+ * Define how an error of invalid flags will be returned to the caller.
+ * Define how an error of invalid size will be returned to the caller.
+ *
+ * Standardize the error-indicating negative return values.
+ */
 
 
 /* ************** vmsg life-cycle operations **************** */
@@ -164,14 +173,161 @@ void vmsg_delete(const struct vmsg* vmsg);
  * @param buffer_size The size of @p buffer.
  * @return NULL on error, otherwise the pointer to the previous buffer.
  */
-char* vmsg_swap_wrapped_buffer(const struct vmsg vmsg, const char* new_buffer,
+char* vmsg_swap_wrapped_buffer(const struct vmsg* vmsg, const char* new_buffer,
 	const size_t buffer_size);
 
 
 
 
+/* ************* vmsg operations that are coarse-type specific. ************ */
+
+/**
+ * Check if the vmsg coarse type in the header is set to normal.
+ * There are 4 possible coarse types (see vmsg-limits.h), of which, only
+ * the normal type is specified and implemented currently.
+ *
+ * @param vmsg The vmsg to check the coarse type of.
+ * @return true (1) if the coarse type is normal, false (0) otherwise.
+ */
+bool vmsg_coarse_type_is_normal(const struct vmsg* vmsg);
+
+
+/**
+ * Get the type value of a normal vmsg.
+ *
+ * If the vmsg is not normal, -1 is returned instead of the type.
+ *
+ * @param vmsg The normal vmsg to get the type from.
+ * @return The normal type field of the vmsg.
+ */
+int32_t vmsg_normal_get_type(const struct vmsg* vmsg);
+
+
+/**
+ * Set the @p type value of a normal vmsg.
+ *
+ * This sets the coarse type of the vmsg to normal also.
+ * The @p type value must be be between 0 and 1023.
+ *
+ * @param vmsg The normal vmsg to set the type of.
+ * @param type The type flags to set.
+ * @return 0 on success; < 0 if there is an error.
+ */
+int32_t vmsg_normal_set_type(const struct vmsg* vmsg, const uint32_t type);
+
+
+/**
+ * Set the type and size of a vmsg.
+ *
+ * The coarse type specified by @p type must be a supported type or -1 is
+ * returned.
+ *
+ * @p size must be within the max size of @p vmsg, or -2 is returned.
+ *
+ * @param vmsg The vmsg to set the header (type and size) in.
+ * @param type The type value to specify in @p vmsg.
+ * @param size The size value to specify in @p vmsg.
+ * @return 0 on sucess; < 0 on error.
+ */
+int32_t vmsg_set_header_full(const struct vmsg* vmsg, const uint32_t type,
+		const size_t size);
+
+
+
+/* ************** vmsg informational operations *************** */
+
+
+/**
+ * Get the size of the value in a vmsg.
+ *
+ * If the vmsg's coarse type is not supported, -1 is returned.
+ *
+ * The value size will be between 0 and ((2**20) - (4 + 1))
+ *
+ * @param vmsg The vmsg to get the value size from.
+ * @return The size of the value in @p vmsg (0 - ((2**20) - (4 + 1)).
+ */
+int32_t vmsg_get_size(const struct vmsg* vmsg);
+
+
+/**
+ * Set the size of the value in a vmsg.
+ *
+ * If the vmsg's coarse type is not supported, -1 is returned.
+ * If @p size is greater than the maximum possible size of @p vmsg (by
+ * being larger than the size of the buffer in \p vmsg) then -2 is returned
+ * and the size is not set.
+ *
+ * @param vmsg The vmsg to set the size of.
+ * @param size The size value to set in @p vmsg.
+ * @return 0 on success, < 0 on error.
+ */
+int32_t vmsg_normal_set_size(const struct vmsg* vmsg, size_t size);
+
+
+/**
+ * Get the maximum size value this @p vmsg can hold.
+ *
+ * @param vmsg The vmsg to get the maximum size from.
+ * @return The maximum size value this @p vmsg can hold.
+ */
+size_t vmsg_get_max_size(const struct vmsg* vmsg);
+
+
+/**
+ * Get the amount of available space remaining in a vmsg.
+ *
+ * If the vmsg's coarse type is not normal, -1 is returned.
+ * When the vmsg is empty, this will return the same value as
+ * @c vmsg_get_max_size.
+ *
+ * @param vmsg The vmsg to get the available space from.
+ * @return The amount of space available in this vmsg, < 0 on error.
+ */
+size_t vmsg_get_space_available(const struct vmsg* vmsg);
+
+
 
 /* ************** vmsg header I/O operations ************** */
+
+
+/**
+ * Set the type and size of a vmsg from a @p buffer.
+ *
+ * @p buffer MUST be at least 4 bytes long.
+ *
+ * The coarse type specified in the buffer must be a supported type or -1 is
+ * returned.
+ *
+ * The size specified in @p buffer must be within the max size of @p vmsg.
+ * If @p vmsg's max size is too small for the size from @p buffer, -2 is
+ * returned.
+ *
+ * @param vmsg The vmsg to set the header (type and size) in.
+ * @param buffer The source of the type and size values.a
+ * @param 0 on success; < 0 on error.
+ */
+int32_t vmsg_set_header_from_buffer(const struct vmsg* vmsg,
+		const char* buffer);
+
+
+
+/**
+ * Write the header (type and size) from @p vmsg to @p buffer.
+ *
+ * @p vmsg must have type and size set prior to this call, if they are unset -1
+ * will be returned.
+ *
+ * @p buffer MUST be at least 4 bytes long.
+ *
+ * @param vmsg The vmsg whose header to write to @p buffer.
+ * @param buffer The buffer to write the header from @p vmsg to.
+ * @return bytes written (> 0) on success; < 0 on error.
+ */
+int32_t vmsg_copy_header_to_buffer(const struct vmsg* vmsg,
+	const char* buffer);
+
+
 
 
 /* ************** vmsg I/O operations **************** */
@@ -212,8 +368,7 @@ size_t vmsg_append(const struct vmsg* vmsg, const char* source,
  * to the vsmg and -1 is returned.  On success, the number of bytes copied
  * is returned.
  *
- * After appending, the vmsg's number of bytes uses is incremented by
- * @p num_bytes.
+ * After appending, the vmsg's sizie is incremented by @p num_bytes.
  *
  * @param vmsg The vmsg to append data to.
  * @param source The data to append to @p vsmsg.
