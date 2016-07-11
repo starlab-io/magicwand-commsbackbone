@@ -83,6 +83,26 @@ KeepAlive               On
 MaxKeepAliveRequests    100
 KeepAliveTimeout        5
 ```
+
+# Examples
+
+Build a simple variation set, and get the metadata it would generate, without generating the images:
+
+```python
+# setup our templating master
+d = Dockerfiles()
+
+# add some variations
+d.add_config(
+    ApacheDefaults(
+        timeout=[100, 200, 300]
+    )
+)
+
+confs = d.generate(pretend = True)
+print confs
+
+```
 """
 
 from dg.Dockerfile import Dockerfiles
@@ -100,5 +120,5 @@ if __name__ == "__main__":
         )
     )
 
-    confs = d.generate(pretend = True)
+    confs = d.generate()
     print confs
