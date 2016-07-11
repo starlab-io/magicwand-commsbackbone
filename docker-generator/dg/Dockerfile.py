@@ -114,7 +114,7 @@ class Dockerfiles(object):
             # create our output directory
             target_directory = os.path.join(base_directory, image_name)
             if not pretend:
-                os.mkdir(target_directory, 0777)
+                self._mkdir(target_directory, 0777)
 
             # setup our templates
             variant_template_keys = variant.keys()
@@ -158,7 +158,6 @@ class Dockerfiles(object):
         # carry on by returning the metadata
         return built_configs
 
-
     def _writeself(self, metadata, directory="images/temp", pretend=False, filename="Dockerfile"):
         """
         Write the actual docker file, given the metadata on hand. Currently the following
@@ -188,6 +187,27 @@ class Dockerfiles(object):
                 file.write(filled)
 
         return fullpath
+
+    def _mkdir(self, pathname, perm):
+        """
+        Given a path, make sure all the intermediate directories exist.
+
+        :param pathname:
+        :return: True or False, if the path was created
+        """
+        bits = []
+        stack = pathname
+        while stack != "/":
+            stack, bit = os.path.split(stack)
+            bits.append(bit)
+        bits.reverse()
+        base = "/"
+        for bit in bits:
+            base = os.path.join(base, bit)
+            if not os.path.exists(base):
+                print "\t^ creating directory %s" % (base,)
+                os.mkdir(base, perm)
+        return True
 
 
 
