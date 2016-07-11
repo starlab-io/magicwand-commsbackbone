@@ -74,7 +74,7 @@ class Dockerfiles(object):
         print "Using template [%s]" % (self.template,)
 
         with open(self.template, "r") as template:
-            print "\t+ found Dockerfile template [%s]" % (self.template,)
+            print "\t* found Dockerfile template [%s]" % (self.template,)
 
         # determine which templates we need
         req_templates = []
@@ -82,7 +82,7 @@ class Dockerfiles(object):
             req_templates += config.needstemplates()
         req_templates = list(set(req_templates))
         for req_template in req_templates:
-            print "\t+ Adding template [%s]" % (req_template,)
+            print "\t* Adding template [%s]" % (req_template,)
 
         # set our base directory
         base_directory = os.path.realpath( self.buildDirectory )
@@ -136,6 +136,7 @@ class Dockerfiles(object):
 
                 # generate the output data
                 templateoutputname = os.path.join(target_directory, onlocalname)
+                print "\t+ Generating template output for [%s] in [%s]" % (template_key, templateoutputname)
                 if not pretend:
                     variant_templates[template_key].generate(templateoutputname)
 
@@ -144,8 +145,9 @@ class Dockerfiles(object):
             image_metadata["dockerfile"] = dockerfilename
 
             # generate metadata file
+            metapath = os.path.join(target_directory, "metadata.json")
+            print "\t+Creating metadata in [%s]" % (metapath,)
             if not pretend:
-                metapath = os.path.join(target_directory, "metadata.json")
                 with open(metapath, "w") as metafile:
                     json.dump(image_metadata, metafile)
 
@@ -180,6 +182,7 @@ class Dockerfiles(object):
 
         # actually write the file
         fullpath = os.path.join(directory, filename)
+        print "\t+ Creating Dockerfile in [%s]" % (fullpath,)
         if not pretend:
             with open(fullpath, "w") as file:
                 file.write(filled)
