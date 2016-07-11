@@ -1,0 +1,104 @@
+#!/usr/bin/python
+
+"""
+This program is the entry point for working with the set of Docker images that span a collection
+of configuration options and variations.
+
+# Specifying Variation
+
+# Generating Images
+
+# Building Images
+
+# Inspecting Images
+
+# Current Variations:
+
+ - MPM Mode ( Prefork [default on Apache 2.2.11], Worker, Event [unstable in 2.2.11)
+ - Default Settings (Timeout, KeepAlive, MaxKeepAliveRequests, KeepAliveTimeout)
+
+## MPM Prefork Options
+
+Prefork mode is the default in Apache 2.2.11. You can check the mode listed as _Server MPM_:
+
+```sh
+root@46d2d1fc239f:/root# /usr/local/apache2/bin/httpd -V
+Server version: Apache/2.2.11 (Unix)
+Server built:   Jul  7 2016 17:51:37
+Server's Module Magic Number: 20051115:21
+Server loaded:  APR 1.3.3, APR-Util 1.3.4
+Compiled using: APR 1.3.3, APR-Util 1.3.4
+Architecture:   64-bit
+Server MPM:     Prefork
+  threaded:     no
+    forked:     yes (variable process count)
+Server compiled with....
+ -D APACHE_MPM_DIR="server/mpm/prefork"
+ -D APR_HAS_SENDFILE
+ -D APR_HAS_MMAP
+ -D APR_HAVE_IPV6 (IPv4-mapped addresses enabled)
+ -D APR_USE_SYSVSEM_SERIALIZE
+ -D APR_USE_PTHREAD_SERIALIZE
+ -D APR_HAS_OTHER_CHILD
+ -D AP_HAVE_RELIABLE_PIPED_LOGS
+ -D DYNAMIC_MODULE_LIMIT=128
+ -D HTTPD_ROOT="/usr/local/apache2"
+ -D SUEXEC_BIN="/usr/local/apache2/bin/suexec"
+ -D DEFAULT_PIDLOG="logs/httpd.pid"
+ -D DEFAULT_SCOREBOARD="logs/apache_runtime_status"
+ -D DEFAULT_LOCKFILE="logs/accept.lock"
+ -D DEFAULT_ERRORLOG="logs/error_log"
+ -D AP_TYPES_CONFIG_FILE="conf/mime.types"
+ -D SERVER_CONFIG_FILE="conf/httpd.conf"
+```
+
+These options live in `/usr/local/apache2/conf/extra/httpd-mpm.conf`
+
+Config options Defaults:
+```
+StartServers            5
+MinSpareServers         5
+MaxSpareSErvers         10
+MaxClients              150
+MaxRequestsPerChild     0
+
+## MPM Worker Options
+
+Config options defaults:
+```
+StartServers            2
+MaxClients              150
+MinSpareThreads         25
+MaxSpareThreads         75
+ThreadsPerChild         25
+MaxRequestsPerChild     0
+
+## DefaultSettings Options
+
+These options live in `/usr/local/apache2/conf/extra/httpd-default.conf`
+
+```
+Timeout                 300
+KeepAlive               On
+MaxKeepAliveRequests    100
+KeepAliveTimeout        5
+```
+"""
+
+from dg.Dockerfile import Dockerfiles
+from dg.Settings import ApacheDefaults
+
+if __name__ == "__main__":
+
+    # setup our templating master
+    d = Dockerfiles()
+
+    # add some variations
+    d.add_config(
+        ApacheDefaults(
+            timeout=[100, 200, 300]
+        )
+    )
+
+    confs = d.generate(pretend = True)
+    print confs
