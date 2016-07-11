@@ -114,13 +114,13 @@ if __name__ == "__main__":
     d = Dockerfiles()
 
     # add some variations
-    d.add_config(
+    d.add_configs(
         ApacheDefaults(
             timeout=[100, 200, 300]
-        )
+        ),
+        ApacheCore(),
+        ApacheMPMWorker(maxClients=[1, 2, 5, 20])
     )
-    d.add_config(ApacheCore())
-    d.add_config(ApacheMPMWorker(maxClients=[1, 2, 5, 20]))
 
     confs = d.generate()
     print confs

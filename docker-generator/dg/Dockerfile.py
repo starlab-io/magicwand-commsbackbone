@@ -5,6 +5,7 @@ from .Settings import HttpDefaultVariantTemplate, HttpCoreVariantTemplate, MPMPr
 import os
 import json
 import itertools
+import types
 
 class Dockerfiles(object):
     """
@@ -56,8 +57,12 @@ class Dockerfiles(object):
         """
         self._configs.append(t)
 
-    def add_configs(self, ts):
-        [self.add_config(t) for t in ts]
+    def add_configs(self, *kargs, **kwargs):
+        for ts in kargs:
+            if type(ts) == types.ListType:
+                [self.add_config(t) for t in ts]
+            else:
+                self.add_config(ts)
 
     def __add__(self, other):
         self.add_config(other)
