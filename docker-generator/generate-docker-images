@@ -106,7 +106,7 @@ print confs
 """
 
 from dg.Dockerfile import Dockerfiles
-from dg.Settings import ApacheDefaults, ApacheCore
+from dg.Settings import ApacheDefaults, ApacheCore, ApacheMPMPrefork, ApacheMPMWorker
 
 if __name__ == "__main__":
 
@@ -120,6 +120,7 @@ if __name__ == "__main__":
         )
     )
     d.add_config(ApacheCore())
+    d.add_config(ApacheMPMWorker(maxClients=[1, 2, 5, 20]))
 
     confs = d.generate()
     print confs

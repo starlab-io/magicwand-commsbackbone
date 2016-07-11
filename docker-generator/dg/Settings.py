@@ -105,6 +105,7 @@ class ApacheVariantTemplate(object):
         """
         return self.permissions
 
+
 class HttpDefaultVariantTemplate(ApacheVariantTemplate):
     """
     Work with the HTTPD Defaults config data
@@ -122,6 +123,49 @@ class HttpDefaultVariantTemplate(ApacheVariantTemplate):
 
         self.generatedname = "httpd-default.conf"
         self.targetname = "/usr/local/apache2/conf/extras/httpd-default.conf"
+        self.permissions = "ugo+r"
+
+
+class MPMPreforkVariantTemplate(ApacheVariantTemplate):
+    """
+    Work with the MPM Prefork configuration
+    """
+
+    def __init__(self):
+        super(MPMPreforkVariantTemplate, self).__init__()
+        self.template = "./templates/ApacheMPMConfigTemplate-prefork"
+        self.templatekeys = {
+            "startservers": 5,
+            "minspareservers": 5,
+            "maxspareservers": 10,
+            "maxclients": 150,
+            "maxrequestsperchild": 0
+        }
+
+        self.generatedname = "httpd-mpm.conf"
+        self.targetname = "/usr/local/apache2/conf/extras/httpd-mpm.conf"
+        self.permissions = "ugo+r"
+
+
+class MPMWorkerVariantTemplate(ApacheVariantTemplate):
+    """
+    Work with the MPM Worker configuration
+    """
+
+    def __init__(self):
+        super(MPMWorkerVariantTemplate, self).__init__()
+        self.template = "./templates/ApacheMPMConfigTemplate-worker"
+        self.templatekeys = {
+            "startservers": 2,
+            "maxclients": 150,
+            "minsparethreads": 25,
+            "maxsparethreads": 75,
+            "threadsperchild": 25,
+            "maxrequestsperchild": 0
+        }
+
+        self.generatedname = "httpd-mpm.conf"
+        self.targetname = "/usr/local/apache2/conf/extras/httpd-mpm.conf"
         self.permissions = "ugo+r"
 
 class HttpCoreVariantTemplate(ApacheVariantTemplate):
@@ -162,6 +206,109 @@ class ApacheCore(object):
         :return:
         """
         yield {"httpd-core": {}}
+
+
+class ApacheMPMPrefork(object):
+    """
+    Create variations in the Apache MPM-Prefork operational mode.
+    """
+
+    def __init__(self, *kargs, **kwargs):
+        """
+        Setup the variants as well as the ranges of the variants used in generating this config
+            block.
+        """
+        # grab our settings for this configuration template
+        configdefaults = {
+            "startServers": [5],
+            "minSpareServers": [5],
+            "maxSpareServers": [10],
+            "maxClients": [150],
+            "maxRequestsPerChild": [0]
+        }
+
+        # interpolate either KWARGed values or sane default
+        for config in configdefaults.keys():
+            configkey = "_variant_" + config.lower()
+            configval = None
+            if config in kwargs:
+                configval = kwargs[config]
+            else:
+                configval = configdefaults[config]
+            setattr(self, configkey, configval)
+
+    def needstemplates(self):
+        return ["apache-mpm-prefork"]
+
+    def __iter__(self):
+        for ss in self._variant_startservers:
+            for minss in self._variant_minspareservers:
+                for maxss in self._variant_maxspareservers:
+                    for mc in self._variant_maxclients:
+                        for mrpc in self._variant_maxrequestsperchild:
+                            yield {
+                                "apache-mpm-prefork": {
+                                    "startservers": ss,
+                                    "minspareservers": minss,
+                                    "maxspareservers": maxss,
+                                    "maxclients": mc,
+                                    "maxrequestsperchild": mrpc
+                                }
+                            }
+
+
+
+class ApacheMPMWorker(object):
+    """
+    Create variations in the Apache MPM-Worker operational mode.
+    """
+
+    def __init__(self, *kargs, **kwargs):
+        """
+        Setup the variants as well as the ranges of the variants used in generating this config
+            block.
+        """
+        # grab our settings for this configuration template
+        configdefaults = {
+            "startServers": [2],
+            "maxClients": [150],
+            "minSpareThreads": [25],
+            "maxSpareThreads": [75],
+            "threadsPerChild": [25],
+            "maxRequestsPerChild": [0]
+        }
+
+        # interpolate either KWARGed values or sane default
+        for config in configdefaults.keys():
+            configkey = "_variant_" + config.lower()
+            configval = None
+            if config in kwargs:
+                configval = kwargs[config]
+            else:
+                configval = configdefaults[config]
+            setattr(self, configkey, configval)
+
+    def needstemplates(self):
+        return ["apache-mpm-worker"]
+
+    def __iter__(self):
+        for ss in self._variant_startservers:
+            for mc in self._variant_maxclients:
+                for minst in self._variant_minsparethreads:
+                    for maxst in self._variant_maxsparethreads:
+                        for tpc in self._variant_threadsperchild:
+                            for mrpc in self._variant_maxrequestsperchild:
+                                yield {
+                                    "apache-mpm-worker": {
+                                        "startservers": ss,
+                                        "maxclients": mc,
+                                        "minsparethreads": minst,
+                                        "maxsparethreads": maxst,
+                                        "threadsperchild": tpc,
+                                        "maxrequestsperchild": mrpc
+                                    }
+                                }
+
 
 class ApacheDefaults(object):
     """

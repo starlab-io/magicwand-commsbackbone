@@ -1,7 +1,7 @@
 """
 Operations on Dockerfile templates and image directories.
 """
-from .Settings import HttpDefaultVariantTemplate, HttpCoreVariantTemplate
+from .Settings import HttpDefaultVariantTemplate, HttpCoreVariantTemplate, MPMPreforkVariantTemplate, MPMWorkerVariantTemplate
 import os
 import json
 import itertools
@@ -23,7 +23,9 @@ class Dockerfiles(object):
         # set the mapping of known templates
         self.knowntemplates = {
             "httpd-default": HttpDefaultVariantTemplate,
-            "httpd-core": HttpCoreVariantTemplate
+            "httpd-core": HttpCoreVariantTemplate,
+            "apache-mpm-prefork": MPMPreforkVariantTemplate,
+            "apache-mpm-worker": MPMWorkerVariantTemplate
         }
 
         # hold our configs
