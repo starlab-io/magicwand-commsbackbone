@@ -118,11 +118,12 @@ if __name__ == "__main__":
         ApacheDefaults(
             timeout=[100, 200, 300]
         ),
-        ApacheCore(),
-        ApacheMPMWorker(maxClients=[1, 2, 5, 20])
+        ApacheCore()
     )
 
     dockerfiles = d.generate()
     for dockerfile in dockerfiles:
         print dockerfile.name(), " -> ", len(list(dockerfile.files())), " files"
+        print "\tBuilding"
+        dockerfile.build()
 

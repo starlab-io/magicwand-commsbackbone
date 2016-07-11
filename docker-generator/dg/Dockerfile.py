@@ -6,6 +6,7 @@ import os
 import json
 import itertools
 import types
+import subprocess
 
 class Dockerfiles(object):
     """
@@ -186,7 +187,7 @@ class Dockerfiles(object):
         CHMODdata = []
         for copy in metadata["files"]:
             COPYdata.append("COPY %s %s" % (copy["local"], copy["image"]))
-            CHMODdata.append("CHMOD %s %s" % (copy["permissions"], copy["image"]))
+            CHMODdata.append("RUN chmod %s %s" % (copy["permissions"], copy["image"]))
 
         # build the actual file
         raw = open(self.template, 'r').read()
@@ -235,6 +236,7 @@ class Dockerfile(object):
         """
         self.config = conf
         self.dockerfile = conf["dockerfile"]
+        self.imagedir = os.path.dirname(self.dockerfile)
         self.repositoryTemplate = "patricknevindwyer/dg-%(name)s"
         self.tag = "latest"
 
@@ -282,5 +284,20 @@ class Dockerfile(object):
                 yield fs[0]
             else:
                 yield fs
+
+    def build(self):
+        """
+        Build the docker file. Our general build format is:
+
+            docker build -t repo:tag -f file ./path/to/contents
+        :return:
+        """
+        build_command = "docker build -t %s -f %s %s" % (self.name(), self.dockerfile, self.imagedir)
+        try:
+            build_output = subprocess.check_output(build_command, shell=True)
+            print "\tbuild."
+        except subprocess.CalledProcessError as cpe:
+            print "\t!!! Error in docker build: "
+            print "\t\t%s" % (cpe.output,)
 
 
