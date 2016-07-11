@@ -1,6 +1,7 @@
 """
 Our collection of customized settings and variations
 """
+import types
 
 class ApacheVariantTemplate(object):
     """
@@ -49,11 +50,36 @@ class ApacheVariantTemplate(object):
         # write in all of our values
         for k, v in self.templatevalues.items():
             writekey = "{{%s}}" % (k,)
-            template = template.replace(writekey, v)
+            template = template.replace(writekey, self._convert(v))
 
         # excellent, now let's write that out to our output file
         with open(filename, "w") as file:
             file.write(template)
+
+    def _convert(self, val):
+        """
+        Convert a pythonic value into something that works in Apache configs
+
+            string => string
+            integer => integer
+            bool => On | Off
+
+        :param val:
+        :return:
+        """
+
+        if type(val) in types.StringTypes:
+            return val
+        elif type(val) == types.IntType:
+            return str(val)
+        elif type(val) == types.BooleanType:
+            if val:
+                return "On"
+            else:
+                return "Off"
+        else:
+            raise "ApacheVariantTemplate doesn't know how to deal with templated values of type %s" % (str(type(val)))
+
 
     def localfilename(self):
         """
