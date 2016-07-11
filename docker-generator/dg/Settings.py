@@ -58,6 +58,24 @@ class ApacheVariantTemplate(object):
         with open(filename, "w") as file:
             file.write(template)
 
+    def metadata(self):
+        """
+        Similar to the _generate_ method, but return our configuration state as
+        a dictionary.
+
+        :return: Dictionary of config values
+        """
+        metamap = {k: v for k, v in self.templatevalues.items()}
+
+        # make sure we have all of our values.
+        for k, v in self.templatekeys.items():
+            if k not in self.templatevalues:
+                metamap[k] = v
+            elif self.templatevalues[k] == None:
+                metamap[k] = v
+
+        return metamap
+
     def _convert(self, val):
         """
         Convert a pythonic value into something that works in Apache configs

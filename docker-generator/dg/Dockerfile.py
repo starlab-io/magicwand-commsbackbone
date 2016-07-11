@@ -67,7 +67,7 @@ class Dockerfiles(object):
     def __add__(self, other):
         self.add_config(other)
 
-    def generate(self, nameTemplate="image_%(iter)d", pretend=False):
+    def generate(self, nameTemplate="image_%(iter)02d", pretend=False):
         """
         Generate the set of Docker directories and files from our current configuration set. We'll need to
         create our Template objects depending on the configuration objects we have.
@@ -105,7 +105,7 @@ class Dockerfiles(object):
         for variants in itertools.product(*self._configs):
 
             # track our template metadata
-            image_metadata = {"files": []}
+            image_metadata = {"files": [], "config": {}}
 
             # name our image
             naming_vars = {
@@ -148,6 +148,8 @@ class Dockerfiles(object):
                 # generate the output data
                 templateoutputname = os.path.join(target_directory, onlocalname)
                 print "\t+ Generating template output for [%s] in [%s]" % (template_key, templateoutputname)
+
+                image_metadata["config"][template_key] = variant_templates[template_key].metadata()
                 if not pretend:
                     variant_templates[template_key].generate(templateoutputname)
 
