@@ -122,5 +122,7 @@ if __name__ == "__main__":
         ApacheMPMWorker(maxClients=[1, 2, 5, 20])
     )
 
-    confs = d.generate()
-    print confs
+    dockerfiles = d.generate()
+    for dockerfile in dockerfiles:
+        print dockerfile.name(), " -> ", len(list(dockerfile.files())), " files"
+

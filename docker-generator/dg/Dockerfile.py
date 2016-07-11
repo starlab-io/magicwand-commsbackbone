@@ -169,7 +169,7 @@ class Dockerfiles(object):
             config_iter += 1
 
         # carry on by returning the metadata
-        return built_configs
+        return [Dockerfile(built_config) for built_config in built_configs]
 
     def _writeself(self, metadata, directory="images/temp", pretend=False, filename="Dockerfile"):
         """
@@ -223,5 +223,64 @@ class Dockerfiles(object):
         return True
 
 
+class Dockerfile(object):
+    """
+    This class is build out of configuration data from the Dockerfiles class. Operations
+    on individual Dockerfile images can be handled with this class.
+    """
+
+    def __init__(self, conf):
+        """
+        Create a new wrapper object for our dockerfile. This is a loose wrapper at best.
+        """
+        self.config = conf
+        self.dockerfile = conf["dockerfile"]
+        self.repositoryTemplate = "patricknevindwyer/dg-%(name)s"
+        self.tag = "latest"
+
+    def setrepotemplate(self, t):
+        self.repositoryTemplate = t
+
+    def name(self):
+        """
+        Get the fully qualified name of this repo
+        :return:
+        """
+        return "%s:%s" % (self.repository(), self.tag)
+
+    def repository(self):
+        """
+        Get the formatted repository of this image
+
+        :param kargs:
+        :param kwargs:
+        :return:
+        """
+        return self.repositoryTemplate % self.config
+
+    def files(self, local=False, image=False):
+        """
+        Iterator over the generated files included in this build image. Can return
+        a combination of the local and image paths for the files.
+
+        Local:
+
+            dockerfilel.files(local=True)
+
+                -> [file1, file2, file3]
+        :param local:
+        :param image:
+        :return:
+        """
+        for fileset in self.config["files"]:
+            fs = []
+            if local:
+                fs.append(fileset["local"])
+            if image:
+                fs.append(fileset["image"])
+            if len(fs) == 1:
+                yield fs[0]
+            else:
+                yield fs
 
 
