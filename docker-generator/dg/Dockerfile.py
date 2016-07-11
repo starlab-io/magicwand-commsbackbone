@@ -4,7 +4,7 @@ Operations on Dockerfile templates and image directories.
 from .Settings import HttpDefaultVariantTemplate, HttpCoreVariantTemplate
 import os
 import json
-
+import itertools
 
 class Dockerfiles(object):
     """
@@ -95,7 +95,7 @@ class Dockerfiles(object):
         config_iter = 0
 
         # now we can run each iteration of our configs
-        for variant in self._configs[0]:
+        for variants in itertools.product(*self._configs):
 
             # track our template metadata
             image_metadata = {"files": []}
@@ -105,8 +105,9 @@ class Dockerfiles(object):
                 "iter": config_iter,
                 "pretend": pretend
             }
-            for k, vs in variant.items():
-                naming_vars.update(vs)
+            for variant in variants:
+                for v, vs in variant.items():
+                    naming_vars.update(vs)
 
             image_name = nameTemplate % (naming_vars)
             image_metadata["name"] = image_name
@@ -117,19 +118,21 @@ class Dockerfiles(object):
             if not pretend:
                 self._mkdir(target_directory, 0777)
 
-            # setup our templates
-            variant_template_keys = variant.keys()
+            # setup our templates by instantiating a Template handler for each template type
+            # we need
             variant_templates = {}
-            for variant_key in variant_template_keys:
-                if variant_key not in variant_templates:
-                    variant_templates[variant_key] = self.starttemplate(variant_key)
+            for variant in variants:
+                for variant_key in variant.keys():
+                    if variant_key not in variant_templates:
+                        variant_templates[variant_key] = self.starttemplate(variant_key)
 
             # fill in templates
-            for vkey, vdata in variant.items():
-                variant_templates[vkey].addvalues(vdata)
+            for variant in variants:
+                for vkey, vdata in variant.items():
+                    variant_templates[vkey].addvalues(vdata)
 
             # generate necessary files
-            for template_key in variant_template_keys:
+            for template_key in variant_templates.keys():
                 onlocalname = variant_templates[template_key].localfilename()
                 inimagename = variant_templates[template_key].imagefilename()
                 onimageperms = variant_templates[template_key].onimagepermissions()
