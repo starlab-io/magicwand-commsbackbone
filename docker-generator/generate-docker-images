@@ -106,7 +106,7 @@ print confs
 """
 
 from dg.Dockerfile import Dockerfiles
-from dg.Settings import ApacheDefaults
+from dg.Settings import ApacheDefaults, ApacheCore
 
 if __name__ == "__main__":
 
@@ -119,6 +119,7 @@ if __name__ == "__main__":
             timeout=[100, 200, 300]
         )
     )
+    d.add_config(ApacheCore())
 
     confs = d.generate()
     print confs

@@ -43,6 +43,8 @@ class ApacheVariantTemplate(object):
         for k, v in self.templatekeys.items():
             if k not in self.templatevalues:
                 self.templatevalues[k] = v
+            elif self.templatevalues[k] == None:
+                self.templatevalues[k] = v
 
         # get our template
         template = open(self.template, "r").read()
@@ -105,7 +107,7 @@ class ApacheVariantTemplate(object):
 
 class HttpDefaultVariantTemplate(ApacheVariantTemplate):
     """
-    Work with the HTTPD Defaults
+    Work with the HTTPD Defaults config data
     """
 
     def __init__(self):
@@ -121,6 +123,45 @@ class HttpDefaultVariantTemplate(ApacheVariantTemplate):
         self.generatedname = "httpd-default.conf"
         self.targetname = "/usr/local/apache2/conf/extras/httpd-default.conf"
         self.permissions = "ugo+r"
+
+class HttpCoreVariantTemplate(ApacheVariantTemplate):
+    """
+    Work with the core HTTPD config file, which guides everything else
+    """
+
+    def __init__(self):
+        super(HttpCoreVariantTemplate, self).__init__()
+        self.template = "./templates/ApacheConfigTemplate"
+        self.templatekeys = {}
+
+        self.generatedname = "httpd.conf"
+        self.targetname = "/usr/local/apache2/conf/httpd.conf"
+        self.permissions = "ugo+r"
+
+class ApacheCore(object):
+    """
+    Chain together variations from the Apache Core configuration. Right now, this is a 1 element
+    iteration.
+    """
+    def __init__(self):
+        """
+        Right now we do't need any config, as we're just a single element iterator
+        """
+        pass
+
+    def needstemplates(self):
+        """
+        We need to include the core templates
+        :return:
+        """
+        return ["httpd-core"]
+
+    def __iter__(self):
+        """
+        We're only a single value iterator, so we can just return our value
+        :return:
+        """
+        yield {"httpd-core": {}}
 
 class ApacheDefaults(object):
     """
@@ -188,6 +229,8 @@ class ApacheDefaults(object):
         if self._is_variant_keepalive:
             for maxkar in self._variant_maxkeepaliverequests:
                 yield maxkar
+        else:
+            yield None
 
     def keepalivetimeout(self):
         """
@@ -199,6 +242,8 @@ class ApacheDefaults(object):
         if self._is_variant_keepalive:
             for kat in self._variant_keepalivetimeout:
                 yield kat
+        else:
+            yield None
 
     def needstemplates(self):
         """
@@ -208,7 +253,7 @@ class ApacheDefaults(object):
         """
         return ["httpd-default"]
 
-    def variants(self):
+    def __iter__(self):
         """
         Iterate through all of our config options, yielding a set of fields for a
         template object at each step.

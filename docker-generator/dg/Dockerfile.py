@@ -1,7 +1,7 @@
 """
 Operations on Dockerfile templates and image directories.
 """
-from .Settings import HttpDefaultVariantTemplate
+from .Settings import HttpDefaultVariantTemplate, HttpCoreVariantTemplate
 import os
 import json
 
@@ -22,7 +22,8 @@ class Dockerfiles(object):
 
         # set the mapping of known templates
         self.knowntemplates = {
-            "httpd-default": HttpDefaultVariantTemplate
+            "httpd-default": HttpDefaultVariantTemplate,
+            "httpd-core": HttpCoreVariantTemplate
         }
 
         # hold our configs
@@ -94,7 +95,7 @@ class Dockerfiles(object):
         config_iter = 0
 
         # now we can run each iteration of our configs
-        for variant in self._configs[0].variants():
+        for variant in self._configs[0]:
 
             # track our template metadata
             image_metadata = {"files": []}

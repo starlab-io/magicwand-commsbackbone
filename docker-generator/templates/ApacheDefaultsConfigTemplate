@@ -28,7 +28,7 @@ MaxKeepAliveRequests {{maxkeepaliverequests}}
 # KeepAliveTimeout: Number of seconds to wait for the next request from the
 # same client on the same connection.
 #
-KeepAliveTimeout {{keepalivetimeout}}s
+KeepAliveTimeout {{keepalivetimeout}}
 
 #
 # UseCanonicalName: Determines how Apache constructs self-referencing
