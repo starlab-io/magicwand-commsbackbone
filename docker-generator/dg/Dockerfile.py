@@ -160,7 +160,7 @@ class Dockerfiles(object):
 
             # generate metadata file
             metapath = os.path.join(target_directory, "metadata.json")
-            print "\t+Creating metadata in [%s]" % (metapath,)
+            print "\t+ Creating metadata in [%s]" % (metapath,)
             if not pretend:
                 with open(metapath, "w") as metafile:
                     json.dump(image_metadata, metafile)
@@ -260,6 +260,14 @@ class Dockerfile(object):
         """
         return self.repositoryTemplate % self.config
 
+    def info(self):
+        """
+        Print the info about this build config
+        :return:
+        """
+        print self.name()
+        print "\tCOPY files = %d" % ( len(list(self.files())), )
+
     def files(self, local=False, image=False):
         """
         Iterator over the generated files included in this build image. Can return
@@ -285,19 +293,22 @@ class Dockerfile(object):
             else:
                 yield fs
 
-    def build(self):
+    def build(self, verbose=False):
         """
         Build the docker file. Our general build format is:
 
             docker build -t repo:tag -f file ./path/to/contents
         :return:
         """
+        print "\tBuilding...",
         build_command = "docker build -t %s -f %s %s" % (self.name(), self.dockerfile, self.imagedir)
         try:
             build_output = subprocess.check_output(build_command, shell=True)
-            print "\tbuild."
+            if verbose:
+                print build_output
+            print "built"
         except subprocess.CalledProcessError as cpe:
-            print "\t!!! Error in docker build: "
+            print "error"
             print "\t\t%s" % (cpe.output,)
 
 

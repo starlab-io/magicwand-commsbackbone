@@ -123,7 +123,6 @@ if __name__ == "__main__":
 
     dockerfiles = d.generate()
     for dockerfile in dockerfiles:
-        print dockerfile.name(), " -> ", len(list(dockerfile.files())), " files"
-        print "\tBuilding"
-        dockerfile.build()
+        dockerfile.info()
+        dockerfile.build(verbose=True)
 
