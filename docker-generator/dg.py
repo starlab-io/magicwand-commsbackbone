@@ -86,6 +86,27 @@ def action_build(dockerfiles, opts):
                         print "   - run again with --verbose for more detailed error"
 
 
+def action_push(dockerfiles, opts):
+    """
+    Push some set of docker images, may trigger a build. Use the --force-rebuild to always
+    rebuild before push.
+
+    :param dockerfiles:
+    :param opts:
+    :return:
+    """
+    for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
+        if repo_matches_filter(dockerfile, opts["repositories"]):
+            if tag_matches_filter(dockerfile, opts["tags"]):
+                print "Pushing %s" % (dockerfile.name(),)
+                if dockerfile.push(verbose=opts["verbose"]):
+                    print "\t+ push succeeded"
+                else:
+                    print "\t- push failed"
+                    if not opts["verbose"]:
+                        print "\t- run again with --verbose for more detailed error"
+
+
 def repo_matches_filter(dockerfile, repolist):
     """
     Determine if the given dockerfile matches the repository list specified on
@@ -126,11 +147,15 @@ def getOptions():
     # What are we trying to do?
     parser.add_argument("-l", "--list", action="store_const", const="list", dest="action", help="List the Docker images and paths that are described in the DockerGenerator.py")
     parser.add_argument("-i", "--info", action="store_const", const="info", dest="action", help="View information about each Dockerfile and it's built components")
-    parser.add_argument("-b", "--build", action="store_const", const="build", dest="action")
+    parser.add_argument("-b", "--build", action="store_const", const="build", dest="action", help="Build each docker image described in the DockerGenerator.py file")
+    parser.add_argument("-p", "--push", action="store_const", const="push", dest="action", help="Push docker images to Docker Hub")
 
     # control various aspects of our operations by repo or tag
     parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
     parser.add_argument("-t", "--tag", dest="tags", nargs="*", help="Filter to the specified set of tags", default=[])
+
+    # content controls and order of operations
+    parser.add_argument("--force-rebuild", dest="force_rebuild", action="store_true", default=False, help="Force rebuild of select images prior to other operatins")
 
     # what's our DockerGenerator file?
     parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default="DockerGenerator.py")
@@ -157,7 +182,8 @@ if __name__ == "__main__":
     dispatchmap = {
         "list": action_list,
         "info": action_info,
-        "build": action_build
+        "build": action_build,
+        "push": action_push
     }
 
     # try and dispatch
@@ -167,4 +193,10 @@ if __name__ == "__main__":
     elif args["action"] not in dispatchmap:
         print "! Unknown action [%s], maybe it isn't implemented yet?" % (args["action"], )
         sys.exit(1)
+
+    if args["force_rebuild"] and args["action"] != "build":
+        if args["verbose"]:
+            print "! using --force-rebuild"
+        action_build(dockerfiles, args)
+
     ret = dispatchmap[args["action"]](dockerfiles, args)

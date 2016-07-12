@@ -334,4 +334,22 @@ class Dockerfile(object):
                 print "\t\t%s" % (cpe.output,)
             return False
 
+    def push(self, verbose=False):
+        """
+        Push the build image, or attempt to.
+
+        :param verbose:
+        :return:
+        """
+        push_command = "docker push %s" % (self.name(),)
+        try:
+            push_output = subprocess.check_output(push_command, shell=True)
+            if verbose:
+                print push_output
+            return True
+        except subprocess.CalledProcessError as cpe:
+            if verbose:
+                print "! Error"
+                print "\t\t%s" % (cpe.output,)
+            return False
 
