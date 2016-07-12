@@ -322,15 +322,16 @@ class Dockerfile(object):
             docker build -t repo:tag -f file ./path/to/contents
         :return:
         """
-        print "\tBuilding...",
         build_command = "docker build -t %s -f %s %s" % (self.name(), self.dockerfile, self.imagedir)
         try:
             build_output = subprocess.check_output(build_command, shell=True)
             if verbose:
                 print build_output
-            print "built"
+            return True
         except subprocess.CalledProcessError as cpe:
-            print "error"
-            print "\t\t%s" % (cpe.output,)
+            if verbose:
+                print "error"
+                print "\t\t%s" % (cpe.output,)
+            return False
 
 

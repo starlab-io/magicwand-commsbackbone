@@ -1,4 +1,7 @@
 #!/usr/bin/python
+# -*- coding: UTF-8 -*-
+
+
 from dg import Settings, Dockerfile
 import argparse
 import sys
@@ -62,6 +65,25 @@ def action_info(dockerfiles, opts):
                     print "        + (local) %s == %s (image)" % (files[0], files[1])
                 print "     built: %s" % (dockerfile.built(),)
 
+
+def action_build(dockerfiles, opts):
+    """
+    Build the matching dockerfile objects.
+
+    :param dockerfiles:
+    :param opts:
+    :return:
+    """
+    for dockerfile in dockerfiles.generate(pretend=False, verbose=opts["verbose"]):
+        if repo_matches_filter(dockerfile, opts["repositories"]):
+            if tag_matches_filter(dockerfile, opts["tags"]):
+                print "Building %s" % (dockerfile.name())
+                if dockerfile.build(verbose=opts["verbose"]):
+                    print "\t+ build succeeded"
+                else:
+                    print "\t- build failed"
+                    if not opts["verbose"]:
+                        print "   - run again with --verbose for more detailed error"
 
 
 def repo_matches_filter(dockerfile, repolist):
@@ -134,7 +156,8 @@ if __name__ == "__main__":
     # build our dispatch map
     dispatchmap = {
         "list": action_list,
-        "info": action_info
+        "info": action_info,
+        "build": action_build
     }
 
     # try and dispatch
