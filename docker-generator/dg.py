@@ -78,7 +78,7 @@ def action_build(dockerfiles, opts):
         if repo_matches_filter(dockerfile, opts["repositories"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
                 print "Building %s" % (dockerfile.name())
-                if dockerfile.build(verbose=opts["verbose"]):
+                if dockerfile.build(verbose=opts["verbose"], ignoreCache=opts["no_cache"]):
                     print "\t+ build succeeded"
                 else:
                     print "\t- build failed"
@@ -156,6 +156,7 @@ def getOptions():
 
     # content controls and order of operations
     parser.add_argument("--force-rebuild", dest="force_rebuild", action="store_true", default=False, help="Force rebuild of select images prior to other operatins")
+    parser.add_argument("--no-cache", dest="no_cache", action="store_true", default=False, help="Ignore image caches when rebuilding Docker images")
 
     # what's our DockerGenerator file?
     parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default="DockerGenerator.py")

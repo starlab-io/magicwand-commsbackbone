@@ -315,14 +315,18 @@ class Dockerfile(object):
         """
         return os.path.exists(self.dockerfile)
 
-    def build(self, verbose=False):
+    def build(self, verbose=False, ignoreCache=False):
         """
         Build the docker file. Our general build format is:
 
             docker build -t repo:tag -f file ./path/to/contents
         :return:
         """
-        build_command = "docker build -t %s -f %s %s" % (self.name(), self.dockerfile, self.imagedir)
+        extra_opts = []
+        if ignoreCache:
+            extra_opts.append("--no-cache")
+
+        build_command = "docker build %s -t %s -f %s %s" % (" ".join(extra_opts), self.name(), self.dockerfile, self.imagedir)
         try:
             build_output = subprocess.check_output(build_command, shell=True)
             if verbose:
