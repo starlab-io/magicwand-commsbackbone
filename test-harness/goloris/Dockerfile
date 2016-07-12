@@ -11,3 +11,7 @@ ENV GOPATH /home/goloris/gocode
 
 RUN go get -u github.com/valyala/goloris
 RUN go build github.com/valyala/goloris
+
+RUN mkdir /var/log/goloris
+
+VOLUME ["/var/log/goloris"]
