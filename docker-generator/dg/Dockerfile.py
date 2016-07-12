@@ -71,7 +71,7 @@ class Dockerfiles(object):
     def __add__(self, other):
         self.add_config(other)
 
-    def generate(self, nameTemplate="image_%(iter)02d", pretend=False, verbose=False):
+    def generate(self, nameTemplate="image-%(iter)02d", pretend=False, verbose=False):
         """
         Generate the set of Docker directories and files from our current configuration set. We'll need to
         create our Template objects depending on the configuration objects we have.
@@ -307,6 +307,13 @@ class Dockerfile(object):
                 yield fs[0]
             else:
                 yield fs
+
+    def built(self):
+        """
+        Are we already built?
+        :return: True or False
+        """
+        return os.path.exists(self.dockerfile)
 
     def build(self, verbose=False):
         """

@@ -36,7 +36,62 @@ def action_list(dockerfiles, opts):
     """
 
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        print "%s  == %s" % (dockerfile.name(), dockerfile.imagedir)
+        if repo_matches_filter(dockerfile, opts["repositories"]):
+            if tag_matches_filter(dockerfile, opts["tags"]):
+                print "%s  == %s" % (dockerfile.name(), dockerfile.imagedir)
+
+
+def action_info(dockerfiles, opts):
+    """
+    Get per image information, optionally about one or more images.
+
+    :param dockerfiles:
+    :param opts:
+    :return:
+    """
+
+    for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
+        if repo_matches_filter(dockerfile, opts["repositories"]):
+            if tag_matches_filter(dockerfile, opts["tags"]):
+
+                # build our information set
+                print "repository: %s" % (dockerfile.repository(), )
+                print "       tag: %s" % (dockerfile.tag, )
+                print "     files: %d" % (len(list(dockerfile.files())))
+                for files in dockerfile.files(local=True, image=True):
+                    print "        + (local) %s == %s (image)" % (files[0], files[1])
+                print "     built: %s" % (dockerfile.built(),)
+
+
+
+def repo_matches_filter(dockerfile, repolist):
+    """
+    Determine if the given dockerfile matches the repository list specified on
+    the command line.
+
+    :param dockerfile: Dockerfile object
+    :param repolist: List of repository names or empty list
+    :return: True or False
+    """
+    if repolist == [] or repolist is None:
+        return True
+
+    return dockerfile.repository() in repolist
+
+
+def tag_matches_filter(dockerfile, taglist):
+    """
+    Determine if the given Dockfile matches the tag list specified on the
+     command line.
+
+    :param dockerfile: Dockerfile object
+    :param taglist: List of tags or empty list
+    :return: True or False
+    """
+    if taglist == [] or taglist is None:
+        return True
+
+    return dockerfile.tag in taglist
 
 
 def getOptions():
@@ -47,9 +102,13 @@ def getOptions():
     parser = argparse.ArgumentParser()
 
     # What are we trying to do?
-    parser.add_argument("-l", "--list", action="store_const", const="list", dest="action")
-    parser.add_argument("-i", "--info", action="store_const", const="info", dest="action")
+    parser.add_argument("-l", "--list", action="store_const", const="list", dest="action", help="List the Docker images and paths that are described in the DockerGenerator.py")
+    parser.add_argument("-i", "--info", action="store_const", const="info", dest="action", help="View information about each Dockerfile and it's built components")
     parser.add_argument("-b", "--build", action="store_const", const="build", dest="action")
+
+    # control various aspects of our operations by repo or tag
+    parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
+    parser.add_argument("-t", "--tag", dest="tags", nargs="*", help="Filter to the specified set of tags", default=[])
 
     # what's our DockerGenerator file?
     parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default="DockerGenerator.py")
@@ -65,6 +124,7 @@ if __name__ == "__main__":
 
     if args["verbose"]:
         print "Outputting in VERBOSE mode"
+        print args
 
     # find our user configured Dockerfile objects
     dockerfiles = findDockerGenerator(args).dockerfiles
@@ -73,7 +133,8 @@ if __name__ == "__main__":
 
     # build our dispatch map
     dispatchmap = {
-        "list": action_list
+        "list": action_list,
+        "info": action_info
     }
 
     # try and dispatch
@@ -82,4 +143,5 @@ if __name__ == "__main__":
         sys.exit(1)
     elif args["action"] not in dispatchmap:
         print "! Unknown action [%s], maybe it isn't implemented yet?" % (args["action"], )
+        sys.exit(1)
     ret = dispatchmap[args["action"]](dockerfiles, args)
