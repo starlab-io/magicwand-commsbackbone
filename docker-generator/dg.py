@@ -107,6 +107,26 @@ def action_push(dockerfiles, opts):
                         print "\t- run again with --verbose for more detailed error"
 
 
+def action_tag(dockerfiles, opts):
+    """
+    Add new tags to a set of dockerfiles
+
+    :param dockerfiles:
+    :param opts:
+    :return:
+    """
+    for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
+        if repo_matches_filter(dockerfile, opts["repositories"]):
+            if tag_matches_filter(dockerfile, opts["tags"]):
+                print "Tagging %s" % (dockerfile.name())
+                if dockerfile.addtag(opts["add_tags"], verbose=opts["verbose"]):
+                    print "\t+ %d tags added" % (len(opts["add_tags"]),)
+                else:
+                    print "\t- Error adding tags"
+                    if not opts["verbose"]:
+                        print "\t- run again with --verbose for more detailed error"
+
+
 def repo_matches_filter(dockerfile, repolist):
     """
     Determine if the given dockerfile matches the repository list specified on
@@ -149,6 +169,7 @@ def getOptions():
     parser.add_argument("-i", "--info", action="store_const", const="info", dest="action", help="View information about each Dockerfile and it's built components")
     parser.add_argument("-b", "--build", action="store_const", const="build", dest="action", help="Build each docker image described in the DockerGenerator.py file")
     parser.add_argument("-p", "--push", action="store_const", const="push", dest="action", help="Push docker images to Docker Hub")
+    parser.add_argument("--add-tags", action="store_const", const="tag", dest="action", help="Add new tags to images")
 
     # control various aspects of our operations by repo or tag
     parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
@@ -157,6 +178,7 @@ def getOptions():
     # content controls and order of operations
     parser.add_argument("--force-rebuild", dest="force_rebuild", action="store_true", default=False, help="Force rebuild of select images prior to other operatins")
     parser.add_argument("--no-cache", dest="no_cache", action="store_true", default=False, help="Ignore image caches when rebuilding Docker images")
+    parser.add_argument("--new-tags", dest="add_tags", nargs="*", help="New tags to add to one or more images", default=[])
 
     # what's our DockerGenerator file?
     parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default="DockerGenerator.py")
@@ -184,7 +206,8 @@ if __name__ == "__main__":
         "list": action_list,
         "info": action_info,
         "build": action_build,
-        "push": action_push
+        "push": action_push,
+        "tag": action_tag
     }
 
     # try and dispatch

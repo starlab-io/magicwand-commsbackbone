@@ -308,6 +308,45 @@ class Dockerfile(object):
             else:
                 yield fs
 
+    def addtag(self, *kargs, **kwargs):
+        """
+        Add one or more tags to this docker image.
+
+        :param kargs: List of tags or lists of lists of tags
+        :param kwargs:
+        :return:
+        """
+
+        # check verbosity
+        verbose = False
+        if "verbose" in kwargs:
+            verbose = kwargs["verbose"]
+
+        # we need to exist
+        if not self.built():
+            self.build()
+
+        # flatten out the new tags
+        new_tags = []
+        for karg in kargs:
+            if type(karg) == types.ListType:
+                new_tags += karg
+            else:
+                new_tags.append(karg)
+
+        for new_tag in new_tags:
+            tag_command = "docker tag %s %s:%s" % (self.name(), self.repository(), new_tag)
+            try:
+                tag_output = subprocess.check_output(tag_command, shell=True)
+                if verbose:
+                    print tag_output
+                return True
+            except subprocess.CalledProcessError as cpe:
+                if verbose:
+                    print "error"
+                    print "\t\t%a" % (cpe.output,)
+                return False
+
     def built(self):
         """
         Are we already built?
