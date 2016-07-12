@@ -33,6 +33,9 @@ class Dockerfiles(object):
         # hold our configs
         self._configs = []
 
+        # track how verbose our output should be
+        self.verbose = False
+
     def starttemplate(self, templatename):
         """
         Spin up a new instance of this template
@@ -68,7 +71,7 @@ class Dockerfiles(object):
     def __add__(self, other):
         self.add_config(other)
 
-    def generate(self, nameTemplate="image_%(iter)02d", pretend=False):
+    def generate(self, nameTemplate="image_%(iter)02d", pretend=False, verbose=False):
         """
         Generate the set of Docker directories and files from our current configuration set. We'll need to
         create our Template objects depending on the configuration objects we have.
@@ -80,18 +83,25 @@ class Dockerfiles(object):
         :param pretend: Pretend to write out the files? Useful for generating config sets without really building
         :return: List of configurations built
         """
-        print "Using template [%s]" % (self.template,)
+        self.verbose = verbose
+
+        if verbose:
+            print "Using template [%s]" % (self.template,)
 
         with open(self.template, "r") as template:
-            print "\t* found Dockerfile template [%s]" % (self.template,)
+            if verbose:
+                print "\t* found Dockerfile template [%s]" % (self.template,)
+            else:
+                pass
 
         # determine which templates we need
         req_templates = []
         for config in self._configs:
             req_templates += config.needstemplates()
         req_templates = list(set(req_templates))
-        for req_template in req_templates:
-            print "\t* Adding template [%s]" % (req_template,)
+        if verbose:
+            for req_template in req_templates:
+                print "\t* Adding template [%s]" % (req_template,)
 
         # set our base directory
         base_directory = os.path.realpath( self.buildDirectory )
@@ -119,7 +129,8 @@ class Dockerfiles(object):
 
             image_name = nameTemplate % (naming_vars)
             image_metadata["name"] = image_name
-            print "\t! Creating variant [%s]" % (image_name)
+            if verbose:
+                print "\t! Creating variant [%s]" % (image_name)
 
             # create our output directory
             target_directory = os.path.join(base_directory, image_name)
@@ -148,7 +159,8 @@ class Dockerfiles(object):
 
                 # generate the output data
                 templateoutputname = os.path.join(target_directory, onlocalname)
-                print "\t+ Generating template output for [%s] in [%s]" % (template_key, templateoutputname)
+                if verbose:
+                    print "\t+ Generating template output for [%s] in [%s]" % (template_key, templateoutputname)
 
                 image_metadata["config"][template_key] = variant_templates[template_key].metadata()
                 if not pretend:
@@ -160,7 +172,8 @@ class Dockerfiles(object):
 
             # generate metadata file
             metapath = os.path.join(target_directory, "metadata.json")
-            print "\t+ Creating metadata in [%s]" % (metapath,)
+            if verbose:
+                print "\t+ Creating metadata in [%s]" % (metapath,)
             if not pretend:
                 with open(metapath, "w") as metafile:
                     json.dump(image_metadata, metafile)
@@ -195,7 +208,8 @@ class Dockerfiles(object):
 
         # actually write the file
         fullpath = os.path.join(directory, filename)
-        print "\t+ Creating Dockerfile in [%s]" % (fullpath,)
+        if self.verbose:
+            print "\t+ Creating Dockerfile in [%s]" % (fullpath,)
         if not pretend:
             with open(fullpath, "w") as file:
                 file.write(filled)
@@ -219,7 +233,8 @@ class Dockerfiles(object):
         for bit in bits:
             base = os.path.join(base, bit)
             if not os.path.exists(base):
-                print "\t^ creating directory %s" % (base,)
+                if self.verbose:
+                    print "\t^ creating directory %s" % (base,)
                 os.mkdir(base, perm)
         return True
 
