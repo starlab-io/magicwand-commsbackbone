@@ -1,8 +1,6 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 
-
-from dg import Settings, Dockerfile
 import argparse
 import sys
 
