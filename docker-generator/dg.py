@@ -4,6 +4,7 @@
 import argparse
 import sys
 import subprocess
+import re
 
 def findDockerVersions(opts):
     """
@@ -75,7 +76,7 @@ def action_list(dockerfiles, opts):
     """
 
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
                 print "%s  == %s" % (dockerfile.name(), dockerfile.imagedir)
 
@@ -90,7 +91,7 @@ def action_info(dockerfiles, opts):
     """
 
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
 
                 # build our information set
@@ -111,7 +112,7 @@ def action_build(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=False, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
                 print "Building %s" % (dockerfile.name())
                 if dockerfile.build(verbose=opts["verbose"], ignoreCache=opts["no_cache"]):
@@ -132,7 +133,7 @@ def action_push(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
                 print "Pushing %s" % (dockerfile.name(),)
                 if dockerfile.push(verbose=opts["verbose"]):
@@ -152,7 +153,7 @@ def action_tag(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
                 print "Tagging %s" % (dockerfile.name())
                 if dockerfile.addtag(opts["add_tags"], verbose=opts["verbose"]):
@@ -163,19 +164,39 @@ def action_tag(dockerfiles, opts):
                         print "\t- run again with --verbose for more detailed error"
 
 
-def repo_matches_filter(dockerfile, repolist):
+def repo_matches_filter(dockerfile, repolist, usePattern=False):
     """
     Determine if the given dockerfile matches the repository list specified on
     the command line.
 
     :param dockerfile: Dockerfile object
     :param repolist: List of repository names or empty list
+    :param usePattern: Enable pattern matching
     :return: True or False
     """
+
+    # by default we match when no filtering is enabled
     if repolist == [] or repolist is None:
         return True
 
-    return dockerfile.repository() in repolist
+    # basic sanity check first for full path match
+    if dockerfile.repository() in repolist:
+        return True
+
+    # now compose our pattern match query if it's enabled
+    if usePattern:
+        reponame = dockerfile.repository()
+        for pattern in repolist:
+
+            # build the regex
+            #   * => .*
+            #   + => .+
+            #   ? => .
+            pattern_regex = pattern.replace("?",".").replace("+", ".+").replace("*",".*")
+            if re.search(pattern_regex, reponame):
+                return True
+
+    return False
 
 
 def tag_matches_filter(dockerfile, taglist):
@@ -211,6 +232,7 @@ def getOptions():
     # control various aspects of our operations by repo or tag
     parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
     parser.add_argument("-t", "--tag", dest="tags", nargs="*", help="Filter to the specified set of tags", default=[])
+    parser.add_argument("--pattern", dest="pattern", action="store_true", default=False, help="Use pattern matching when filtering by repository or tag names")
 
     # content controls and order of operations
     parser.add_argument("--force-rebuild", dest="force_rebuild", action="store_true", default=False, help="Force rebuild of select images prior to other operatins")
