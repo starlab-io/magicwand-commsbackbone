@@ -32,7 +32,6 @@ RUN chmod ugo+x /usr/local/bin/parse_apacheperf.py
 RUN chmod ugo+x /usr/local/bin/httpd-foreground
 
 #simple realistic page:
-RUN mkdir /usr/local/apache2/htdocs/simplepage/
 COPY varwww /usr/local/apache2/htdocs/
 
 #cgi:
