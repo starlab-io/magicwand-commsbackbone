@@ -35,7 +35,7 @@ def findDockerGenerator(args):
     :param args: Runtime arguments to the program
     :return:
     """
-    dockerGenerator = args["dockerGenerator"]
+    dockerGenerator = args["dockerGenerator"][0]
     if not dockerGenerator.endswith(".py"):
         print "!ERROR DockerGenerator file must have the .py extension"
         return None
@@ -218,7 +218,7 @@ def getOptions():
     parser.add_argument("--new-tags", dest="add_tags", nargs="*", help="New tags to add to one or more images", default=[])
 
     # what's our DockerGenerator file?
-    parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default="DockerGenerator.py")
+    parser.add_argument("-f", "--file", dest="dockerGenerator", nargs=1, default=["DockerGenerator.py"])
 
     # set the verbosity
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", default=False)
