@@ -3,6 +3,7 @@ MAINTAINER wbradmoore@gmail.com
 
 USER root
 
+RUN echo "set nocompatible\nset backspace=2" > $HOME/.vimrc
 RUN apt-get update
 RUN apt-get install -y g++ wget gcc make python gnuplot autopoint gettext autoconf libtool automake pkg-config
 RUN wget http://archive.apache.org/dist/httpd/httpd-2.2.11.tar.gz
@@ -21,7 +22,6 @@ RUN make
 RUN mv vmstat /usr/bin/vmstat
 
 COPY httpd-foreground /usr/local/bin
-COPY httpd-background /usr/local/bin
 COPY startscript.sh /usr/local/bin
 COPY parse_apacheperf.py /usr/local/bin
 COPY expand.sh /usr/local/bin
@@ -30,7 +30,10 @@ RUN chmod ugo+x /usr/local/bin/startscript.sh
 RUN chmod ugo+x /usr/local/bin/expand.sh
 RUN chmod ugo+x /usr/local/bin/parse_apacheperf.py
 RUN chmod ugo+x /usr/local/bin/httpd-foreground
-RUN chmod ugo+x /usr/local/bin/httpd-background
+
+#simple realistic page:
+RUN mkdir /usr/local/apache2/htdocs/simplepage/
+COPY varwww /usr/local/apache2/htdocs/
 
 #cgi:
 COPY cgiDatPy /usr/local/apache2/cgi-bin
@@ -42,6 +45,7 @@ EXPOSE 80
 
 VOLUME ["/var/log/apacheperf"]
 
+WORKDIR /root
 CMD ["startscript.sh"]
 
 # docker stop apacheperf1; docker rm apacheperf1; docker build -t wbradmoore/apacheperf .;docker run -p 80:80 --name apacheperf1 -d wbradmoore/apacheperf; docker exec -it --user root apacheperf1 bash
