@@ -364,7 +364,7 @@ possible to define a _Dockerfiles_ group with multiple MPM run modes,
 the behavior of the resulting Apache will be undefined.
 
 option              |  default  |  type
---------------------+-----------+--------
+--------------------|-----------|--------
 startServers        |  [5]      | Integer
 minSpareServers     |  [5]      | Integer
 maxSpareServers     |  [10]     | Integer
@@ -381,7 +381,7 @@ possible to define a _Dockerfiles_ group with multipl MPM run modes,
 the behavior of the resulting Apache will be undefined.
 
 option              |  default  |  type
---------------------+-----------+--------
+--------------------|-----------|--------
 startServers        |  [2]      |  Integer
 maxClients          |  [150]    |  Integer
 minSpareThreads     |  [25]     |  Integer
@@ -397,7 +397,7 @@ _*import*_ dg.settings.ApacheDefaults
 Define standard Apache connection control options.
 
 option               |  default  |  type
----------------------+-----------+--------
+---------------------|-----------|--------
 timeout              | [300]     | Integer
 keepAlive            | [True]    | Boolean
 maxKeepAliveRequests | [100]     | Integer
