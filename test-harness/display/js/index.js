@@ -80,6 +80,29 @@
                 }
             );
 
+            // docker data from metadata
+            window.application.archiveRecord.dockerMetadata.harnessed.forEach(
+                function (image) {
+                    $("#docker-used").append(
+                        "<tr>" +
+                        "<td>" + image.image + "</td>" +
+                        "<td>" + image.tag + "</td>"
+                    )
+                }
+            )
+
+            window.application.archiveRecord.dockerMetadata.installed.forEach(
+                function (image) {
+                    $("#docker-installed").append(
+                        "<tr>" +
+                        "<td>" + image.image + "</td>" +
+                        "<td>" + image.tag + "</td>" +
+                        "<td>" + image.image_id + "</td>"
+                    )
+                }
+            )
+
+
             // test message contents
             $("#test-message").html(window.application.archiveRecord.message);
         }

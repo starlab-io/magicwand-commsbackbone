@@ -99,6 +99,8 @@ svg {
           </div>
 
       </div>
+
+
       <div class="row">
           <div class="col-md-10 col-md-offset-1">
               <div class="well" id="test-message">
@@ -116,25 +118,58 @@ svg {
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache CPU usage</div>
+          <div class="col-md-2">Slow Loris Connections</br><small>GoLoris</small></div>
+          <div id="goloris-connections-svg" class="col-md-10"></div>
+      </div>
+      <div class="row">
+        <div class="col-md-2">Apache CPU usage </br><small>vmstat</small></div>
         <div id="apacheperf-cpu-svg" class="col-md-10"></div>
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache Memory usage</div>
+        <div class="col-md-2">Apache Memory usage</br><small>vmstat</small></div>
         <div id="apacheperf-memory-svg" class="col-md-10"></div>
       </div>
 
       <div class="row">
-        <div class="col-md-2">Apache host performance</div>
+        <div class="col-md-2">Apache host performance</br><small>vmstat</small></div>
         <div id="apacheperf-system-svg" class="col-md-10"></div>
       </div>
 
+      <div class="page-header">
+          <h1>Docker Environment Data</h1>
+      </div>
+      <div class="row">
+          <div class="col-md-4">
+              <div class="panel panel-default">
+                  <div class="panel-heading"><h4 class="panel-title">Docker Images used in Test</h4></div>
+                  <table id="docker-used" class="table table-condensed table-striped">
+                      <tr>
+                          <th>Image</th>
+                          <th>Tag</th>
+                      </tr>
+                  </table>
+              </div>
+          </div>
+          <div class="col-md-6">
+              <div class="panel panel-default">
+                  <div class="panel-heading"><h4 class="panel-title">Docker Images Available for Test</h4></div>
+                  <table id="docker-installed" class="table table-condensed table-striped">
+                      <tr>
+                          <th>Image</th>
+                          <th>Tag</th>
+                          <th>ID</th>
+                      </tr>
+                  </table>
+              </div>
+          </div>
+      </div>
 
     </div> <!-- /container -->
 
     <script src="js/index.js"></script>
     <script src="js/httperf.js"></script>
+    <script src="js/goloris-connections.js"></script>
     <script src="js/apacheperf-cpu.js"></script>
     <script src="js/apacheperf-memory.js"></script>
     <script src="js/apacheperf-system.js"></script>

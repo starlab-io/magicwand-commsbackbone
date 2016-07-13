@@ -9,6 +9,7 @@ import json
 import subprocess
 from zipfile import ZipFile
 import glob
+import sys
 
 """
 Our general goal here is to check for new files from the test log directory, and then rename them
@@ -149,7 +150,7 @@ def collectLocaleMetadata():
     return metadata
 
 
-def updateHistory(hist_file, message, archive_name, test_duration, filemap, metadata):
+def updateHistory(hist_file, message, archive_name, test_duration, filemap, metadata, docker_metadata):
     """
     Given the commit message, the archive basename, and the relative list of file paths, add
     to the test history.
@@ -177,7 +178,8 @@ def updateHistory(hist_file, message, archive_name, test_duration, filemap, meta
             "addedAt": str(datetime.now()),
             "metadata": metadata,
             "files": filemap,
-            "testDuration": test_duration
+            "testDuration": test_duration,
+            "dockerMetadata": docker_metadata
         }
     )
 
@@ -283,6 +285,67 @@ def getGitState():
     return git_meta
 
 
+def getDockerState():
+    """
+    Try and get the current set of docker images used for this test. We use the
+    local docker-compose file as a key into the local environment to pull the current
+    set of docker images for the image names.
+
+    :return:
+    """
+
+    # get the images used in this test
+    test_images = []
+
+    with open("docker-compose.yml", "r") as dockercompose:
+
+        for line in dockercompose:
+            if line.strip().startswith("image"):
+                # extract the images being used. we'll store the image and tag
+                test_images.append([bit.strip() for bit in line.strip().split(":")][1:])
+
+    local_images = []
+    test_image_names = [test_image[0] for test_image in test_images]
+
+    # get the local copies and hashes of the docker images command
+    try:
+        di_raw = subprocess.check_output("docker images", shell=True)
+
+        # time to parse Docker's output to extract name, tag, and SHA
+        for di_line in di_raw.split("\n")[1:]:
+            bits = [ bit for bit in di_line.split(" ") if bit != "" ]
+            if len(bits) == 0:
+                continue
+            if bits[0] in test_image_names:
+                # some version of this image was used in our test, so let's record it
+                local_images.append(
+                    {
+                        "image": bits[0],
+                        "tag": bits[1],
+                        "image_id": bits[2]
+                    }
+                )
+
+        # now combine our sets for the used images
+        images_metadata = {
+            "installed": local_images,
+            "harnessed": []
+        }
+
+        for test_image in test_images:
+            images_metadata["harnessed"].append(
+                {
+                    "image": test_image[0],
+                    "tag": test_image[1]
+                }
+            )
+
+        return images_metadata
+    except subprocess.CalledProcessError:
+        # we can't get the current set of docker images, so bail
+        return {}
+
+
 if __name__ == "__main__":
 
     HISTORY_FILE = "./display/data/history.json"
@@ -296,16 +359,18 @@ if __name__ == "__main__":
     file_map = {
         "httperf": archiveFrom("httperf", archive_name),
         "apacheperf": archiveFrom("apacheperf", archive_name),
-        "apachepin": zipAndThen("apachepin", archive_name, "trace.*", "performance.zip", archiveFrom)
+        "apachepin": zipAndThen("apachepin", archive_name, "trace.*", "performance.zip", archiveFrom),
+        "goloris": archiveFrom("goloris", archive_name)
     }
 
     archive_message = getArchiveMessage(archive_name, file_map)
 
     metadata = collectLocaleMetadata()
+    docker_metadata = getDockerState()
 
     test_duration = getTestDuration("httperf")
 
-    updated = updateHistory(HISTORY_FILE, archive_message, archive_name, test_duration, file_map, metadata)
+    updated = updateHistory(HISTORY_FILE, archive_message, archive_name, test_duration, file_map, metadata, docker_metadata)
 
     if not updated:
         print "There was an error updating the test history"

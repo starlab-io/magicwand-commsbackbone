@@ -4,6 +4,12 @@
 mkdir -p ./log/httperf/
 mkdir -p ./log/apacheperf/
 mkdir -p ./log/apachepin/
+mkdir -p ./log/goloris/
+
+mkdir -p ./display/data/httperf/
+mkdir -p ./display/data/apacheperf/
+mkdir -p ./display/data/apachepin/
+mkdir -p ./display/data/goloris/
 
 # clean out any historic PIN files
 rm ./log/apachepin/trace.*
@@ -44,6 +50,9 @@ done
 
 echo "  + collating ApachePerf results"
 ./apacheperf/parse_apacheperf.py ./log/apacheperf/performance.log ./log/apacheperf/performance.csv ./log/apacheperf/performance.json
+
+echo "  + collating GoLoris results"
+./goloris/parse_goloris.py ./log/goloris/performance.log ./log/goloris/performance.csv ./log/goloris/performance.json
 
 echo "  ! Tearing down test harness containers"
 

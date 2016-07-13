@@ -1,0 +1,47 @@
+start-time 2016-07-08T18:31:33
+test-duration 100
+httperf --verbose --timeout=5 --client=0/1 --server=apache --port=80 --uri=/ --rate=100 --send-buffer=4096 --recv-buffer=16384 --num-conns=10000 --num-calls=1
+httperf: maximum number of open descriptors = 1048576
+reply-rate = 0.0     
+reply-rate = 0.0     
+reply-rate = 0.0     
+reply-rate = 0.0     
+reply-rate = 0.0     
+reply-rate = 23.8    
+reply-rate = 56.5    
+reply-rate = 75.9    
+reply-rate = 60.0    
+reply-rate = 140.7   
+reply-rate = 67.2    
+reply-rate = 87.0    
+reply-rate = 112.8   
+reply-rate = 46.6    
+reply-rate = 128.8   
+reply-rate = 57.1    
+reply-rate = 34.4    
+reply-rate = 72.6    
+reply-rate = 54.0    
+reply-rate = 74.1    
+reply-rate = 32.1    
+Maximum connect burst length: 4
+
+Total: connections 10000 requests 6293 replies 5697 test-duration 107.568 s
+
+Connection rate: 93.0 conn/s (10.8 ms/conn, <=551 concurrent connections)
+Connection time [ms]: min 1.2 avg 2288.0 max 8006.4 median 1899.5 stddev 1628.8
+Connection time [ms]: connect 660.2
+Connection length [replies/conn]: 1.000
+
+Request rate: 58.5 req/s (17.1 ms/req)
+Request size [B]: 59.0
+
+Reply rate [replies/s]: min 0.0 avg 53.5 max 140.7 stddev 42.1 (21 samples)
+Reply time [ms]: response 1623.0 transfer 0.0
+Reply size [B]: header 228.0 content 44.0 footer 0.0 (total 272.0)
+Reply status: 1xx=0 2xx=5697 3xx=0 4xx=0 5xx=0
+
+CPU time [s]: user 28.48 system 23.93 (user 26.5% system 22.2% total 48.7%)
+Net I/O: 17.4 KB/s (0.1*10^6 bps)
+
+Errors: total 4303 client-timo 4074 socket-timo 0 connrefused 229 connreset 0
+Errors: fd-unavail 0 addrunavail 0 ftab-full 0 other 0
