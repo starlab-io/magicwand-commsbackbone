@@ -3,6 +3,28 @@
 
 import argparse
 import sys
+import subprocess
+
+def findDockerVersions(opts):
+    """
+    Pull in version information for Docker's various components.
+
+    :return: Dictionary of version data
+    """
+    apps = ["docker", "docker-compose", "docker-machine"]
+    versions = {}
+
+    for app in apps:
+        try:
+            command = "%s --version" % (app,)
+            output = subprocess.check_output(command, shell=True)
+            version = output.strip().split(" version ")[1]
+            versions[app] = version
+        except subprocess.CalledProcessError as cpe:
+            print "! Error: ", cpe
+
+    return versions
+
 
 def findDockerGenerator(args):
     """
@@ -25,6 +47,22 @@ def findDockerGenerator(args):
         print "Error finding DockerGenerator file: ", ie
 
     return dg_module
+
+
+def action_version(dockerfiles, opts):
+    """
+    Get some version info about docker.
+
+    :param opts:
+    :return:
+    """
+
+    versions = findDockerVersions(opts)
+    for app, version in versions.items():
+        print "%s - %s" % (app, version)
+
+    if len(versions) == 0:
+        print "No version information found - are we in a docker enabled environment?"
 
 
 def action_list(dockerfiles, opts):
@@ -168,6 +206,7 @@ def getOptions():
     parser.add_argument("-b", "--build", action="store_const", const="build", dest="action", help="Build each docker image described in the DockerGenerator.py file")
     parser.add_argument("-p", "--push", action="store_const", const="push", dest="action", help="Push docker images to Docker Hub")
     parser.add_argument("--add-tags", action="store_const", const="tag", dest="action", help="Add new tags to images")
+    parser.add_argument("--version", action="store_const", const="version", dest="action", help="Get version information from Docker")
 
     # control various aspects of our operations by repo or tag
     parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
@@ -205,7 +244,8 @@ if __name__ == "__main__":
         "info": action_info,
         "build": action_build,
         "push": action_push,
-        "tag": action_tag
+        "tag": action_tag,
+        "version": action_version
     }
 
     # try and dispatch
