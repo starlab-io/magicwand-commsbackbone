@@ -156,6 +156,9 @@ docker-machine - 0.7.0, build a650a40
 
 ## Filtering
 
+Command line filters can be used to select images based on Repository name, image tag, and configuration
+metadata. These filters can be combined with any of the `dg.py` commands (list, info, build, push, tag).
+
 A single DockerGenerator.py file
 
 ```python
@@ -196,7 +199,7 @@ patricknevindwyer/dg-image-466:latest  == /Users/patrick.dwyer/projects/magicwan
 patricknevindwyer/dg-image-467:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-467
 ```
 
-Filtering using the repository name and tag allows some control over selecting
+Filtering using the repository name, tag, and metadata allows fine-grain control over selecting
 smaller sets of images:
 
 ```sh
@@ -204,14 +207,66 @@ smaller sets of images:
 patricknevindwyer/dg-image-450:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-450
 ```
 
+By enabling _--patterns_, you can match subsets of repository names:
+
+```sh
+🚀  ./dg.py --list --pattern -r image-3?1 -f DockerGeneratorLarge.py
+patricknevindwyer/dg-image-301:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-301
+patricknevindwyer/dg-image-311:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-311
+patricknevindwyer/dg-image-321:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-321
+patricknevindwyer/dg-image-331:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-331
+patricknevindwyer/dg-image-341:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-341
+patricknevindwyer/dg-image-351:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-351
+patricknevindwyer/dg-image-361:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-361
+patricknevindwyer/dg-image-371:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-371
+patricknevindwyer/dg-image-381:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-381
+patricknevindwyer/dg-image-391:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-391
+```
+
+or even query for images with specific metadata:
+
+```sh
+🚀  ./dg.py --list --pattern -m timeout:100 keepAliveTimeout:5 startServers:5 maxClients:50 -f DockerGeneratorLarge.py
+patricknevindwyer/dg-image-00:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-00
+patricknevindwyer/dg-image-48:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-48
+patricknevindwyer/dg-image-96:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-96
+patricknevindwyer/dg-image-144:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-144
+```
+
+
 The repository and tag filters can be combined with any action command:
 
 ```sh
-🚀  ./dg.py --repo patricknevindwyer/dg-image-01  --build
+🚀  ./dg.py --repo patricknevindwyer/dg-image-01 --build
 Building patricknevindwyer/dg-image-01:latest
 	+ build succeeded
 ```
 
+### Patterns for Repositories and Tags
+
+When querying repository and tag values with a filter (and with _--pattern_ enabled), you can use a limited
+ set of query sigils in the query value:
+
+   Sigil  |  RegExp Equiv  |     Example    |  Description
+ ---------|----------------|----------------|----------------
+     ?    |        .?      |    image-3?1   |  Match any character between 3 & 1
+     *    |        .*      |    dg-*-300    |  Match none or more characters
+     +    |        .+      |    image-3+    |  Match one or more characters
+
+### Metadata Queries
+
+Each image stores it's configuration options (as defined in the _DockerGenerator.py_ file) as metadata that
+can be queried. Metadata queries use the _--pattern_ and _--metadata_ options. You can query multiple pieces
+of metadata at a time, with the results filtered to match _*all*_ queries. Metadata keys and values are
+separated by a colon:
+
+```sh
+🚀  ./dg.py --list --pattern --metadata timeout:100 keepAliveTimeout:5 startServers:5 maxClients:50 -f DockerGeneratorLarge.py
+patricknevindwyer/dg-image-00:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-00
+patricknevindwyer/dg-image-48:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-48
+patricknevindwyer/dg-image-96:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-96
+patricknevindwyer/dg-image-144:latest  == /Users/patrick.dwyer/projects/magicwand/docker-generator/images/image-144
+```
 ## Additional Options
 
 There are a handful of additional useful flags for `dg.py`:
