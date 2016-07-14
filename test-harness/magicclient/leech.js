@@ -14,9 +14,8 @@ client.connect(5950, process.argv[2], function() {
 // client.connect(5950, '172.17.0.3', function() {
   console.log('Connected');
   requestStream(6000,24,100);
-  // var streamParameters = {time: 60, frequency: 24, size: 10000};
-  // var parameterString = JSON.stringify(streamParameters);
-  // client.write(parameterString);
+
+  //change the requested stream after 5 seconds
   setTimeout(requestStream,5000,6000,24,200);
 });
 

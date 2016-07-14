@@ -4,7 +4,7 @@ var http = require('http');
 
 
 var TCP_PORT=5950;
-var HTTP_PORT=5980;
+// var HTTP_PORT=5980;
 
 function repeatChar(ch, count) {
     if (count == 0) {
@@ -68,29 +68,10 @@ var tcpServer = net.createServer(function (socket) {
 	  console.log(socket.name + " closed.\n");
 	});
 
-
-
   console.log("Connection from " + socket.remoteAddress);
 
-
-
   socket.write("HELLO DAVE");
-  // tcpServer.destroy(); // kill client after server's response
 });
 
-// Fire up the server bound to port 5950
 tcpServer.listen(TCP_PORT);
 console.log("TCP server listening on port "+ TCP_PORT);
-
-//----------------------------------------------------------------------
-//-------- HTTP Server
-//----------------------------------------------------------------------
-
-// var httpServer = http.createServer(function (request, response) {
-//   response.writeHead(200, {"Content-Type": "text/plain"});
-//   response.end("Hello World\n");
-// });
-
-// // Listen on port 5980
-// httpServer.listen(5980);
-// console.log("HTTP server listening on port 5980");

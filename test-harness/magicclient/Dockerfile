@@ -14,6 +14,6 @@ WORKDIR /root
 COPY startscript.sh /usr/local/bin
 RUN chmod ugo+x /usr/local/bin/startscript.sh
 COPY leech.js /usr/local/bin
-CMD startscript.sh `echo ${TARGETIP}`
+CMD startscript.sh `echo ${TARGETURL}`
 
 # `echo ${RECORDINGFILE} ${TARGETURL}`
