@@ -10,7 +10,6 @@
     "server": {
         "comment": "a server on a crappy connection",
         "services": [
-            "http", 
             "nodejs_tcp_stream"
         ], 
         "latency_ms_mean": 910,
@@ -24,9 +23,9 @@
     "clients": [
         {
             "id": 0, 
-            "comment": "this client is meant to emulate a 12 year old browsing minecraft forums on a shoddy wifi connection to a robustly connected AP, or something", 
+            "comment": "tcp client 1", 
             "type": "http",
-            "docker_image": "multi-session-browser",
+            "docker_image": "wbradmoore/magicclient",
             "options": [],
             "latency_ms_mean": 552,
             "latency_ms_stdev": 162,
@@ -38,23 +37,9 @@
         }, 
         {
             "id": 1, 
-            "comment": "this client is meant to emulate a 13 year old browsing minecraft forums on a shoddy wifi connection to a robustly connected AP, or something", 
+            "comment": "tcp client 2", 
             "type": "http", 
-            "docker_image": "multi-session-browser", 
-            "options": [], 
-            "latency_ms_mean": 552, 
-            "latency_ms_stdev": 162, 
-            "bandwidth_kbits_mean": 85075, 
-            "bandwidth_kbits_stdev": 3734, 
-            "corrupted_packet_probability": 0.0001, 
-            "dropped_packet_probability": 0.001, 
-            "duplicated_packet_probability": 0.0002
-        }, 
-        {
-            "id": 2, 
-            "comment": "this client is meant to emulate a 20 year old browsing minecraft forums on a shoddy wifi connection to a robustly connected AP, or something", 
-            "type": "http", 
-            "docker_image": "multi-session-browser", 
+            "docker_image": "wbradmoore/magicclient", 
             "options": [], 
             "latency_ms_mean": 552, 
             "latency_ms_stdev": 162, 
@@ -66,14 +51,14 @@
         }, 
         {
             "id": 666, 
-            "comment": "THIS IS AN ATTACKER that starts out as an http browser", 
+            "comment": "tcp client 2", 
             "type": "http", 
-            "docker_image": "single-session-browser-becomes-slowloris", 
-            "options": ["attackstart=60"], 
-            "latency_ms_mean": 753, 
-            "latency_ms_stdev": 252, 
-            "bandwidth_kbits_mean": 60269, 
-            "bandwidth_kbits_stdev": 20836, 
+            "docker_image": "slowloris", 
+            "options": [], 
+            "latency_ms_mean": 552, 
+            "latency_ms_stdev": 162, 
+            "bandwidth_kbits_mean": 85075, 
+            "bandwidth_kbits_stdev": 3734, 
             "corrupted_packet_probability": 0.0001, 
             "dropped_packet_probability": 0.001, 
             "duplicated_packet_probability": 0.0002
@@ -104,8 +89,8 @@
                 "ids": []
             }, 
             {
-                "time": 2,
-                "component": "monitors", 
+                "time": 1,
+                "component": "monitor", 
                 "comment": "this is to launch monitors", 
                 "action": "start", 
                 "options": [],
@@ -114,9 +99,9 @@
                 ]
             }, 
             {
-                "time": 10,
+                "time": 2,
                 "component": "client", 
-                "comment": "this is to launch client 0 and 1", 
+                "comment": "this is to launch clients 0 and 1", 
                 "action": "start", 
                 "options": [],
                 "ids": [
@@ -125,19 +110,9 @@
                 ]
             }, 
             {
-                "time": 20,
+                "time": 3,
                 "component": "client", 
-                "comment": "this is to launch slowloris", 
-                "action": "start", 
-                "options": [],
-                "ids": [
-                    666
-                ]
-            }, 
-            {
-                "time": 30,
-                "component": "client", 
-                "comment": "this is to launch the rest of the clients", 
+                "comment": "this is to launch everything else, including slowloris", 
                 "action": "start", 
                 "options": [],
                 "ids": [
@@ -145,7 +120,17 @@
                 ]
             }, 
             {
-                "time": 120,
+                "time": 4,
+                "component": "client", 
+                "comment": "this is to update client 1", 
+                "action": "update", 
+                "options": [],
+                "ids": [
+                    1
+                ]
+            }, 
+            {
+                "time": 5,
                 "component": "all", 
                 "comment": "this is to tear down", 
                 "action": "stop", 

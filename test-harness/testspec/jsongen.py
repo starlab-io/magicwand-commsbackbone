@@ -98,14 +98,14 @@ def create_random_schedule():
 	schedule["events"].append({
 		"time":2,
 		"comment":"this is to launch monitors",
-		"component":"monitors",
+		"component":"monitor",
 		"action":"start",
 		"ids":["all"],
 		})
 	schedule["events"].append({
 		"time":10,
-		"comment":"this is to launch clients 0, 1, and 2",
-		"component":"clients",
+		"comment":"this is to launch client 0, 1, and 2",
+		"component":"client",
 		"action":"start",
 		"ids":[0,1,2],
 		})
@@ -119,7 +119,7 @@ def create_random_schedule():
 	schedule["events"].append({
 		"time":30,
 		"comment":"this is to launch the rest of the clients",
-		"component":"clients",
+		"component":"client",
 		"action":"start",
 		"ids":["all"],
 		})
