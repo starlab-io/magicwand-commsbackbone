@@ -18,10 +18,10 @@
  * is specified is called the "normal" format.  It is quite likely that
  * this format will be sufficient for currently anticipated uses of vmsg
  * objects by the communication channel.
- * 
+ *
  */
 
- /*
+/*
  *
  * Normal Message Header
  *  * First two bits must be set to:  00
