@@ -4,72 +4,95 @@
  * Limits and constants associated with the vmsg type.
  *
  * All vmsg messages have a TLV (Type, Length, Value) format.
- * The minimum message length is four bytes.
  *
  * The currently specified format for TLV messages uses the first four
- * bytes to specify the Type and Length (of the Value part of the message).
- * This is the message "header"
+ * bytes as  header to specify the message Type and the Length of the
+ * Value part of the message).
  *
- * The first two bits of the Type provide a "coarse" type specification
- * that controls how the remaining bits of the header are interpreted.
+ * The minimum message length is four bytes.
  *
- * Only one of the four possible coarse header formats is currently fully
- * specified and implemented.  For want of a better term, the format that
- * is specified is called the "normal" format.  It is quite likely that
- * this format will be sufficient for currently anticipated uses of vmsg
- * objects by the communication channel.
+ * The first two bits of the Type specify the type family of the message.
+ * Each type family has its own interpretation of the message header.
  *
+ * Of the four possible type families, only one is currently fully
+ * specified and implemented.  Lacking a better term for this type family,
+ * it is called "basic".
+ * The basic type family will probably be sufficient for the currently
+ * anticipated uses of vmsg messages and the mwchan communication channel.
  */
 
 /*
  *
- * Normal Message Header
+ * Basic Type Family Message Header
  *  * First two bits must be set to:  00
  *  * Next 10 bits specify message type [t]
  *  * Final 20 bits specify length of the Value [s]
  *
- * Normal Header Format:
+ * Basic Type Family Header Format:
  *   Bit position:  12345678 12345678 12345678 12345678
  *   Value / type:  00tttttt ttttssss ssssssss ssssssss
  *
  */
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "bithelpers.h"
 
-// Coarse header type values
-#define COARSE_TYPE_NORMAL      0
-#define COARSE_TYPE_UNUSED_1    1
-#define COARSE_TYPE_UNUSED_2    2
-#define COARSE_TYPE_UNUSED_3    3
+#define VMSG_HEADER_SIZE    4
 
-// Bitmask for the coarse type bits.
-#define COARSE_TYPE_MASK_BIT_COUNT 2
-#define COARSE_TYPE_MASK_OFFSET (32 - COARSE_MASK_TYPE_BIT_COUNT)
-#define COARSE_TYPE_MASK (0L | ((2 << (COARSE_TYPE_MASK_BIT_COUNT - 1) - 1) \
-		<< COARSE_TYPE_MASK_OFFSET))
+// vmsg type family header type values
+#define VMSG_TYPE_FAMILY_BASIC	   0
+#define VMSG_TYPE_FAMILY_UNUSED_1  1
+#define VMSG_TYPE_FAMILY_UNUSED_2  2
+#define VMSG_TYPE_FAMILY_UNUSED_3  3
 
-/* Normal message headers use bits 3-12 (inclusive) for the type.
- * This allows for 1024 (2**10) normal message types.
+// Bitmask for the type family bits.
+#define TF_MASK_SIZE 2
+#define TF_MASK_OFFSET (32 - TF_MASK_SIZE)
+#define TF_MASK ( BITFIELD_MASK(TF_MASK_SIZE, TF_MASK_OFFSET) )  
+#define VMSG_GET_TYPE_FAMILY(hdr)   \
+	(BITFIELD_GET((hdr), TF_MASK_SIZE, TF_MASK_OFFSET))
+#define VMSG_SET_TYPE_FAMILY(hdr, family) 	\
+	( BITFIELD_SET((hdr), (family), TF_MASK_SIZE, TF_MASK_OFFSET) )
+
+/* The "basic" type family headers use bits 3-12 (inclusive) for the type.
+ * This allows for 1024 (2**10) distinct types.
+ * When setting a basic type header, we must also set the type family
+ * header so that the final Type value is correct.
  */
-// TODO: Some message types should be provided by the library.
-#define NORMAL_TYPE_MASK_BIT_COUNT 10
-#define NORMAL_TYPE_MASK_OFFSET (32 - \
-		(COARSE_TYPE_MASK_BIT_COUNT + NORMAL_TYPE_MASK_BIT_COUNT))
-#define NORMAL_TYPE_MASK (0L | ((2 << (NORMAL_TYPE_MASK_BIT_COUNT - 1) - 1) \
-		<< NORMAL_TYPE_MASK_OFFSET))
+
+#define BTF_FLAGS_MASK_SIZE 10
+#define BTF_FLAGS_MASK_OFFSET (32 - \
+		(TF_MASK_SIZE + BTF_FLAGS_MASK_SIZE))
+
+#define BTF_MASK ( BITFIELD_MASK(BTF_FLAGS_MASK_SIZE, BTF_FLAGS_MASK_OFFSET) )
+
+#define BTF_GET_FLAGS(hdr) 	\
+	( BITFIELD_GET((hdr), BTF_FLAGS_MASK_SIZE, BTF_FLAGS_MASK_OFFSET) )
+	
+#define BTF_SET_FLAGS(hdr, flags)	\
+	( VMST_SET_TYPE_FAMILY((hdr), VMSG_TYPE_FAMILY_BASIC)  | \
+	BITFIELD_SET((hdr), (flags), BTF_FLAGS_MASK_SIZE,  \
+		BTF_FLAGS_MASK_OFFSET))
 
 
-/* Normal messages use bits 13-32 (inclusive) for the size of the value.
+/* Basic type family messages use bits 13-32 (inclusive) for the value size.
  * However, the the maximum possible value size for a non-blocking write
  * is ((2**20) - (4 + 1)).  This is because the current maximum possible shared
  * vchan ringbuffer size is 2**20 and the message hader is 4 bytes long.
  */
-#define NORMAL_SIZE_MASK_BIT_COUNT 20
-#define NORMAL_SIZE_MASK_OFFSET 0
-#define NORMAL_SIZE_MASK (0L | (2 << (NORMAL_SIZE_MASK_BIT_COUNT - 1) - 1))
 
-#define MAX_NORMAL_VALUE_SIZE ((2 << NORMAL_SIZE_MASK_BIT_COUNT) - \
-		(sizeof(struct vmsg_hdr) + 1))
+#define BTF_SIZE_MASK_SIZE (32 - ( TF_MASK_SIZE + BTF_FLAGS_MASK_SIZE))
+#define BTF_SIZE_MASK_OFFSET 0
+#define BTF_SIZE_MASK ( BITFIELD_MASK(BTF_SIZE_MASK_SIZE, BTF_SIZE_MASK_OFFSET))
+#define BTF_GET_SIZE(hdr)   \
+	( BITFIELD_GET((hdr), BTF_SIZE_MASK_SIZE, BTF_SIZE_MASK_OFFSET) )
+#define BTF_SET_SIZE(hdr, new_size)   \
+	( BITFIELD_SET((new_size), (hdr), BTF_SIZE_MASK_SIZE,   \
+		BTF_SIZE_MASK_OFFSET))
+#define BTF_SIZE_MAX ( (2 << BTF_SIZE_MASK_SIZE) - (VMSG_HDR_SIZE + 1) )
 
+#define BTF_MAKE_HEADER(flags, size)   \
+	( BTF_SET_FLAGS(0, (flags)) | BTF_SET_SIZE(0, (size)) )
+
+#define BTF_SET_HEADER(hdr, flags, size) \
+	( hdr =  BTF_MAKE_HEADER((flags), (size)) )
 
