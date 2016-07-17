@@ -1,99 +1,74 @@
 // @MAGICWAND_HEADER@
 
 /**
- * Public header for the MAGICWAND comm channel.
+ * Public header for the MAGICWAND comm channel: mwchan.
  *
- * The comm channel is a message oriented wrapper over Xen's libvchan.
- * TODO: Give this a real name.
+ * mwchan is a message oriented wrapper over Xen's libvchan.
+ * This library provides functions that simplify the process of
+ * reading and writing vmsg instance from/to wmchan instances.
+ *
+ * Outstanding Questions:
+ *   ___ Do our blocking calls need to support timeouts?
+ *   ___ Do we need to provide any other raw libvchan functions?
+ *   ___ Can libvchan be run in kernel-context on Linux?
+ *
+ * TODO List
+ *   ___ Define the set of error codes.
+ *
  */
 
 
-#include "vmsg.h"
-
+// An opaque declaration is good enough for the callers.
 struct mwchan;
 
-/* A key question is how each end of an mwchan gets its mwchan instance.
- * The "server" side allocates the channel, and the "client" needs info
- * from the "server" in order to obtain the grant table index and event channel
- * port used for the ring buffers and notifications respectively.
- *
- * The Rendezvous Protocol describes this process at a conceptual level.
- * What does it look like at the API level?
- * The Rendezvou Protocol code provides an instance watching a rendezvous
- * point that will create the server end of the vchan we wrap -- which
- * creates the entries in XenStore that are used by the client to get
- * access to the vchan.
- *
- */
-
-// TODO: Split the server/client specific operations into separate headers.
-// Let this file focus soley on the IO operations.
-// Is that really a good idea?
-// Perhaps, document all the IO ops first and then move to the creation
-// functions.
-
-struct mwchan* mwchan_connect_server():
-
-struct mwchan* mwchan_connect_rp(const char* rendezvous_point);
-
-struct mwchan* mwchan_connect_rp_full(const char* rendezvous_point,
-		const size_t to_server_buffer_size,
-		const size_t from_server_buffer_size);
-
-// This is called by the rendezvous protocol on behalf of the client.
-struct mwchan* mwchan_server_connect(const char* rendezvous_request_path,
-		const size_t to_server_buffer_size,
-		const size_t from_server_buffer_size);
-
-
-// The client calls this to create a request at the rendezvous point.
-// This call will block while the Server creates the underlying vchan.
-// It will poll the expected path location ever 100 ms up to timeout_seconds.
-struct mwchan* mwchan_client_connect(const char* rendezvous_point,
-		const size_t to_server_buffer_size,
-		const size_t from_server_buffer_size,
-		const size_t timeout_seconds);
+// Don't include the entire vmsg.h header just to get an opaque declaration.
+// #include "vmsg.h"
+struct vmsg;
 
 
 /*
- * TODO:  Should our blocking calls support a timeout?
+ * The Rendezvous Protocol handles the creation of new wmchan instances.
+ * The functionality declared in this header is for use with an existing
+ * wmchan instance.
  */
 
-/*
- * How can we make it so the caller doesn't have to care about the fact
- * that vmsg objects have a header?  How can we keep them from having to
- * deal with the fact that the header's 4 bytes must be read and written
- * from/to the wmchan.  Especially in non-blocking IO operations, if the
- * wmchan only has enough room for part of the header, then if we're returning
- * the number of bytes read/written the caller needs to know that the
- * total number of bytes that needs to be read/written is vmsg value size
- * plus 4 bytes for the header.   That's not particularly helpful.
- *
- * Perhaps it is better to insulate the caller entirely from the number of
- * vmsg bytes read or written.  For blocking read/write, the call either
- * succeeds or doesn't -- no partial read/write is possible.
- * For non-blocking read/write, we could have the call return indicating
- * whether or not there was more vmsg remaining (either to read from the
- * wmchan or write to the wmchan), or an error -- but not return the number
- * of bytes read/written from/to the wmchan.
- *
- * To do that, the vmsg needs something like a read_prep or write_prep call
- * that can clear the counters that are needed for supporting this interface.
- * The wmchan library needs to read the vmsg header from the wmchan into
- * a private, internal, buffer -- so that when it writes a header into the
- * vmsg, it always writes a complete header -- the vmsg should never have a
- * partial or incomplete header.
- *
- */
 
-/*
- * Open question about the portability of vchan:
- * Can we use the libvchan code in a Linux kernel module?
- * Or, if we want to do kernel-level monitoring on Linux will we
- * need to have the kernel module interact with a userland process
- * that handles the vchan interaction?
- */
 
+/**
+ * Check whether or not the mwchan is open.
+ *
+ * The mwchan has 3 possible "openness" states:
+ *   0 - The mwchan is open in both directions.
+ *   1 - The mwchan is open only on the server
+ */
+int32_t mwchan_is_open(const struct mwchan* mwchan);
+
+
+/**
+ * Close an mwchan.
+ *
+ * This closes @p mwchan but does not delete it.
+ * All future read and write operations on @p mwchan will fail with an
+ * error.
+ * TODO:  Specify the error message.
+ *
+ * NOTE:  The caller is responsible for calling @c mwchan_delete
+ *
+ * @param wmchan The mwchan instance to close.
+ * @return 0 on success, < 0 on error.
+ */
+int32_t mwchan_close(const struct mwchan* mwchan);
+
+
+/**
+ * Delete an mwchan, closing it if it is not already closed.
+ *
+ * While this function will close an open mwchan, it is best to 
+ * close it first using @c mwchan_close.
+ *
+ * @param mwchan The mwchan instance to close.
+ */
+void mwchan_delete(const struct mwchan* mwchan);
 
 
 /* *********** Write vmsg objects to a wmchan ************** */
@@ -106,6 +81,11 @@ struct mwchan* mwchan_client_connect(const char* rendezvous_point,
  *
  * Call blocks until entirity of @p vmsg is written to @p wmchan, or an
  * error occurs.
+ *
+ * If the caller wishes to ensure that the call will not block internally
+ * waiting for @p wmchan to be read in order to make room for the entirity
+ * of @p vmsg, then it can use @c mchan_get_non_blocking_write_size
+ * and @c vmsg_get_write_size to check.
  *
  * @param mwchan The mwchan to write @p vmsg's contents to.
  * @param vmsg The vmsg object (header and value) to write to @p mwchan.
@@ -132,9 +112,12 @@ ssize_t mwchan_write_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
  * @param mwchan The mwchan to write @p vmsg (header and value) to.
  * @param vmsg The vmsg object (header and value) to write to @p mwchan.
  * @return > 0 while incomplete, 0 on completion, or < 0 on an error.
+ *
+ * TODO: Implement non-blocking vmsg write if necessary.
+ * ssize_t mwchan_write_vmsg_nonblock(const struct mwchan* mwchan,
+ *		const struct vmsg* vmsg);
+ *
  */
-ssize_t mwchan_write_vmsg_nonblock(const struct mwchan* mwchan,
-		const struct vmsg* vmsg);
 
 
 /* ************* Read vmsg objects from a wmchan ************** */
@@ -162,10 +145,6 @@ ssize_t mwchan_write_vmsg_nonblock(const struct mwchan* mwchan,
 ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
 
 
-// Non-blocking read of a vmsg from a wmchan.
-// This returns the number of bytes written into the vmsg from the vchan.
-// We need to be able to call this in a loop until the vmsg is full.
-// How will the caller know that the vmsg has been filled?
 /**
  * Peform a non-blocking read from a wmchan into a vmsg.
  *
@@ -182,53 +161,98 @@ ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
  * @param wmchan The wmchan to read a vmsg from.
  * @param vmchan The vmsg to write the next vmsg from @p wmchan into.
  * @param > 0 while incomplete, 0 on completion, < 0 on an error.
+ *
+ * TODO:  Implement non-blocking vmsg read if necessary.
+ *
+ * ssize_t mwchan_read_vmsg_nonblock(const struct mwchan* mwchan,
+ * 		const struct vmsg* vmsg);
  */
-ssize_t mwchan_read_vmsg_nonblock(const struct mwchan* mwchan,
-		const struct vmsg* vmsg);
 
 
 /**
  * Get the value size of the next vmsg in the wmchan.
  *
- * Returns the size of the next wmsg in @p wmchan.  When calling
- * @c mwchan_read_vmsg(), the vmsg must be able to hold a value at least
- * this large.
+ * If @p wmchan is not empty, get the size of the next vmsg in @p wmchan.
+ * If @p wmchan is empty, return 0.
+ *
+ * @param mwchan The mwchan instance to examine.
+ * @return > 0 when a vmsg is available, 0 if no vmsg, < 0 on error.
  */
 ssize_t mwchan_read_peek_vmsg_size_nonblock(const struct mwchan* mwchan);
 
 
+
 /* ************* Get size information of the mwchan ************** */
 
-// Get the number of bytes that can be written to this mwchan without blocking.
-// This value depends on the amount of data already in the write ring buffer.
-ssize_t mchan_get_non_blocking_write_size(const struct mwchan* mwchan);
+/*
+ * These size information functions are used to determine the amount of data
+ * that can be read from or written to a wmchan without blocking.
+ * Given the current state of the wmchan:
+ *   @c mwchan_get_non_blocking_write_size
+ *   @c mwchan_get_non_blocking_read_size
+ * Given a completely empty wmchan:
+ *   @c mwchan_get_max_write_msg_size
+ *   @c mwchan_get_max_read_msg_size
+ */
 
-// Get the number of bytes that can be read from this mwchan without blocking.
-// This value depends on the amount of data already in the read ring buffer.
-ssize_t mchan_get_non_blocking_read_size(const struct mwchan* mwchan);
+
+/**
+ * Get the number of bytes that can be written to @p wmchan without blocking.
+ *
+ * This returns the number of bytes of available "room" in @p wmchan that
+ * can be written to without waiting for a reader to read from @p wmchan.
+ *
+ * @param wmchan The wmchan instance to examine.
+ * @return > 0 if @p wmchan has space, 0 if @p wmchan has no space, < 0 on error
+ */
+ssize_t mwchan_get_non_blocking_write_size(const struct mwchan* mwchan);
 
 
-// Get the maximum possible non-blocking write size for this mwchan.
-// Since mwchan allows different sized to-server and from-server ring buffer
-// sizes (and ring buffer size is what determines the maximum non-blocking
-// message size), this value may be different depending on whether the
-// server or the client is calling it.
-// The maximum write for the server is the maximum read for the client and
-// vice versa.
+/**
+ * Get the nubmer of bytes that can be read from @p wmchan without blocking.
+ *
+ * This returns the number of bytes of data that is "ready" in @p wmchan
+ * that can be read without waiting for a writer to write more to @p wmchan.
+ * If @p wmchan is empty, a 0 is returned.
+ *
+ * @param wmchan The wmchan instance to examine.
+ * @return > 0 when data is available, 0 if no data is available, < 0 on error.
+ */
+ssize_t mwchan_get_non_blocking_read_size(const struct mwchan* mwchan);
+
+
+/**
+ * Get the maximum possible non-blocking write size for a mwchan.
+ *
+ * This returns the size of the internal write-ring-buffer of @p mwchan.
+ * Under no circumstances will an mwchan be able to accept a non-blocking
+ * write of more than the returned size.
+ *
+ * @param mwchan The mwchan instance to examine.
+ * @return Number bytes in maximum message size, < 0 on error.
+ */
 ssize_t mwchan_get_max_write_msg_size(const struct mwchan* mwchan);
 
-// Get the maximum possible non-blocking read size for this mwchan.
-// See notes for mchan_get_non_blocking_write_size.
-ssize_t mwchan_get_max_read_msg_size(const struct mwchan* mwchan);
 
+/**
+ * Get the maximum possible non-blocking read size for a mwchan.
+ *
+ * This returns the size of the internal read-ring-buffer of @p wmchan.
+ * This is the size of the largest possible message that can be read in
+ * a non-blocking manner from @p wmchan.
+ *
+ * @param wmchan The wmchan instance to examine.
+ * @return Number of bytes in maximum message size, < 0 on error.
+ */
+ssize_t mwchan_get_max_read_msg_size(const struct mwchan* mwchan);
 
 
 /* ************** Raw vchan IO operations ************* */
 /*
- * These operations are bare wrappers over the the underlying libvchan
- * operations.
+ * If implemented, these would be thin wrappers over the underlying
+ * libvchan functions.
  *
- * If a library user wants to, they can access the low-level libvchan API
+ * If a library user wants to, they could access the low-level libvchan API
  * this way.  We should consider whether each of the public functions from
  * libvchan/io.c makes sense to have here, and whether or not it makes
  * sense to document in the header file that the function is a thin wrapper
