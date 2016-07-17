@@ -4,6 +4,9 @@
  * Public header for variable-sized messages.
  * All messaging operations can be implemented in terms of variable-size
  * messages.
+ *
+ * TODO:
+ *   ___ Add read_prep or write_prep calls for IO directly to/from the vmsg.
  */
 
 #include <stdlib.h>
@@ -247,7 +250,22 @@ int32_t vmsg_set_header_full(const struct vmsg* vmsg, const uint32_t type,
  * @param vmsg The vmsg to get the value size from.
  * @return The size of the value in @p vmsg (0 - ((2**20) - (4 + 1)).
  */
-int32_t vmsg_get_size(const struct vmsg* vmsg);
+ssize_t vmsg_get_size(const struct vmsg* vmsg);
+
+
+/**
+ * Get the number of bytes this vmsg will take "on the wire".
+ *
+ * A destination must have this many bytes available for @p vmsg to be written
+ * to it.
+ *
+ * It is an error to call this function with a vmsg that is not fully
+ * initialized.
+ *
+ * @param vmsg The vmsg instance to get the "write size" of.
+ * @return The number of bytes needed to write @p vmsg; < 0 on an error.
+ */
+ssize_t vmsg_get_write_size(const struct vmsg* vmsg);
 
 
 /**
