@@ -4,6 +4,9 @@
 import argparse
 import sys
 import subprocess
+import re
+import json
+
 
 def findDockerVersions(opts):
     """
@@ -75,9 +78,10 @@ def action_list(dockerfiles, opts):
     """
 
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
-                print "%s  == %s" % (dockerfile.name(), dockerfile.imagedir)
+                if metadata_matches_filter(dockerfile, opts["metadata"], usePattern=opts["pattern"]):
+                    print "%s  == %s" % (dockerfile.name(), dockerfile.imagedir)
 
 
 def action_info(dockerfiles, opts):
@@ -90,16 +94,19 @@ def action_info(dockerfiles, opts):
     """
 
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
+                if metadata_matches_filter(dockerfile, opts["metadata"], usePattern=opts["pattern"]):
 
-                # build our information set
-                print "repository: %s" % (dockerfile.repository(), )
-                print "       tag: %s" % (dockerfile.tag, )
-                print "     files: %d" % (len(list(dockerfile.files())))
-                for files in dockerfile.files(local=True, image=True):
-                    print "        + (local) %s == %s (image)" % (files[0], files[1])
-                print "     built: %s" % (dockerfile.built(),)
+                    # build our information set
+                    print "repository: %s" % (dockerfile.repository(), )
+                    print "       tag: %s" % (dockerfile.tag, )
+                    print "     files: %d" % (len(list(dockerfile.files())))
+                    for files in dockerfile.files(local=True, image=True):
+                        print "        + (local) %s == %s (image)" % (files[0], files[1])
+                    print "     built: %s" % (dockerfile.built(),)
+                    if opts["verbose"]:
+                        print json.dumps(dockerfile.config, indent=4)
 
 
 def action_build(dockerfiles, opts):
@@ -111,15 +118,16 @@ def action_build(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=False, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
-                print "Building %s" % (dockerfile.name())
-                if dockerfile.build(verbose=opts["verbose"], ignoreCache=opts["no_cache"]):
-                    print "\t+ build succeeded"
-                else:
-                    print "\t- build failed"
-                    if not opts["verbose"]:
-                        print "   - run again with --verbose for more detailed error"
+                if metadata_matches_filter(dockerfile, opts["metadata"], usePattern=opts["pattern"]):
+                    print "Building %s" % (dockerfile.name())
+                    if dockerfile.build(verbose=opts["verbose"], ignoreCache=opts["no_cache"]):
+                        print "\t+ build succeeded"
+                    else:
+                        print "\t- build failed"
+                        if not opts["verbose"]:
+                            print "   - run again with --verbose for more detailed error"
 
 
 def action_push(dockerfiles, opts):
@@ -132,15 +140,16 @@ def action_push(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
-                print "Pushing %s" % (dockerfile.name(),)
-                if dockerfile.push(verbose=opts["verbose"]):
-                    print "\t+ push succeeded"
-                else:
-                    print "\t- push failed"
-                    if not opts["verbose"]:
-                        print "\t- run again with --verbose for more detailed error"
+                if metadata_matches_filter(dockerfile, opts["metadata"], usePattern=opts["pattern"]):
+                    print "Pushing %s" % (dockerfile.name(),)
+                    if dockerfile.push(verbose=opts["verbose"]):
+                        print "\t+ push succeeded"
+                    else:
+                        print "\t- push failed"
+                        if not opts["verbose"]:
+                            print "\t- run again with --verbose for more detailed error"
 
 
 def action_tag(dockerfiles, opts):
@@ -152,30 +161,82 @@ def action_tag(dockerfiles, opts):
     :return:
     """
     for dockerfile in dockerfiles.generate(pretend=True, verbose=opts["verbose"]):
-        if repo_matches_filter(dockerfile, opts["repositories"]):
+        if repo_matches_filter(dockerfile, opts["repositories"], usePattern=opts["pattern"]):
             if tag_matches_filter(dockerfile, opts["tags"]):
-                print "Tagging %s" % (dockerfile.name())
-                if dockerfile.addtag(opts["add_tags"], verbose=opts["verbose"]):
-                    print "\t+ %d tags added" % (len(opts["add_tags"]),)
-                else:
-                    print "\t- Error adding tags"
-                    if not opts["verbose"]:
-                        print "\t- run again with --verbose for more detailed error"
+                if metadata_matches_filter(dockerfile, opts["metadata"], usePattern=opts["pattern"]):
+                    print "Tagging %s" % (dockerfile.name())
+                    if dockerfile.addtag(opts["add_tags"], verbose=opts["verbose"]):
+                        print "\t+ %d tags added" % (len(opts["add_tags"]),)
+                    else:
+                        print "\t- Error adding tags"
+                        if not opts["verbose"]:
+                            print "\t- run again with --verbose for more detailed error"
 
 
-def repo_matches_filter(dockerfile, repolist):
+def repo_matches_filter(dockerfile, repolist, usePattern=False):
     """
     Determine if the given dockerfile matches the repository list specified on
     the command line.
 
     :param dockerfile: Dockerfile object
     :param repolist: List of repository names or empty list
+    :param usePattern: Enable pattern matching
     :return: True or False
     """
+
+    # by default we match when no filtering is enabled
     if repolist == [] or repolist is None:
         return True
 
-    return dockerfile.repository() in repolist
+    # basic sanity check first for full path match
+    if dockerfile.repository() in repolist:
+        return True
+
+    # now compose our pattern match query if it's enabled
+    if usePattern:
+        reponame = dockerfile.repository()
+        for pattern in repolist:
+
+            # build the regex
+            #   * => .*
+            #   + => .+
+            #   ? => .
+            pattern_regex = pattern.replace("?",".").replace("+", ".+").replace("*",".*")
+            if re.search(pattern_regex, reponame):
+                return True
+
+    return False
+
+
+def metadata_matches_filter(dockerfile, metalist, usePattern=False):
+    """
+    Determine if the given dockerfile has metadata that matches the metadata list as
+    specified on the command line.
+
+    :param dockerfile: Dockerfile object
+    :param metalist: list of metadata
+    :param usePattern: enable pattern matching
+    :return: True or False
+    """
+    if metalist == [] or metalist is None:
+        return True
+
+    if usePattern:
+        metamatches = []
+        # now we deep search the metadata to see if we have a match
+        for metaquery in metalist:
+            metakey, metaval = metaquery.split(":")
+            if metakey is None or metaval is None:
+                print "!Error [%s] is not a valid metadata query. Use key:value format."
+            metakey = metakey.lower()
+            metamatches.append(dockerfile.matches_meta_query(metakey, metaval))
+
+        if False in metamatches:
+            return False
+        else:
+            return True
+
+    return False
 
 
 def tag_matches_filter(dockerfile, taglist):
@@ -211,6 +272,8 @@ def getOptions():
     # control various aspects of our operations by repo or tag
     parser.add_argument("-r", "--repo", dest="repositories", nargs="*", help="Filter to the specified set of repositories", default=[])
     parser.add_argument("-t", "--tag", dest="tags", nargs="*", help="Filter to the specified set of tags", default=[])
+    parser.add_argument("-m", "--metadata", dest="metadata", nargs="*", help="Filter to the specific metadata. Multiple queries together are treated as an AND query", default=[])
+    parser.add_argument("--pattern", dest="pattern", action="store_true", default=False, help="Use pattern matching when filtering by repository or tag names")
 
     # content controls and order of operations
     parser.add_argument("--force-rebuild", dest="force_rebuild", action="store_true", default=False, help="Force rebuild of select images prior to other operatins")

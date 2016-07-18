@@ -258,6 +258,36 @@ class Dockerfile(object):
     def setrepotemplate(self, t):
         self.repositoryTemplate = t
 
+    def matches_meta_query(self, k, v):
+        """
+        Walk through our config object to see if we have a match. Values are explicity
+        cast as Strings for matching purposes
+        :param k: Query key
+        :param v: Query val
+        :return:
+        """
+        return self._match_dict(self.config["config"], k, v)
+
+    def _match_dict(self, dict, k, v):
+        """
+        Internal method for recursive metadata search.
+
+        :param dict: dict to search
+        :param k: query key
+        :param v: query value
+        :return:
+        """
+        for dk, dv in dict.items():
+            if type(dv) == types.DictionaryType:
+                submatch = self._match_dict(dv, k, v)
+                if submatch:
+                    return True
+            else:
+                if k == dk:
+                    if str(v) == str(dv):
+                        return True
+        return False
+
     def name(self):
         """
         Get the fully qualified name of this repo
