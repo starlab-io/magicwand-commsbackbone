@@ -1,1 +1,0 @@
-node /usr/local/bin/serve.js
