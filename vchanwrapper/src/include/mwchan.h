@@ -1,3 +1,5 @@
+#ifndef __MWCHAN_H__
+#define __MWCHAN_H__
 // @MAGICWAND_HEADER@
 
 /**
@@ -25,6 +27,10 @@ struct mwchan;
 // #include "vmsg.h"
 struct vmsg;
 
+// These are the error codes that our functions return.
+#include "mwchan-error-codes.h"
+#include "vmsg-error-codes.h"
+
 
 /*
  * The Rendezvous Protocol handles the creation of new wmchan instances.
@@ -40,6 +46,11 @@ struct vmsg;
  * The mwchan has 3 possible "openness" states:
  *   0 - The mwchan is open in both directions.
  *   1 - The mwchan is open only on the server
+ *
+ * @param The mwchan instance to check for openness.
+ * @retval 0 If the mwchan is open in both directions.
+ * @retval 1 If the mwchan is only open on the server side.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
  */
 int32_t mwchan_is_open(const struct mwchan* mwchan);
 
@@ -48,14 +59,15 @@ int32_t mwchan_is_open(const struct mwchan* mwchan);
  * Close an mwchan.
  *
  * This closes @p mwchan but does not delete it.
- * All future read and write operations on @p mwchan will fail with an
- * error.
- * TODO:  Specify the error message.
+ * All future read and write operations on @p mwchan will fail with the
+ * error E_MWCHAN_CLOSED.
  *
  * NOTE:  The caller is responsible for calling @c mwchan_delete
  *
  * @param wmchan The mwchan instance to close.
- * @return 0 on success, < 0 on error.
+ * @retval 0 on success.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is already closed.
  */
 int32_t mwchan_close(const struct mwchan* mwchan);
 
@@ -89,7 +101,12 @@ void mwchan_delete(const struct mwchan* mwchan);
  *
  * @param mwchan The mwchan to write @p vmsg's contents to.
  * @param vmsg The vmsg object (header and value) to write to @p mwchan.
- * @return 0 on success, or < 0 on error.
+ * @retval 0 on success.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
+ * @retval E_MWCHAN_WRITE_FAILED if the write to the channel failed.
+ * @retval E_VMSG_INVALID_TYPE if the type of @p vmsg is unsupported.
  */
 ssize_t mwchan_write_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
 
@@ -140,7 +157,13 @@ ssize_t mwchan_write_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
  *
  * @param mwchan The mwchan to read from into @p vmsg.
  * @param vmsg The vmsg to write the data read from @p vmsg into
- * @return 0 on success, or < 0 on an error.
+ * @retval 0 on success.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
+ * @retval E_MWCHAN_READ_FAILED if the read from the channel failed.
+ * @retval E_MWCHAN_TOO_LARGE if @p vmsg is too small for the message.
+ * @retval E_VMSG_INVALID_TYPE if the type of the message read is unsupported.
  */
 ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
 
@@ -170,13 +193,21 @@ ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
 
 
 /**
- * Get the value size of the next vmsg in the wmchan.
+ * Get the value size of the next vmsg in the wmchan without blocking.
  *
  * If @p wmchan is not empty, get the size of the next vmsg in @p wmchan.
- * If @p wmchan is empty, return 0.
+ * If @p wmchan is empty, returns E_MWCHAN_NO_DATA.
+ * Return a negative number to indicate an error.
+ *
+ * NOTE: A return value of 0 is valid.
+ * It is legitimate for a vmsg to contain no data only a header.
  *
  * @param mwchan The mwchan instance to examine.
- * @return > 0 when a vmsg is available, 0 if no vmsg, < 0 on error.
+ * @retval >= 0 when a vmsg is available.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_NO_DATA if there is no data in the channel.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
+ * @retval E_MWCHAN_READ_FAILED if the read from the channel failed.
  */
 ssize_t mwchan_read_peek_vmsg_size_nonblock(const struct mwchan* mwchan);
 
@@ -201,9 +232,12 @@ ssize_t mwchan_read_peek_vmsg_size_nonblock(const struct mwchan* mwchan);
  *
  * This returns the number of bytes of available "room" in @p wmchan that
  * can be written to without waiting for a reader to read from @p wmchan.
+ * Returns a negative number on error.
  *
  * @param wmchan The wmchan instance to examine.
- * @return > 0 if @p wmchan has space, 0 if @p wmchan has no space, < 0 on error
+ * @retval >= 0 On success -- the amount of non-blocking space available.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
  */
 ssize_t mwchan_get_non_blocking_write_size(const struct mwchan* mwchan);
 
@@ -211,12 +245,14 @@ ssize_t mwchan_get_non_blocking_write_size(const struct mwchan* mwchan);
 /**
  * Get the nubmer of bytes that can be read from @p wmchan without blocking.
  *
- * This returns the number of bytes of data that is "ready" in @p wmchan
- * that can be read without waiting for a writer to write more to @p wmchan.
+ * This returns the number of bytes of data that are "ready" in @p wmchan
+ * to be read without waiting for a writer to write more to @p wmchan.
  * If @p wmchan is empty, a 0 is returned.
  *
  * @param wmchan The wmchan instance to examine.
- * @return > 0 when data is available, 0 if no data is available, < 0 on error.
+ * @retval >= 0 when data is available in the channel.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
  */
 ssize_t mwchan_get_non_blocking_read_size(const struct mwchan* mwchan);
 
@@ -224,12 +260,15 @@ ssize_t mwchan_get_non_blocking_read_size(const struct mwchan* mwchan);
 /**
  * Get the maximum possible non-blocking write size for a mwchan.
  *
- * This returns the size of the internal write-ring-buffer of @p mwchan.
+ * This returns the size of the internal write ring-buffer of @p mwchan.
  * Under no circumstances will an mwchan be able to accept a non-blocking
  * write of more than the returned size.
+ * Returns a negative number on error.
  *
  * @param mwchan The mwchan instance to examine.
- * @return Number bytes in maximum message size, < 0 on error.
+ * @retval >= 0 on success -- size of the channel's write ring-buffer.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
  */
 ssize_t mwchan_get_max_write_msg_size(const struct mwchan* mwchan);
 
@@ -237,12 +276,15 @@ ssize_t mwchan_get_max_write_msg_size(const struct mwchan* mwchan);
 /**
  * Get the maximum possible non-blocking read size for a mwchan.
  *
- * This returns the size of the internal read-ring-buffer of @p wmchan.
+ * This returns the size of the internal read ring-buffer of @p wmchan.
  * This is the size of the largest possible message that can be read in
  * a non-blocking manner from @p wmchan.
+ * Returns a negative number on error.
  *
  * @param wmchan The wmchan instance to examine.
- * @return Number of bytes in maximum message size, < 0 on error.
+ * @retval >= 0 on success -- size of the channel's read ring-buffer.
+ * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
+ * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
  */
 ssize_t mwchan_get_max_read_msg_size(const struct mwchan* mwchan);
 
@@ -265,6 +307,9 @@ ssize_t mwchan_get_max_read_msg_size(const struct mwchan* mwchan);
  * One key note is that callers can potentially get their mwchan in a
  * state that is difficult to recover from by mixing vmsg-based read/write
  * operations with the byte-oriented _read/_write operations.
+ * That probably points to the need to make mwchan instances either
+ * message or stream oriented and either not let the caller mix and match,
+ * or give them a way to safely transition a mwchan from one to the other.
  *
  * These are the operations from io.c:
  *   libxenvchan_read, libxenvchan_recv, libxenvchan_write, libxenvchan_send,
@@ -273,3 +318,4 @@ ssize_t mwchan_get_max_read_msg_size(const struct mwchan* mwchan);
  */
 
 
+#endif // __MWCHAN_H__
