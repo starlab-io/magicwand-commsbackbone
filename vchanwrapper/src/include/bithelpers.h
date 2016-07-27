@@ -1,3 +1,5 @@
+#ifndef __BITHELPERS_H__
+#define __BITHELPERS_H__
 // @MAGICWAND_HEADER@
 
 /**
@@ -29,3 +31,5 @@
 		( whole  =	\
 			((whole) &~ BITFIELD_MASK((len), (start))) |	\
 				BITFIELD_PREP((part), (len), (start)))
+
+#endif // @MAGICWAND_HEADER@

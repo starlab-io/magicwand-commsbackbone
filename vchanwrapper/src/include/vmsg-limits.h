@@ -1,3 +1,5 @@
+#ifndef __VMSG_LIMITS_H__
+#define __VMSG_LIMITS_H__
 // @MAGICWAND_HEADER@
 
 /*
@@ -95,4 +97,6 @@
 
 #define BTF_SET_HEADER(hdr, flags, size) \
 	( hdr =  BTF_MAKE_HEADER((flags), (size)) )
+
+#endif // __VMSG_LIMITS_H__
 
