@@ -46,7 +46,7 @@ const uint32_t WMCHAN_CONNECT_TIMEOUT_MS = 5000;
  * @param rendezvous_point_path Path in XenStore for the Rendezvous Point.
  * @param[out] error_code The error code associated with a failure.
  * @param[out] error_message Explanatatory detail about a failure.
- * @reutnr The new mwrp instance on success; NULL on failure.
+ * @return The new mwrp instance on success; NULL on failure.
  */
 struct mwrp* mwrp_server_create_rp(const char* rendevous_point_path,
 		int32_t* error_code, char* error_message);
