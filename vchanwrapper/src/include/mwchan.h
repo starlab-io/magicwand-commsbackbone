@@ -3,7 +3,7 @@
 // @MAGICWAND_HEADER@
 
 /**
- * Public header for the MAGICWAND comm channel: mwchan.
+ * Public header for the MAGICWAND comm channel IO operations.
  *
  * mwchan is a message oriented wrapper over Xen's libvchan.
  * This library provides functions that simplify the process of
@@ -11,54 +11,86 @@
  *
  * Outstanding Questions:
  *   ___ Do our blocking calls need to support timeouts?
- *   ___ Do we need to provide any other raw libvchan functions?
  *   ___ Can libvchan be run in kernel-context on Linux?
  *
- * TODO List
- *   ___ Define the set of error codes.
  *
  */
 
+#include <stdint.h>
+
+#include "vmsg.h"
+
+// These are the error codes that our functions return.
+#include "mwchan-error-codes.h"
 
 // An opaque declaration is good enough for the callers.
 struct mwchan;
 
-// Don't include the entire vmsg.h header just to get an opaque declaration.
-// #include "vmsg.h"
-struct vmsg;
-
-// These are the error codes that our functions return.
-#include "mwchan-error-codes.h"
-#include "vmsg-error-codes.h"
-
 
 /*
- * The Rendezvous Protocol handles the creation of new wmchan instances.
+ * The Rendezvous Protocol handles the creation of new wmchan instances
+ * for both servers and clients.
  * The functionality declared in this header is for use with an existing
  * wmchan instance.
  */
 
+/*
+ * TODO List
+ * ___ Should we allow the caller to obtain a file descriptor for the mwchan?
+ *     This would let the caller add the mwchan to their event loop.
+ *     The libvchan library supports this.
+ */
+
+// The role of the mwchan.
+typedef enum mwchan_role {
+	// Not a real type -- just compiler tricks.
+	// This ensures the compiler will use a signed int for the enum.
+	// That lets enum mwchan_error_code "sort of" occupy the smae data
+	// space.
+	MWCHAN_ROLE_INVALID_ERROR = -1,
+
+	//! The mwchan instance is the server side of the connection.
+	MWCHAN_ROLE_SERVER        = 0,
+
+	//! The mwchan instance is the client side of the connection.
+	MWCHAN_ROLE_CLIENT        = 1
+} mwchan_role_t;
+
+
+// The state of an mwchan.
+typedef enum mwchan_state {
+	// Not a real type -- just compiler tricks.
+	// Ensures that a signed int will be used for the enum.
+	// That lets enum mwchan_error_code "sort of" occupy the smae data
+	// space.
+	MWCHAN_STATE_INVALID_ERROR = -1,
+
+	//! The mwchan is open in both directions.
+	MWCHAN_STATE_OPEN = 1,
+
+	//! The mwchan is closed in either direction -- all IO ops will fail.
+	MWCHAN_STATE_CLOSED = 2
+} mwchan_open_state_t;
 
 
 /**
  * Check whether or not the mwchan is open.
  *
- * The mwchan has 3 possible "openness" states:
- *   0 - The mwchan is open in both directions.
- *   1 - The mwchan is open only on the server
+ * @p mwchan is closed as soon as either side (client or server) closes it.
  *
  * @param The mwchan instance to check for openness.
- * @retval 0 If the mwchan is open in both directions.
- * @retval 1 If the mwchan is only open on the server side.
+ * retval MWCHAN_STATE_OPEN if @p mwchan is open in both directions.
+ * retval MWCHAN_STATE_CLOSED if @p mwchan is closed in either direction.
  * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
  */
-int32_t mwchan_is_open(const struct mwchan* mwchan);
+enum mwchan_state mwchan_is_open(const struct mwchan* mwchan);
 
 
 /**
  * Close an mwchan.
  *
  * This closes @p mwchan but does not delete it.
+ *
  * All future read and write operations on @p mwchan will fail with the
  * error E_MWCHAN_CLOSED.
  *
@@ -69,13 +101,13 @@ int32_t mwchan_is_open(const struct mwchan* mwchan);
  * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
  * @retval E_MWCHAN_CLOSED if @p mwchan is already closed.
  */
-int32_t mwchan_close(const struct mwchan* mwchan);
+enum mwchan_error_code mwchan_close(const struct mwchan* mwchan);
 
 
 /**
  * Delete an mwchan, closing it if it is not already closed.
  *
- * While this function will close an open mwchan, it is best to 
+ * While this function will close an open mwchan, it is prudent to 
  * close it first using @c mwchan_close.
  *
  * @param mwchan The mwchan instance to close.
@@ -111,32 +143,6 @@ void mwchan_delete(const struct mwchan* mwchan);
 ssize_t mwchan_write_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
 
 
-/**
- * Perform a non-blocking write of a vmsg to a wmchan.
- *
- * Call writes as much of @p vmsg to the @p vmchan as @p vmchan can accept
- * without blocking.
- *
- * The return value indicates whether or not @p vmsg has been completely
- * written to @p mwchan or not:
- *   > 0   -- The write of @p vmsg is not yet complete
- *   == 0  -- The write of @p vmsg has completed successfully
- *   < 0   -- An error occured
- *
- * Successive calls (without calling @c vmsg_write_prep on @p vmsg) will
- * continue to write the remaining data from @p vmsg to @p mwchan.
- *
- * @param mwchan The mwchan to write @p vmsg (header and value) to.
- * @param vmsg The vmsg object (header and value) to write to @p mwchan.
- * @return > 0 while incomplete, 0 on completion, or < 0 on an error.
- *
- * TODO: Implement non-blocking vmsg write if necessary.
- * ssize_t mwchan_write_vmsg_nonblock(const struct mwchan* mwchan,
- *		const struct vmsg* vmsg);
- *
- */
-
-
 /* ************* Read vmsg objects from a wmchan ************** */
 
 /**
@@ -169,30 +175,6 @@ ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
 
 
 /**
- * Peform a non-blocking read from a wmchan into a vmsg.
- *
- * The return value indicates whether or not the next vmsg from @p wmchan
- * has been completely read and written into @p vmsg, or that an error has
- * occured:
- *   > 0   -- The read of a vmsg into @p vmsg is not yet complete
- *  == 0   -- A complete vmsg has been read into @p vmsg
- *   < 0   -- An error occured
- *
- * Successive calls (without calling @c vmsg_read_prep on @p vmsg) will
- * continue to read a partially complete vmsg from @p wmchan into @p vmsg.
- *
- * @param wmchan The wmchan to read a vmsg from.
- * @param vmchan The vmsg to write the next vmsg from @p wmchan into.
- * @param > 0 while incomplete, 0 on completion, < 0 on an error.
- *
- * TODO:  Implement non-blocking vmsg read if necessary.
- *
- * ssize_t mwchan_read_vmsg_nonblock(const struct mwchan* mwchan,
- * 		const struct vmsg* vmsg);
- */
-
-
-/**
  * Get the value size of the next vmsg in the wmchan without blocking.
  *
  * If @p wmchan is not empty, get the size of the next vmsg in @p wmchan.
@@ -205,8 +187,8 @@ ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
  * @param mwchan The mwchan instance to examine.
  * @retval >= 0 when a vmsg is available.
  * @retval E_MWCHAN_NULL_POINTER if @p mwchan is NULL.
- * @retval E_MWCHAN_NO_DATA if there is no data in the channel.
  * @retval E_MWCHAN_CLOSED if @p mwchan is closed.
+ * @retval E_MWCHAN_NO_DATA if there is no data in the channel.
  * @retval E_MWCHAN_READ_FAILED if the read from the channel failed.
  */
 ssize_t mwchan_read_peek_vmsg_size_nonblock(const struct mwchan* mwchan);
