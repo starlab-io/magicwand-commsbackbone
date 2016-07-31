@@ -3,51 +3,61 @@
 // @MAGICWAND_HEADER@
 
 /**
- * Public header for variable-sized messages.
- * All messaging operations can be implemented in terms of variable-size
- * messages.
+ * Public header for variable-sized TLV (Type, Length, Value) messages.
  *
- * TODO:
- *   ___ Add read_prep or write_prep calls for IO directly to/from the vmsg.
+ * The Type and Length portion of a message form the notional "header" of
+ * the message.
+ *
+ * The vmsg format reserves the first two bits of the Type field to specify
+ * the "type-family" that a vmsg instance belongs to.  The intepretation
+ * and validation of the message header is type-family specific.
+ *
+ * At present, only a single type-family has been defined -- the "basic"
+ * type-family.
+ *
+ * TODO List
+ * ___ Are arbitary write ops needed in addtion to append to vmsg?
+ *     Do vmsg users need to be able to write at arbitrary locations in
+ *     the vmsg?
+ *
+ * ___ Should there be a function to get the space limit for a vmsg?
+ *     The space limit is the smaller of the vmsg's type-family's max size
+ *     and the maximum size for the vmsg itself.
  */
 
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdbool.h>
 
-#include "vmsg-limits.h"
+#include "mwchan-error-codes.h"
 #include "basic-type-family.h"
-#include "vmsg-error-codes.h"
 
 /* A vmsg is an opaque type usable through the functions in this library. */
 struct vmsg;
 
 // These are the only valid vmsg types.
-enum vmsg_type_family {
+typedef enum vmsg_type_family {
 	// Not a real type -- just compiler tricks.
 	// This ensure that the compiler will use a signed int for our enum.
-	// A signed int is necessary so  enum_vmsg_error_code values can
+	// A signed int is necessary so enum mwchan_error_code values can
 	// "sort of" occupy the same data space as the type family values.
 	VTF_INVALID_ERROR = -1,
 
+	//! The basic vmsg type-family.
 	VTF_BASIC = 0,   // This is the only implemented type family.
+
+	//! Unimplemented vmsg type-family.
 	VTF_UNUSED_1 = 1,
+
+	//! Unimplemented vmsg type-family.
 	VTF_UNUSED_2 = 2,
+
+	//! Unimplemented vmsg type-family.
 	VTF_UNUSED_3 = 3,
 
 	// Any value >= VTF_MAX is an error.
-	VTF_MAX    = 3
+	VTF_MAX
 } vmsg_type_family_t;
 
-
-/* ########### TODO #############
- * Define how an error due to a NULL pointer will be returned to the caller.
- * Define how an error of invalid flags will be returned to the caller.
- * Define how an error of invalid size will be returned to the caller.
- * Determine whether or not there is such a thing as an uninitialized vmsg.
- *
- * Standardize the error-indicating negative return values.
- */
 
 
 /* ************** vmsg life-cycle operations **************** */
@@ -58,64 +68,103 @@ enum vmsg_type_family {
  * wrap a caller-provided buffer.
  * All vmsg instances MUST be freed using vmsg_delete().  DO NOT use free()
  * to delete vmsg instances.
- *
- * If you prefer to provide your own malloc and free functions, replace
- * the global vmsg_malloc and vmsg_free functions prior to calling any other
- * vmsg functions.
  */
+
 
 /*
  * vmsg initialization
- * Before a vmsg can be used, it must be initialized.  Initialization
- * prepares the vmsg for use.  Only a select few operations may be performed
- * on an uninitialized vmsg:
+ * Before a vmsg can be used, it must be initialized.
+ * Initialization ensures that the vmsg has its type-family set so that
+ * operations that set the message type or size can be validated.
+ * Only a select few operations may be performed on an uninitialized vmsg:
  *   * @c vmsg_set_type_family
  *   * @c vmsg_delete
- *   * TODO: Fill vmsg from buffer
+ *   * @c vmsg_wrap_full
+ *   * @c vmsg_set_header_from_buffer
+ *   * @c vmsg_get_max_size
  *
  * An initialized vmsg may be obtained by calling the appropriate
  * @c vmsg_new* or @c vmsg_wrap* function.
  *
  * Operations on uninitialized vmsgs will either return null or, if
- * supported by the operation, return the vmsg_error_code E_VMSG_UNINITIALIZED.
+ * supported by the operation, return the mwchan_error_code
+ * E_VMSG_UNINITIALIZED.
  */
+
 
 /**
  * Create a vmsg instance capable of holding @p max_size bytes.
- * The vmsg is allocated along with a congituous buffer at least
+ *
+ * The vmsg is allocated contiguously with a buffer of at least
  * @p max_size bytes.
  *
- * The memory of the buffer is not cleared.
+ * The contents of the buffer are not cleared.
  * The vmsg returned has 0 bytes marked as used.
- * The returned vmsg instance MUST be freed with @c vmsg_delete().
+ *
+ * The returned vmsg instance MUST be freed with @c vmsg_delete.
+ *
  * NOTE:  The vmsg returned is uninitialized until the type is set.
  * 
  * @param max_size The maximum message size this vmsg can hold.
  * @retval New struct vmsg instance on success.
  * @retval NULL if the allocation fails.
- * 
  */
 struct vmsg* vmsg_new(const size_t max_size);
 
 
 /**
  * Create a vmsg instance with zero'd out buffer of @p max_size.
- * The vmsg is allocated the same as with @c vmsg_new, but the buffer is
- * set to all zeros before the vmsg is returned.
+ *
+ * The vmsg is allocated contiguously with a buffer of at least
+ * @p max_size bytes.  The buffer is set to all zeros before the vmsg
+ * is returned.
  *
  * NOTE: The vmsg returned is uninitialized.
+ *
+ * The returned vmsg must be freed with @c vmsg_delete.
  *
  * @param max_size The maximum message size this vmsg can hold.
  * @retval New struct vmsg instance on success.
  * @return NULL if the allocation fails.
- * @retval
  */
 struct vmsg* vmsg_new0(const size_t max_size);
 
 
 /**
+ * Create an intialized vmsg instance capable of holding @p max_size bytes.
+ *
+ * The vmsg is allocated contiguously with a buffer of at least
+ * @p max_size bytes.
+ *
+ * The returned vmsg is fully initialized.
+ *
+ * If there is an error creating the vmsg, NULL is returned and
+ * @p error_code is set to indicate the reason for the error.
+ *
+ * The returned vmsg instance MUST be freed with @c vmsg_delete.
+ *
+ * @param max_size The maximum size for the vmsg.
+ * @param type_family The type-family for the vmsg.
+ * @param type The type (within the type-family @p type_family) for the vmsg.
+ * @param bytes_used The number of bytes in buffer that are already used.
+ * @param transfer_ownership non-zero to transfer ownership of @p buffer to the vmsg.
+ * @param[out] error_code Error code indicating reason for failure.
+ * @retval New struct vmsg instance on success.
+ * @retval NULL on error.
+ * @retval error_code: E_VMSG_WRONG_TYPE_FAMILY if @p type_family is not valid.
+ * @retval error_code: E_VMSG_INVALID_SIZE_FOR_TYPE if @p bytes_used is not in the valid range for @p type_family.
+ */
+
+struct vmsg* vmsg_new_full(const size_t max_size,
+		const enum vmsg_type_family type_family,
+		const uint32_t type, const size_t bytes_used,
+		enum mwchan_error_code* error_code);
+
+
+/**
  * Create a vmsg instance by wrapping a caller-provided @p buffer.
- * The maximum size of the vmsg is set to the caller provided @p buffer_size.
+ *
+ * The maximum size of the vmsg is set to @p buffer_size.
  *
  * The vmsg returned has 0 bytes marked as used.
  *
@@ -123,10 +172,10 @@ struct vmsg* vmsg_new0(const size_t max_size);
  * vmsg MUST be freed with @c vmsg_delete (the same as any other vmsg), but
  * @c vmsg_delete will not free the buffer -- freeing the buffer remains the
  * caller's responsibility.
+ *
  * NOTE: The vmsg returned is uninitialized.
  *
- * If @p buffer is NULL, no new vmsg will be created.
- *
+ * If @p buffer is NULL, no new vmsg will be created and NULL will be returned.
  *
  * @param buffer The buffer to use with the returned vmsg instance.
  * @param buffer_size The size of @p buffer.
@@ -137,11 +186,12 @@ struct vmsg* vmsg_wrap(const char* buffer, const size_t buffer_size);
 
 
 /**
- * Create a vmsg instance by wrapping a caller-provided @p buffer.
- * The maximum size of the vmsg is set to the caller provided @p buffer_size.
+ * Create an initialized vmsg instance by wrapping a caller-provided @p buffer.
  *
  * This function allows full control over the resulting configuration of
  * the vmsg.
+ *
+ * The maximum size of the vmsg is set to @p buffer_size.
  * When appending data to the vmsg, @p bytes_used is used as the offset for
  * the next append -- use 0 to indicate that none of the buffer has been used
  * yet.
@@ -153,56 +203,27 @@ struct vmsg* vmsg_wrap(const char* buffer, const size_t buffer_size);
  *
  * NOTE: The vmsg returned IS initialized.
  *
+ * If there is an error creating the vmsg, NULL is returned and @p error_code
+ * is set to indicate the reason for the failure.
+ *
  * @param buffer The buffer to use with the returned vmsg instance.
  * @param buffer_size The size of @p buffer.
- * @param type vmsg type.  See FIXME:  Add type definition location.
+ * @param type_family The type-family for the vmsg.
+ * @param type The type (within the type-family @p type_family) for the vmsg.
  * @param bytes_used The number of bytes in buffer that are already used.
- * @param transfer_ownership 1 to transfer ownership to the vmsg, 0 otherwise.
+ * @param transfer_ownership non-zero to transfer ownership of @p buffer to the vmsg.
+ * @param[out] error_code Error code indicating reason for failure.
  * @retval New struct vmsg instance on success.
  * @retval NULL on error.
+ * @retval error_code: E_VMSG_NULL_POINTER if @p buffer is NULL.
+ * @retval error_code: E_VMSG_WRONG_TYPE_FAMILY if @p type_family is not valid.
+ * @retval error_code: E_VMSG_INVALID_SIZE_FOR_TYPE if @p bytes_used is not in the valid range for @p type_family.
  */
 struct vmsg* vmsg_wrap_full(const char* buffer, const size_t buffer_size,
+		const enum vmsg_type_family type_family,
 		const uint32_t type, const size_t bytes_used,
-		const uint32_t transfer_ownership);
-
-
-/**
- * Create a new vmsg instance as a copy of an existing vmsg instance.
- *
- * The new vmsg is created as via @c vmsg_new, with the contents of @p vmsg's
- * buffer copied into it (whether @p vmsg is contiguous or wraps a buffer).
- *
- * The returned vmsg must be deleted using @c vmsg_delete.
- *
- * If @p vmsg is initialized, the returned vmsg will be also.
- *
- * @param vmsg The struct vmsg instance to copy.
- * @retval New struct vmsg instance on success.
- * @retval NULL on error.
- *
- * TODO:  Determine if this is actually necessary.
- * struct vmsg* vmsg_new_copy(const struct vmsg* vmsg);
- */
-
-
-/**
- * Create a new vmsg instance as a copy of a buffer.
- *
- * The new vmsg is created as via @c vmsg_new, with the contents of
- * @p buffer copied into it.  The maximum size for the returned vmsg is
- * @p buffer_size.
- *
- * NOTE: The new vsmsg is not initialized. 
- *
- * @param buffer The buffer to copy when creating the new vmsg instance.
- * @param buffer_size The size of @p buffer.
- * @retval New vmsg instance on success.
- * @retval NULL on error.
- *
- * TODO: Is this really necessary?
- * struct vmsg* vmsg_new_copy_buffer(const char* buffer,
- * 		const size_t buffer_size);
- */
+		const uint32_t transfer_ownership,
+		enum mwchan_error_code* error_code);
 
 
 /**
@@ -227,18 +248,6 @@ void vmsg_delete(const struct vmsg* vmsg);
  * Right now, only the "basic" type-family has been defined.
  */
 
-
-/**
- * Get the type-family of the vmsg.
- *
- * The return value is the type-family, or negative in the event of an error.
- *
- * @param vmsg The vmsg to get the type family from.
- * @retval vmsg_type_family value if @p vmsg is not NULL and is initialized.
- * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
- * @retval E_VMSG_UNINITIALIZED if @p vmsg is not initialized.
- */
-enum vmsg_type_family vmsg_get_type_family(const struct vmsg* vmsg);
 
 
 /**
@@ -265,7 +274,7 @@ enum vmsg_basic_type vmsg_get_type_basic(const struct vmsg* vmsg);
  * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
  * @retval E_VMSG_INVALID_TYPE if @p type is not a valid "basic" type.
  */
-int32_t vmsg_set_type_basic(const struct vmsg* vmsg,
+enum mwchan_error_code vmsg_set_type_basic(const struct vmsg* vmsg,
 		const enum vmsg_basic_type type);
 
 
@@ -281,29 +290,39 @@ int32_t vmsg_set_type_basic(const struct vmsg* vmsg,
 int32_t vmsg_type_is_basic(const struct vmsg* vmsg);
 
 
-
 /**
  * Set the type and size of a basic vmsg.
  *
  * If there is an error, a negative value is returned.
  * @p vmsg must not be NULL.
- * The value of @p size must be valid for the basic type family.
+ *
+ * The values of @p size and @p type must be valid for the basic type-family.
  *
  * @param vmsg The vmsg to set the header (type and size) of.
  * @param type The type value to specify in @p vmsg.
  * @param size The size value to specify in @p vmsg.
- * @return 0 on sucess; < 0 on error.
  * @retval 0 on success.
  * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
  * @retval E_VMSG_INVALID_TYPE if the @p type value is out of range.
- * @retval E_VMSG_INVALID_SIZE if the @p size is out of range.
+ * @retval E_VMSG_INVALID_SIZE_FOR_TYPE if the @p size is out of range.
  */
-int32_t vmsg_set_header_full(const struct vmsg* vmsg, const uint32_t type,
-		const size_t size);
-
+enum mwchan_error_code vmsg_set_header_basic(const struct vmsg* vmsg,
+		const uint32_t type, const size_t size);
 
 
 /* ************** vmsg informational operations *************** */
+
+/**
+ * Get the type-family of the vmsg.
+ *
+ * The return value is the type-family, or negative in the event of an error.
+ *
+ * @param vmsg The vmsg to get the type-family from.
+ * @retval vmsg_type_family value if @p vmsg is not NULL and is initialized.
+ * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
+ * @retval E_VMSG_UNINITIALIZED if @p vmsg is not initialized.
+ */
+enum vmsg_type_family vmsg_get_type_family(const struct vmsg* vmsg);
 
 
 /**
@@ -315,7 +334,7 @@ int32_t vmsg_set_header_full(const struct vmsg* vmsg, const uint32_t type,
  * @retval >= 0  on success -- the size of the value in the vmsg.
  * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
  * @retval E_VMSG_WRONG_TYPE_FAMILY if the type family is not supported.
- * @retval E_VMSG_UNINITIALIZED if @p vmsg does not have its size set.
+ * @retval E_VMSG_UNINITIALIZED if @p vmsg is not initialized.
  */
 ssize_t vmsg_get_size(const struct vmsg* vmsg);
 
@@ -323,19 +342,24 @@ ssize_t vmsg_get_size(const struct vmsg* vmsg);
 /**
  * Set the size of the value in a vmsg.
  *
- * If @p size is greater than the maximum possible size of @p vmsg,
- * or if @p size is greater than the maximum size of the type of @p vmsg
- * an error is returned.
+ * Returns 0 on success, a negative value on error.
+ *
+ * The type-family for @p vmsg must already have been set or an error is
+ * returned.
+ *
+ * If @p size is not valid for @p vmsg's type-family, or is too large for
+ * @p vmsg to hold, an error is returned.
  *
  * @param vmsg The vmsg to set the size of.
  * @param size The size value to set in @p vmsg.
  * @retval 0 on success.
  * @retval E_VMSG_NULL_POINTER if @p vmsg is NULL.
- * @retval E_VMSG_UNINITIALIZED if @p vmsg does not have the type set.
- * @retval E_VMSG_INVALID_SIZE_FOR_TYPE if @p size is too large for @p vmsg type.
+ * @retval E_VMSG_UNINITIALIZED if @p vmsg does not have its type-family set.
+ * @retval E_VMSG_INVALID_SIZE_FOR_TYPE if @p size is out of range for @p vmsg's type-family.
  * @retval E_VMSG_SIZE_TOO_LARGE if @p size is too large for @p vmsg max size.
  */
-int32_t vmsg_normal_set_size(const struct vmsg* vmsg, size_t size);
+enum mwchan_error_code vmsg_set_size(const struct vmsg* vmsg,
+		const size_t size);
 
 
 /**
@@ -374,7 +398,7 @@ ssize_t vmsg_get_max_size(const struct vmsg* vmsg);
  *   * the maximum value size for @p vmsg's type-family
  *   * the maximum size for @p vmsg.
  *
- * It is an error to call this with a vmsg that is not initiallized.
+ * It is an error to call this with a vmsg that is not fully initiallized.
  *
  * @param vmsg The vmsg to get the available space from.
  * @retval >0 on success
@@ -384,17 +408,12 @@ ssize_t vmsg_get_max_size(const struct vmsg* vmsg);
 ssize_t vmsg_get_space_available(const struct vmsg* vmsg);
 
 
-// FIXME:  Should there be a function to get the space limit of a vmsg?
-// The space limiit is the smaller of the type-family specific max size
-// and the @c vmsg_get_max_size(vmsg).
-
-
 
 /* ************** vmsg header I/O operations ************** */
 
 
 /**
- * Set the type and size of a vmsg from a @p buffer.
+ * Set the type and size of a vmsg from @p buffer.
  *
  * @p buffer must contain at least a vmsg header (4 bytes).
  *
@@ -417,7 +436,7 @@ ssize_t vmsg_get_space_available(const struct vmsg* vmsg);
  * @retval E_VMSG_INVALID_SIZE_FOR_TYPE size from @p buffer is too large for type family.
  * @retval E_VMSG_SIZE_TOO_LARGE size from @p buffer is larger than max size for  @p vmsg.
  */
-int32_t vmsg_set_header_from_buffer(const struct vmsg* vmsg,
+enum mwchan_error_code vmsg_set_header_from_buffer(const struct vmsg* vmsg,
 		const char* buffer);
 
 
@@ -434,7 +453,7 @@ int32_t vmsg_set_header_from_buffer(const struct vmsg* vmsg,
  * @retval E_VMSG_UNINITIALIZED if @p vmsg is not initialized.
  * @retval E_VMSG_WRONG_TYPE_FAMILY Unsupported type-family.
  */
-int32_t vmsg_copy_header_to_buffer(const struct vmsg* vmsg,
+enum mwchan_error_code vmsg_copy_header_to_buffer(const struct vmsg* vmsg,
 	const char* buffer);
 
 
