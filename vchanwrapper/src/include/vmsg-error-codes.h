@@ -10,8 +10,8 @@
  * E_VMSG_RANGE_MAX.  The defined values range from E_VMSG_RANGE_MIN + 1 to
  * E_VMSG_ERROR_CODE_LIMIT - 1.
  */
-#define E_VMSG_RANGE_MIN -16999
-#define E_VMSG_RANGE_MAX -16000
+#define E_VMSG_RANGE_MIN -10999
+#define E_VMSG_RANGE_MAX -10000
 enum vmsg_error_code {
 	E_VMSG_ERROR_CODE_MIN = E_VMSG_RANGE_MIN,
 	E_VMSG_NULL_POINTER,         	// A pointer was NULL.
