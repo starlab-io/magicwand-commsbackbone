@@ -42,8 +42,8 @@
 
 // The range for the vmsg subsystem.
 // These error codes are for operations operating on vmsg structures.
-#define E_VMSG_RANGE_MIN = -11999
-#define E_VMSG_RANGE_MAX = -11000
+#define E_VMSG_RANGE_MIN -11999
+#define E_VMSG_RANGE_MAX -11000
 
 // The range for the mwrp (the rendezvous protocol) subsystem.
 // These error codes are for operations on mwrp structures.
