@@ -10,10 +10,6 @@
 #include "mwchan-error-codes.h"
 
 
-/*
- * Every vmsg structure returned to the user 
- */
-
 /**
  * The vmsg control flags are a bit field.
  * An initialized vmsg has both VCTL_SIZE_SET and VCTL_TYPE_SET.
@@ -41,6 +37,8 @@ enum vmsg_ctrl_code {
  * If we did want to use it as the on-the wire format, we'd need to make sure
  * we dealt with endianness.
  * We don't use it as the in-memory format -- that would just be extra work.
+ *
+ * Each type-family gets its own struct entry in the anonymous union.
  */
 typedef struct vmsg_hdr {
 	union {
@@ -55,6 +53,7 @@ typedef struct vmsg_hdr {
 } vmsg_hdr_t;
 
 
+// Library users get an opaque pointer to instances of this struct.
 typedef struct vmsg {
 	uint32_t vmsg_ctrl_flags;
 	size_t allocated_size;
