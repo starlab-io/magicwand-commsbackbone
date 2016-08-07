@@ -27,7 +27,7 @@
  */
 struct mwrp;
 
-extern struct wchan;
+struct wchan;
 
 
 /**
@@ -55,7 +55,7 @@ extern struct wchan;
  * @retval error_code: E_MWRP_ALLOCATION_FAILED Memory allocation failure.
  */
 struct mwrp* mwrp_server_create_rp(const char* rendevous_point_path,
-		enum * error_code, char* error_message);
+		enum mwchan_error_code* error_code, char* error_message);
 
 /**
  * Start monitoring a Rendezvous Point for requests.
@@ -70,7 +70,7 @@ struct mwrp* mwrp_server_create_rp(const char* rendevous_point_path,
  * @retval E_MWRP_XENSTORE_CLOSED XenStore connection closed.
  * @return 0 on success, < 0 on error.
  */
-enum mwrp_error_code mwrp_server_start_rp(const struct mwrp* mwrp);
+enum mwchan_error_code mwrp_server_start_rp(const struct mwrp* mwrp);
 
 
 /* The mwrp struct contains an xs_handle struct which contains an open
@@ -115,7 +115,7 @@ uint32_t mwrp_server_get_fileno(const struct mwrp* mwrp);
  * @retval error_code: E_MWRP_NOT_STARTED if @p mwrp not started yet.
  */
 char* mwrp_server_wait_for_request(const struct mwrp* mwrp,
-		enum mwrp_error_code* error_code);
+		enum mwchan_error_code* error_code);
 
 
 /**
@@ -133,7 +133,7 @@ char* mwrp_server_wait_for_request(const struct mwrp* mwrp,
  * @retval error_code: E_MWRP_NOT_STARTED if @p mwrp not started yet.
  */
 char* mwrp_server_get_request(const struct mwrp* mwrp,
-		enum mwrp_error_code* error_code);
+		enum mwchan_error_code* error_code);
 
 
 /**
@@ -152,7 +152,7 @@ char* mwrp_server_get_request(const struct mwrp* mwrp,
  * @retval error_code: E_MWRP_VCHAN_CREATE_FAILED if unable to create the underlying vchan.
  */
 struct mwchan* mwrp_server_handle_request(const struct mwrp* mwrp,
-		const char* request_token, enum mwrp_error_code* error_code);
+		const char* request_token, enum mwchan_error_code* error_code);
 
 
 
