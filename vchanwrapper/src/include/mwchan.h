@@ -171,7 +171,7 @@ ssize_t mwchan_write_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
  * @retval E_MWCHAN_TOO_LARGE if @p vmsg is too small for the message.
  * @retval E_VMSG_INVALID_TYPE if the type of the message read is unsupported.
  */
-ssize_t mwchan_read_vmsg(const struct mwchan* const struct vmsg* vmsg);
+ssize_t mwchan_read_vmsg(const struct mwchan* mwchan, const struct vmsg* vmsg);
 
 
 /**
