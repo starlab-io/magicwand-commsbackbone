@@ -14,12 +14,13 @@
  *   * 'wmchan' The struct wmchan instance 
  */
 
+#include <stdlib.h>
 #include <stdint.h>
 
 // The error codes returned come from here.
 #include "mwchan-error-codes.h"
 
-extern struct wchan;
+struct wchan;
 
 /**
  * Request a connection to the service specified by a Rendezvous Point.
