@@ -9,6 +9,8 @@
  *       * If we do that, what will clean the errors up?
  */
 
+#include <stdlib.h>
+#include <stdint.h>
 #include <libvchan.h>
 
 #include "mwchan.h"
