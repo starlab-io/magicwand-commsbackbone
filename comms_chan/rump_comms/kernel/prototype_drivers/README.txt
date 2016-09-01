@@ -55,6 +55,7 @@
 
 	$> cd ~/rumprun
 	$> CC=cc ./build-rr.sh xen
+        $> export PATH="${PATH}:$(pwd)/rumprun/bin"
 	$> cd test
 	$> x86_64-rumprun-netbsd-gcc -o test_gnttab_srvr-rumprun test_gnttab.c 
 	$> rumprun-bake xen-pv test_gnttab_srvr-rumprun.bin test_gnttab_srvr-rumprun
@@ -67,6 +68,7 @@
 
 	$> cd ~/rumprun
 	$> CC=cc ./build-rr.sh xen
+        $> export PATH="${PATH}:$(pwd)/rumprun/bin"
 	$> cd test
 	$> x86_64-rumprun-netbsd-gcc -o test_gnttab_client-rumprun test_gnttab.c 
 	$> rumprun-bake xen-pv test_gnttab_client-rumprun.bin test_gnttab_client-rumprun
@@ -93,8 +95,11 @@
 
 4> Create/initialize the protocol keys: 
 
-	$> sudo xenstore-write /unikernel/random/serverid  0
-	$> sudo xenstore-write /unikernel/random/clientid  0
-	$> sudo xenstore-write /unikernel/random/gnt_state 0
+	$> sudo xenstore-write /unikernel/random/server_id         0
+	$> sudo xenstore-write /unikernel/random/client_id         0
+	$> sudo xenstore-write /unikernel/random/gnt_ref           0
+	$> sudo xenstore-write /unikernel/random/msg_len           0
+	$> sudo xenstore-write /unikernel/random/evt_chn_port      0
+	$> sudo xenstore-write /unikernel/random/client_local_port 0
 
 
