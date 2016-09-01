@@ -4,7 +4,7 @@
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
-#include <mini-os/offer_gnttab.h>
+#include <mini-os/offer_accept_gnt.h>
 
 #include <xen/sched.h>
 #include <mini-os/xenbus.h>
@@ -31,11 +31,13 @@
 /* Default key reset value */
 #define KEY_RESET_VAL             "0"
 /* Define out-of-band keys */
-#define SERVER_ID_PATH            "/unikernel/random/serverid" 
-#define CLIENT_ID_PATH            "/unikernel/random/clientid" 
+#define SERVER_ID_PATH            "/unikernel/random/server_id" 
+#define CLIENT_ID_PATH            "/unikernel/random/client_id" 
 #define PRIVATE_ID_PATH           "domid"
 #define GRANT_REF_PATH            "/unikernel/random/gnt_ref"
 #define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
+#define EVT_CHN_PRT_PATH          "/unikernel/random/evt_chn_port"
+#define LOCAL_PRT_PATH            "/unikernel/random/client_local_port"
 
 /************************************
 *
@@ -85,6 +87,12 @@
 /* Shared memory */
 static void *server_page;
 static void *client_page;
+
+/* Event channel page */
+static void *evtchn_page;
+
+/* Event channel local port */
+static evtchn_port_t local_evtchn_prt;
 
 /* Grant map */
 static struct gntmap *gntmap_map;
@@ -190,6 +198,12 @@ static grant_ref_t offer_grant(unsigned int domu_client_id)
 
 
 	server_page = bmk_pgalloc_one();
+
+	if (!server_page) {
+		return 0;
+		minios_printk("\tFailed to alloc page\n");
+	}
+
     	minios_printk("\tServer page address: %p\n", server_page);
 
 	bmk_memset(server_page, 0, PAGE_SIZE);	
@@ -203,6 +217,61 @@ static grant_ref_t offer_grant(unsigned int domu_client_id)
     	minios_printk("\tGrant Ref for Interdomain: %u\n", ref);
 
 	return ref;
+}
+
+static void read_from_dedicated_channel(void)
+{
+	unsigned char              read_buf[TEST_MSG_SZ];
+    	char                      *err;
+	int                        res;
+    	char                      *msg;
+	unsigned int               msg_len;
+    	struct xenbus_event_queue  events;
+	unsigned int               count;
+
+    	xenbus_event_queue_init(&events);
+	count = 0;
+
+	while (count < 2) {
+
+		/* Wait on Msg Len */
+		xenbus_watch_path_token(XBT_NIL, MSG_LENGTH_PATH, MSG_LENGTH_PATH, &events);
+		while ((err = xenbus_read(XBT_NIL, MSG_LENGTH_PATH, &msg)) != NULL ||  msg[0] == '0') {
+		    bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+		    bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+		    xenbus_wait_for_watch(&events);
+		}
+
+		/* Read in the Message Length */
+		msg = read_from_key(MSG_LENGTH_PATH);
+		if (!msg) {
+			return;
+		}
+		msg_len = bmk_strtoul(msg, NULL, 10);
+		bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+
+		minios_printk("\tRead Msg Length from Key: %u\n", msg_len);
+
+		if (!client_page) {
+			minios_printk("\Error: Shared Mem Buf is NULL\n");
+			return;
+		}
+
+		bmk_memset(read_buf, 0, msg_len);
+		bmk_memcpy(read_buf, client_page, msg_len);
+
+		minios_printk("\tBuffer: %s\n",read_buf);
+
+		/* Clear value of message length key */
+		res = write_to_key(MSG_LENGTH_PATH, KEY_RESET_VAL);
+		if (res) {
+			return;
+		}
+		
+		count++;
+	}
+
+    	xenbus_unwatch_path_token(XBT_NIL, MSG_LENGTH_PATH, MSG_LENGTH_PATH);
 }
 
 /* Client-side function that maps in a page of memory 
@@ -360,6 +429,57 @@ static int run_server(void)
 	return 0;
 }
 
+static void test_handler(evtchn_port_t port, struct pt_regs *regs, void *data)
+{
+	minios_printk("\tEvent Channel handler called\n");
+	/*minios_wake_up(&blkfront_queue);*/
+}
+
+static evtchn_port_t bind_to_interdom_chn(domid_t srvr_id, evtchn_port_t remote_prt_nmbr)
+{
+
+        int           err;
+	evtchn_port_t local_port;
+	char          local_prt_str[MAX_DOMID_WIDTH];
+
+	evtchn_page = bmk_pgalloc_one();
+
+	if (!evtchn_page) {
+    		minios_printk("\tFailed to alloc Event Channel page\n");
+		return 0;
+	}
+    	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
+	bmk_memset(evtchn_page, 0, PAGE_SIZE);	
+
+
+	err = minios_evtchn_bind_interdomain(srvr_id,
+                                             remote_prt_nmbr,
+				             test_handler,
+                                             evtchn_page,
+				             &local_port);
+        if(err) {
+    		minios_printk("\tCould not bind to event channel\n");
+		return 0;
+	}
+
+	minios_printk("\tLocal port for event channel: %u\n", local_port);
+
+	local_evtchn_prt = local_port;	
+
+	minios_unmask_evtchn(local_port);
+	//minios_unmask_evtchn(remote_prt_nmbr);
+
+	bmk_memset(local_prt_str, 0, MAX_DOMID_WIDTH);
+	bmk_snprintf(local_prt_str, MAX_DOMID_WIDTH, "%u", local_port);
+
+	err = write_to_key(LOCAL_PRT_PATH, local_prt_str);
+	if (err) {
+		return 0;
+	}
+	
+	return local_port;
+}
+
 static int run_client(void)
 {
 	domid_t                   domid;
@@ -371,6 +491,9 @@ static int run_client(void)
     	struct xenbus_event_queue events;
 	grant_ref_t		  client_grant_ref;
 	unsigned int              msg_len;
+	evtchn_port_t             evt_chn_prt_nmbr;
+
+    	//struct xenbus_event_queue events_2;
 
         err = NULL;
         msg = NULL;
@@ -465,15 +588,57 @@ static int run_client(void)
 		return res;
 	}
 
+	/* Read some strings from shared memory */
+	read_from_dedicated_channel();
+
+	/*
+        // Wait for Event Channel Port 
+        xenbus_watch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH, &events);
+        while ((err = xenbus_read(XBT_NIL, EVT_CHN_PRT_PATH, &msg)) != NULL ||  msg[0] == '0') {
+            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+            xenbus_wait_for_watch(&events);
+        }
+
+    	xenbus_unwatch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH);
+
+	minios_printk("\tAction on Event Channel Port Key\n");
+	*/
+
+	/* Read in Event Channel Port */
+
+	msg = read_from_key(EVT_CHN_PRT_PATH);
+	if (!msg) {
+		return 1;
+	}
+	evt_chn_prt_nmbr = bmk_strtoul(msg, NULL, 10);
+	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+	
+	minios_printk("\tRead Event Channel Port from Key: %u\n", evt_chn_prt_nmbr);
+	
+	/*
+	// Reset Event Channel Key 
+	res = write_to_key(EVT_CHN_PRT_PATH, KEY_RESET_VAL);
+	if (res) {
+		return res;
+	}
+	*/
+
+        bind_to_interdom_chn(server_id, evt_chn_prt_nmbr);
+
 	return 0;
 }
 
-int offer_gnttab_init(void)
+int offer_accept_gnt_init(void)
 {
 	/* Initialize the Globals */
         server_page = NULL;
 	client_page = NULL;
 	gntmap_map = NULL;
+	evtchn_page = NULL;
+
+        local_evtchn_prt = 0;
+	//unbind_all_ports();
 
 	/* Execute mode: Server or Client */
 	if (IS_SERVER == 1) {
@@ -485,7 +650,7 @@ int offer_gnttab_init(void)
 	return 0;
 }
 
-void offer_gnttab_fini(void)
+void offer_accept_gnt_fini(void)
 {
 	if(gntmap_map) {
 		gntmap_fini(gntmap_map);	
@@ -497,5 +662,15 @@ void offer_gnttab_fini(void)
 
 	if(client_page)
     		bmk_memfree(client_page, BMK_MEMWHO_WIREDBMK);
+
+	
+	minios_printk("\tUnbinding from Local Interdomain Event Channel Port: %u ...\n", local_evtchn_prt);
+
+	minios_mask_evtchn(local_evtchn_prt);
+        minios_unbind_evtchn(local_evtchn_prt);
+
+	if(evtchn_page)
+    		bmk_memfree(evtchn_page, BMK_MEMWHO_WIREDBMK);
+
 }
 
