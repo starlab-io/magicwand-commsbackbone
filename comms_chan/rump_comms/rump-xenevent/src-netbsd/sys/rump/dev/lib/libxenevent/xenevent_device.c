@@ -1,3 +1,5 @@
+// Define a character device
+
 #include <sys/cdefs.h>
 //__KERNEL_RCSID(0, "$NetBSD: rndpseudo.c,v 1.35 2015/08/20 14:40:17 christos Exp $");
 
@@ -40,19 +42,11 @@
 #include <rump-sys/kern.h>
 #include <rump-sys/vfs.h>
 
+#include "xenevent_common.h"
 #include "xenevent_device.h"
 #include "xen_comms.h"
 
-#include "xenevent_common.h"
-
-
 // Function prototypes 
-//static d_open_t      xenevent_open;
-//static d_close_t     xenevent_close;
-//static d_read_t      xenevent_read;
-//static d_write_t     xenevent_write;
-
-// Define a character device
 
 
 // src-netbsd/sys/sys/conf.h
@@ -65,12 +59,10 @@ static dev_type_write( xenevent_write );
 
 // Character device entry points 
 static struct cdevsw xenevent_cdevsw = {
-//    .d_version = D_VERSION,
     .d_open    = xenevent_open,
     .d_close   = xenevent_close,
     .d_read    = xenevent_read,
     .d_write   = xenevent_write,
-//    .d_name    = DEVICE_NAME,
 };
 
 
@@ -94,6 +86,7 @@ xenevent_device_init( void )
 			    cfattach_ioconf_dtv, cfdata_ioconf_dtv);
                             return error; */
 
+DEBUG_BREAK();
     err = devsw_attach( DEVICE_NAME,
                         NULL,
                         &bmaj,
@@ -143,8 +136,7 @@ xenevent_open( dev_t Dev,
               //struct thread *Thread __unused)
 {
     int error = 0;
-    printf( "%s\n", __FUNCTION__ );
-    printf("Opened device \"xenevent\" successfully.\n");
+    DEBUG_PRINT("Opened device \"xenevent\" successfully.\n");
     return error;
 }
 
@@ -160,8 +152,7 @@ xenevent_close( dev_t Dev,
 //               struct lwp *Lwp __unused ) // <<< OR...
 //               // struct thread *td __unused)
 {
-    printf( "%s\n", __FUNCTION__ );
-    printf("Closing device \"xenevent\".\n");
+    DEBUG_PRINT("Closing device \"xenevent\".\n");
     return (0);
 }
 
@@ -182,8 +173,8 @@ xenevent_read( dev_t Dev,
 {
     int error = 0;
 
-    printf( "%s\n", __FUNCTION__ );
-    printf( "xenevent_read\n" );
+    DEBUG_PRINT( "%s\n", __FUNCTION__ );
+    DEBUG_PRINT( "here\n" );
     return error;
 }
 
@@ -201,7 +192,8 @@ xenevent_write( dev_t Dev,
 //               int Flag __unused)
 {
     int error = 0;
-    printf( "%s\n", __FUNCTION__ );
-//    printf( __FUNCTION__ "\n" );
+DEBUG_PRINT( "%s\n", __FUNCTION__ );
+DEBUG_BREAK();
+//    DEBUG_PRINT( __FUNCTION__ "\n" );
     return error;
 }

@@ -16,8 +16,12 @@ APPNAME=listdir
 
 ARCHIVES=
 
+all: $(APPNAME).run
+
+
 $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
+	echo "Run with \"sudo $$(which rumprun) xen -i $@\""
 
 $(APPNAME).bin: $(APPNAME).c
 	$(CC) $(CFLAGS) -o $@ $^

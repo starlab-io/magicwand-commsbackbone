@@ -7,6 +7,9 @@
 
 typedef uint32_t status_t;
 
+#define MYDEBUG 1 // -----------------------
+
+
 #ifdef MYDEBUG
 #  define DEBUG_BREAK() asm("int $3\n\t")
 #else
@@ -15,7 +18,9 @@ typedef uint32_t status_t;
 
 #ifdef MYDEBUG
 #  include <sys/cdefs.h> // printf ?
-#  define DEBUG_PRINT(...) printf ( "%s:%d ");printf(__VA_ARGS__)
+#  define DEBUG_PRINT(...) \
+    printf ( "%s:%d ", __FUNCTION__, __LINE__); \
+    printf(__VA_ARGS__)
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG

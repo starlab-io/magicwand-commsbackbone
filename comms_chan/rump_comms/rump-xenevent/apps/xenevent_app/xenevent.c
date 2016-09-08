@@ -16,7 +16,9 @@ int main(void)
         printf( "Failed to open file " XENEVENT_DEVICE "\n" );
         goto ErrorExit;
     }
+    printf( "Successfully opened device %s\n", XENEVENT_DEVICE );
 
+    printf( "Writing %d bytes to device\n", sizeof(data) );    
     size = fwrite( &data, sizeof(data), 1, fp );
 
     printf( "Wrote %d bytes\n", size );
