@@ -1,0 +1,6 @@
+ioconf xenevent
+
+include "conf/files"
+include "rump/dev/files.rump"
+
+pseudo-root xenevent

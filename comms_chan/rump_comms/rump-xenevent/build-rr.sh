@@ -306,7 +306,7 @@ checktools ()
 	[ -z "${BUILDRUMP_HAVE_LLVM}" ] \
 	    || die rumprun does not yet support clang ${CC:+(\$CC: $CC)}
 
-	delay=5
+	delay=0
 
 	# check that gcc is modern enough
 	vers=$(${CC:-cc} -E -dM - < /dev/null | awk '

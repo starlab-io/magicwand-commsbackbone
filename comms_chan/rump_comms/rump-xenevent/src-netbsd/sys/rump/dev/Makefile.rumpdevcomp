@@ -3,7 +3,7 @@
 
 RUMPDEVCOMP=	audio bpf cgd disk dm drvctl fss md netsmb		\
 		pad pud	putter raidframe rnd scsipi sysmon vnd wscons	\
-		opencrypto
+		opencrypto xenevent
 
 RUMPUSBDEVS=	ubt ucom ugenhc ulpt umass usb
 
