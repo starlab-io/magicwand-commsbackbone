@@ -1,0 +1,246 @@
+#!/usr/bin/env sh
+
+#
+# Copyright (c) 2016 Antti Kantee <pooka@fixup.fi>
+# All Rights Reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS
+# OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+
+#
+# Include given files as binary and generate constructor code
+# which loads said files to rumpfs.
+#
+
+set -eu
+
+: ${RUMPRUN_COOKFS_CC:=!LIBEXEC_CC!}
+: ${RUMPRUN_COOKFS_OBJCOPY:=!LIBEXEC_OBJCOPY!}
+: ${RUMPRUN_COOKFS_SIZE:=!LIBEXEC_SIZE!}
+: ${RUMPRUN_COOKFS_INCDIR:=!DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/include}
+
+usage ()
+{
+
+	echo "usage: $0 [-s count] outfile directory ..."
+	exit 1
+}
+
+die ()
+{
+
+	echo ">> ERROR: $*" 2>&1
+	exit 1
+}
+
+nuketmpdir ()
+{
+
+	nukeme="${TMPDIR}"
+	TMPDIR=''
+	rm -rf ${nukeme}
+}
+
+TMPDIR=$(mktemp -d /tmp/rumprun-cookfs.XXXXXX)
+trap nuketmpdir 0 INT TERM
+LINKPATH=${TMPDIR}/linkme
+LINKPATH_BIN="_binary_$(echo ${LINKPATH} | tr '/.-' '_')"
+
+STRIPCOUNT=0
+while getopts "s:" opt; do
+        case "${opt}" in
+	s)
+		STRIPCOUNT=${OPTARG}
+		[ -z "$(echo ${STRIPCOUNT} | tr -d '[0-9]')" ] \
+		    || die argument to -s must be a non-negative decimal
+		;;
+	*)
+		usage
+		;;
+	esac
+done
+shift $((${OPTIND}-1))
+
+[ $# -ge 2 ] || usage
+OUTFILE="$1"
+shift
+
+checkpaths ()
+{
+
+	stripcount=${1}
+	shift
+
+	for sd in "$@"; do
+		arg="${sd}"
+		oIFS="$IFS"
+		IFS=/
+		set -- ${sd}
+		IFS="$oIFS"
+		while [ "$1" = '.' ]; do shift ; done
+		[ $# -ge ${stripcount} ] || \
+		    die cannot remove ${STRIPCOUNT} components from \"${arg}\"
+	done
+}
+
+processfspath ()
+{
+
+	n=$1
+	path=$2
+
+	oIFS="$IFS"
+	IFS=/
+	set -- ${path}
+	while [ "$1" = '.' ]; do shift ; done
+	while [ ${n} -gt 0 ]; do
+		shift
+		n=$((${n}-1))
+	done
+	IFS="$oIFS"
+
+	rpath=
+	while [ $# -gt 0 ]; do
+		rpath="${rpath}$1/"
+		shift
+	done
+
+	echo ${rpath%/} | sed 's/"/\\"/g'
+}
+
+makedirlist ()
+{
+
+	printf 'static const char *dirlist[] = {\n'
+	for sd in "$@"; do
+		for d in $(find ${sd} -type d); do
+			printf '\t"/%s",\n' $(processfspath ${STRIPCOUNT} $d)
+		done
+	done
+	printf '};\n\n'
+}
+
+setfilevars ()
+{
+
+	case $1 in
+	/*)
+		fabs="$1"
+		;;
+	*)
+		fabs="$(pwd)/$1"
+		;;
+	esac
+
+	fn=$((${fn}+1))
+	rf=_rumpfs_f${fn}
+}
+
+processonefile ()
+{
+
+	f="$1"
+
+	setfilevars "$f"
+	ln -sf -- "${fabs}" ${LINKPATH}
+
+	${RUMPRUN_COOKFS_CC} !CFLAGS! !CPPFLAGS! -nostdlib		\
+	    -Wl,-r,-b,binary -o ${TMPDIR}/d${fn}.o ${LINKPATH}
+
+	${RUMPRUN_COOKFS_OBJCOPY}					\
+	    --redefine-sym ${LINKPATH_BIN}_start=${rf}_start		\
+	    --redefine-sym ${LINKPATH_BIN}_size=${rf}_size		\
+	    --strip-symbol ${LINKPATH_BIN}_end				\
+	${TMPDIR}/d${fn}.o
+
+	LSYM="${LSYM} -L ${rf}_start -L ${rf}_size"
+	printf 'extern uint8_t %s_start, %s_size;\n' ${rf} ${rf}
+
+	printf '\t{ "/%s",\n' $(processfspath ${STRIPCOUNT} "${f}") 1>&4
+	printf '\t    { (void *)&%s_start,\n' ${rf} 1>&4
+	printf '\t      (size_t)(uintptr_t)&%s_size} },\n' ${rf} 1>&4
+}
+
+makeelfdata ()
+{
+
+	fn=0
+	LSYM=
+	for sd in "$@"; do
+		for f in $(find "${sd}" -type f); do
+			processonefile "$f"
+		done
+	done
+	printf '\n'
+
+}
+
+printhead ()
+{
+
+	printf 'static struct rumprun_extfile files[] = {\n' 1>&4
+
+	printf '#include <sys/types.h>\n\n'
+	printf '#include <rumprun/platefs.h>\n\n'
+}
+
+printtail ()
+{
+
+	cat ${TMPDIR}/filelist.c
+
+	printf '};\n'
+	printf 'static void __attribute__((constructor))\n'
+	printf 'rumpfs_externatilize(void)\n'
+	printf '{\n\n'
+	printf '\trumprun_platefs(dirlist, __arraycount(dirlist),\n'
+	printf '\t    files, __arraycount(files));\n'
+	printf '}\n'
+}
+
+IFS='
+'
+
+checkpaths ${STRIPCOUNT} "$@"
+
+exec 3>&1 1>${TMPDIR}/constr.c 4>${TMPDIR}/filelist.c
+printhead
+makedirlist "$@"
+makeelfdata "$@"
+exec 4>&-
+printtail
+exec 1>&3 3>&-
+
+unset IFS
+
+${RUMPRUN_COOKFS_CC} !CFLAGS! !CPPFLAGS! -I${RUMPRUN_COOKFS_INCDIR}	\
+    -nostdlib -Wl,-r -o ${TMPDIR}/fin.o ${TMPDIR}/d*.o ${TMPDIR}/constr.c
+${RUMPRUN_COOKFS_OBJCOPY} ${LSYM} ${TMPDIR}/fin.o ${OUTFILE}
+
+totsize=$(${RUMPRUN_COOKFS_SIZE} ${OUTFILE} | awk 'NR == 2{print $4}')
+if [ ${totsize} -gt $((1024*1024)) ]; then
+	echo ">> WARNING: cookfs images will be loaded into memory." 2>&1
+	echo ">> Maximum recommended size is 1024 kB." 2>&1
+	echo ">> Your image memory footprint is $((${totsize}/1024)) kB." 2>&1
+fi
+
+exit 0

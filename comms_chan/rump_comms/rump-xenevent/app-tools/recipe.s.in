@@ -1,0 +1,13 @@
+.section ".note.rumprun.bakerecipe", "a"
+	.p2align 2
+	.long 1f - 0f
+	.long 3f - 2f
+	.long 0x00000101
+0:	.asciz "rumpkernel.org"
+1:	.p2align 2
+2:	.asciz "rumprun_tuple: !TOOLTUPLE!"
+	.asciz "rumprun_tooldir: !DESTDIR!"
+	.asciz "rumprun_backingcc: !LIBEXEC_CC!"
+	/* XXX: cc frontend cflags should not be here */
+	.asciz "rumprun_cflags: !CFLAGS!"
+3:	.p2align 2

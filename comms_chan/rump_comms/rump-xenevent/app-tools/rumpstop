@@ -1,0 +1,33 @@
+#!/bin/sh
+
+die ()
+{
+        echo ">> ERROR:" 1>&2
+	echo ">> $@" 1>&2
+        exit 1
+}
+
+unset sudo
+if [ "$1" = '-S' ]; then
+        shift
+        [ $(id -u) -ne 0 ] && sudo=sudo
+fi
+
+[ $# -eq 1 ] || die usage: rumpstop guest_spec
+
+stack=${1%%:*}
+guest=${1#*:}
+
+case "${stack}" in
+qemu)
+	kill ${guest}
+	;;
+xen)
+	${sudo} xl destroy ${guest}
+	;;
+*)
+	die invalid stack spec \"${stack}\"
+	;;
+esac
+
+exit $?
