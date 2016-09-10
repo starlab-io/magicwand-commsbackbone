@@ -12,6 +12,9 @@
 CPPFLAGS += -I../../../../../../../platform/xen/xen/include
 CPPFLAGS += -I../../../../../../../include
 
+# Search host xen includes, such that <xen/xen.h> can be included
+CPPFLAGS += -Ixen
+
 # Only install includes which are used by userland
 #INCS=	mbppio.h
 

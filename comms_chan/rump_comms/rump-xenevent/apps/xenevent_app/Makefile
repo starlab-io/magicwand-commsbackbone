@@ -5,7 +5,7 @@
 ##
 
 CC=x86_64-rumprun-netbsd-gcc 
-CFLAGS=-ggdb -I../platform/xen/xen/include
+CFLAGS=-ggdb -I../platform/xen/xen/include -I..
 
 #BAKE=/bin/bash -v rumprun-bake
 BAKE=rumprun-bake
@@ -20,7 +20,8 @@ all: $(APPNAME).run
 
 $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
-	echo "Run with \"sudo $$(which rumprun) xen -i $@\""
+	@echo "Run    rumprun -S xen -di $@"
+	@echo " or    rumprun -S xen -dip -D 1234 $@"
 
 $(APPNAME).bin: $(APPNAME).c
 	$(CC) $(CFLAGS) -o $@ $^

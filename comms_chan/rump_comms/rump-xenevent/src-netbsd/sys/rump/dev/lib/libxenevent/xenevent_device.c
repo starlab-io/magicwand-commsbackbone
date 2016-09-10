@@ -4,38 +4,38 @@
 //__KERNEL_RCSID(0, "$NetBSD: rndpseudo.c,v 1.35 2015/08/20 14:40:17 christos Exp $");
 
 #if defined(_KERNEL_OPT)
-#include "opt_compat_netbsd.h"
+#   include "opt_compat_netbsd.h"
 #endif
 
 #include <sys/param.h>
 #include <sys/atomic.h>
 #include <sys/conf.h>
 //#include <sys/cprng.h>
-#include <sys/cpu.h>
+//#include <sys/cpu.h>
 #include <sys/evcnt.h>
-#include <sys/fcntl.h>
-#include <sys/file.h>
-#include <sys/filedesc.h>
-#include <sys/ioctl.h>
-#include <sys/kauth.h>
+//#include <sys/fcntl.h>
+//#include <sys/file.h>
+//#include <sys/filedesc.h>
+//#include <sys/ioctl.h>
+//#include <sys/kauth.h>
 #include <sys/kernel.h>
 #include <sys/kmem.h>
 #include <sys/kthread.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/percpu.h>
+//#include <sys/percpu.h>
 #include <sys/poll.h>
 #include <sys/pool.h>
-#include <sys/proc.h>
-#include <sys/rnd.h>
+//#include <sys/proc.h>
+//#include <sys/rnd.h>
 #include <sys/rndpool.h>
 #include <sys/rndsource.h>
 #include <sys/select.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
+#include <sys/systm.h> // printf
 
-#include <sys/vnode.h>
+//#include <sys/vnode.h> 
 
 #include <sys/vfs_syscalls.h>
 
@@ -58,15 +58,83 @@ static dev_type_write( xenevent_write );
 
 
 // Character device entry points 
-static struct cdevsw xenevent_cdevsw = {
+static struct cdevsw
+xenevent_cdevsw = {
     .d_open    = xenevent_open,
     .d_close   = xenevent_close,
     .d_read    = xenevent_read,
     .d_write   = xenevent_write,
+
+    .d_ioctl   = noioctl,
+    .d_stop    = nostop,
+    .d_tty     = notty,
+    .d_poll    = nopoll,
+    .d_mmap    = nommap,
+    .d_kqfilter = nokqfilter,
+    .d_discard = nodiscard,
+    .d_flag    = D_OTHER | D_MPSAFE
 };
 
 
-//dev_type_open( xenevent_open );
+
+// From
+// http://stackoverflow.com/questions/7775991/how-to-get-hexdump-of-a-structure-data
+void
+hex_dump( const char *desc, void *addr, int len )
+{
+#ifdef MYDEBUG
+    int i;
+    unsigned char buff[17];
+    unsigned char *pc = (unsigned char*)addr;
+
+    // Output description if given.
+    if (desc != NULL)
+        printf ("%s:\n", desc);
+
+    if (len == 0) {
+        printf("  ZERO LENGTH\n");
+        return;
+    }
+    if (len < 0) {
+        printf("  NEGATIVE LENGTH: %i\n",len);
+        return;
+    }
+
+    // Process every byte in the data.
+    for (i = 0; i < len; i++) {
+        // Multiple of 16 means new line (with line offset).
+
+        if ((i % 16) == 0) {
+            // Just don't print ASCII for the zeroth line.
+            if (i != 0)
+                printf ("  %s\n", buff);
+
+            // Output the offset.
+            printf ("  %04x ", i);
+        }
+
+        // Now the hex code for the specific character.
+        printf (" %02x", pc[i]);
+
+        // And store a printable ASCII character for later.
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e))
+            buff[i % 16] = '.';
+        else
+            buff[i % 16] = pc[i];
+        buff[(i % 16) + 1] = '\0';
+    }
+
+    // Pad out last line if not exactly 16 characters.
+    while ((i % 16) != 0) {
+        printf ("   ");
+        i++;
+    }
+
+    // And print the final ASCII bit.
+    printf ("  %s\n", buff);
+#endif // MYDEBUG
+}
+
 
 int
 xenevent_device_init( void )
@@ -78,7 +146,7 @@ xenevent_device_init( void )
     // See 
     /*error = config_init_component(cfdriver_ioconf_dtv,
 		    cfattach_ioconf_dtv, cfdata_ioconf_dtv);
-		if (error)
+                    if (error)
 			return error;
 		error = devsw_attach("dtv", NULL, &bmaj, &dtv_cdevsw, &cmaj);
 		if (error)
@@ -86,7 +154,6 @@ xenevent_device_init( void )
 			    cfattach_ioconf_dtv, cfdata_ioconf_dtv);
                             return error; */
 
-DEBUG_BREAK();
     err = devsw_attach( DEVICE_NAME,
                         NULL,
                         &bmaj,
@@ -98,17 +165,19 @@ DEBUG_BREAK();
         goto ErrorExit;
     }
 
-    err = rump_vfs_makedevnodes( S_IFCHR,
-                                 DEVICE_PATH,
-                                 0,
-                                 cmaj,
-                                 0,
-                                 1 );
+// Make the character device
+
+    err = rump_vfs_makeonedevnode( S_IFCHR,
+                                   DEVICE_PATH,
+                                   cmaj,
+                                   0 );
     if ( 0 != err )
     {
         MYASSERT( !"Failed to create control device" );
         goto ErrorExit;
     }
+
+    DEBUG_BREAK();
 
 ErrorExit:
     return err;
@@ -173,8 +242,11 @@ xenevent_read( dev_t Dev,
 {
     int error = 0;
 
-    DEBUG_PRINT( "%s\n", __FUNCTION__ );
-    DEBUG_PRINT( "here\n" );
+    for ( int i = 0; i < Uio->uio_iovcnt; i++ )
+    {
+        DEBUG_PRINT( "Read request: %d bytes at %p\n",
+                     (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
+    }
     return error;
 }
 
@@ -192,8 +264,15 @@ xenevent_write( dev_t Dev,
 //               int Flag __unused)
 {
     int error = 0;
-DEBUG_PRINT( "%s\n", __FUNCTION__ );
-DEBUG_BREAK();
-//    DEBUG_PRINT( __FUNCTION__ "\n" );
+
+    for ( int i = 0; i < Uio->uio_iovcnt; i++ )
+    {
+        DEBUG_PRINT( "Write request: %d bytes at %p\n",
+                     (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
+        hex_dump( "Write request",
+                  Uio->uio_iov[i].iov_base, (int)Uio->uio_iov[i].iov_len );
+    }
+    
+    DEBUG_BREAK();
     return error;
 }

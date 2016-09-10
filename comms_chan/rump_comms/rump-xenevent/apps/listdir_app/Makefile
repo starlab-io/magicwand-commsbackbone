@@ -21,7 +21,8 @@ all: $(APPNAME).run
 
 $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
-	echo "Run with \"sudo $$(which rumprun) xen -i $@\""
+	@echo "Run    rumprun -S xen -di $@"
+	@echo " or    rumprun -S xen -dip -D 1234 $@"
 
 $(APPNAME).bin: $(APPNAME).c
 	$(CC) $(CFLAGS) -o $@ $^
