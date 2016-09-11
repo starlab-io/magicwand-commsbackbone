@@ -1,11 +1,3 @@
-#INCSDIR= /usr/include/xen
-#INCSDIR= ../../../../platform/xen/xen/include
-
-#INCSDIR= ../../../../../../platform/xen/xen/include
-#INCSDIR  = "${TOPRUMP}/../../platform/xen/xen/include"
-#INCSDIR += "${.CURDIR}/platform/xen/xen/include"
-#INCSDIR += "${.CURDIR}/include"
-
 # This is run from the build directory, like:
 #  <RUMPRUNROOT>/obj-amd64-xen-mwdriver/buildrump.sh/sys/rump/dev/lib/libxenevent$
 # Therefore we actually have to go up the directory tree this far.
@@ -15,11 +7,8 @@ CPPFLAGS += -I../../../../../../../include
 # Search host xen includes, such that <xen/xen.h> can be included
 CPPFLAGS += -Ixen
 
-# Only install includes which are used by userland
-#INCS=	mbppio.h
-
-#	$NetBSD: Makefile,v 1.5 2016/01/26 23:12:14 pooka Exp $
-#
+# Definitely do NOT define this. It breaks the build.
+#CPPFLAGS+= -D__RUMP_KERNEL__
 
 .PATH:	${.CURDIR}/../../../../dev
 
@@ -30,6 +19,9 @@ IOCONF= XENEVENT.ioconf
 
 SRCS=	xenevent.c xen_comms.c xenevent_device.c
 
+# Do not rename symbols with these prefixes
+# Compare to list in platform/xen/librumpxen_xendev/Makefile
+RUMP_SYM_NORENAME=xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text
+
 .include <bsd.lib.mk>
-#.include <bsd.kinc.mk>
 .include <bsd.klinks.mk>

@@ -4,7 +4,7 @@
 #define DEVICE_NAME "xe"
 #define DEVICE_PATH "/dev/xe"
 
-#include <sys/stdint.h>
+//#include <sys/stdint.h>
 #include <sys/stdbool.h> // bool, true, false
 
 typedef uint32_t status_t;
@@ -28,13 +28,23 @@ typedef uint32_t status_t;
 #define MYDEBUG 1 // -----------------------
 
 //
+// By default, these macros will use printf. If the user cannot define
+// printf due to header file conflicts, then the user must define
+// DEBUG_PRINT_FUNCTION to the symbol that should be used.
+//
+
+#ifndef DEBUG_PRINT_FUNCTION
+#   define DEBUG_PRINT_FUNCTION printf
+#endif
+
+//
 // These macros make use of printf, which the user must define. One
 // place it is defined is sys/systm.h. We don't do it here due to
 // symbol collisions.
 //
 #ifdef MYDEBUG
 #  define DEBUG_BREAK() \
-    printf ( "%s:%d paused\n", __FUNCTION__, __LINE__); \
+    DEBUG_PRINT_FUNCTION ( "%s:%d paused\n", __FUNCTION__, __LINE__); \
     asm("int $3\n\t")
 #else
 #  define DEBUG_BREAK() ((void)0)
@@ -42,8 +52,8 @@ typedef uint32_t status_t;
 
 #ifdef MYDEBUG
 #  define DEBUG_PRINT(...) \
-    printf ( "%s:%d ", __FUNCTION__, __LINE__); \
-    printf(__VA_ARGS__)
+    DEBUG_PRINT_FUNCTION ( "%s:%d ", __FUNCTION__, __LINE__); \
+    DEBUG_PRINT_FUNCTION(__VA_ARGS__)
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG

@@ -177,6 +177,8 @@ xenevent_device_init( void )
         goto ErrorExit;
     }
 
+    err = xen_comms_init();
+    
     DEBUG_BREAK();
 
 ErrorExit:

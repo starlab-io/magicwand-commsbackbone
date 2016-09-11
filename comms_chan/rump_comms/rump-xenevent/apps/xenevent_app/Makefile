@@ -18,10 +18,15 @@ ARCHIVES=
 
 all: $(APPNAME).run
 
+# We call rumprun-bake in the most annoying manner possible;
+# but it shows exactly what the bake script is doing
 $(APPNAME).run: $(APPNAME).bin
-	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
+	bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 	@echo "Run    rumprun -S xen -di $@"
-	@echo " or    rumprun -S xen -dip -D 1234 $@"
+	@echo "Debug with:"
+	@echo " rumprun -S xen -dip -D 1234 $@"
+	@echo "and"
+	@echo " gdb -ex 'target remote:1234' $@"
 
 $(APPNAME).bin: $(APPNAME).c
 	$(CC) $(CFLAGS) -o $@ $^
