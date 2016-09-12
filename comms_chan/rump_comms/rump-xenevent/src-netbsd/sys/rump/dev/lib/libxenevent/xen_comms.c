@@ -4,48 +4,20 @@
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
-/*
-#include <bmk-rumpuser/core_types.h>
+//
+// This code relies heavily on minios. Note in particular:
+//
+// minios must export the symbols we need here. This means that the
+// symbols we use must be covered by the prefixes found in
+// platform/xen/xen/Makefile in the GLOBAL_PREFIXES variable.
+//
+// The symbols we use must not be mangled by the Rump build
+// system. Look at RUMP_SYM_NORENAME in this library's Makefile for
+// details.
+//
 
-#include <mini-os/types.h>
-#include <mini-os/hypervisor.h>
-#include <mini-os/kernel.h>
-
-#include <mini-os/xenbus.h> // xenbus_transaction_start
-#include <xen/xen.h>
-*/
-
-//#include <dlfcn.h>
-/*
-// Maintain all state here for future flexibility
-typedef struct _xen_comm_state
-{
-    bool g_comms_established;
-
-    // alter only via interlocked operations - sys/atomic.h
-    uint32_t handle_ct; 
-
-    // Some sort of mutex here vvvv
-    
-} xen_comm_state;
-*/
-
-
-//static xen_comm_state g_state;
 
 #include <sys/stdint.h>
-////////////////////////////////////////////////////
-
-// offer_accept_gnt.c
-
-
-//#include <
-//#include <mini-os/machine/limits.h> // PAGE_SIZE
-//#include <mini-os/mm.h>
-//#include <mini-os/offer_accept_gnt.h>
-
-
-
 
 #include <mini-os/types.h>
 #include <xen/xen.h>
@@ -78,6 +50,22 @@ typedef struct _xen_comm_state
 #define DEBUG_PRINT_FUNCTION minios_printk
 #include "xenevent_common.h"
 #include "xen_comms.h"
+
+#if 0
+// Maintain all state here for future flexibility
+typedef struct _xen_comm_state
+{
+    bool g_comms_established;
+
+    // alter only via interlocked operations - sys/atomic.h
+    uint32_t handle_ct; 
+
+    // Some sort of mutex here vvvv
+    
+} xen_comm_state;
+
+static xen_comm_state g_state;
+#endif
 
 int  offer_accept_gnt_init(void);
 void offer_accept_gnt_fini(void);
@@ -180,9 +168,8 @@ int write_to_key(const char *path, const char *value)
 	int                  res;
 
 	res = 0;
-	err = xenbus_transaction_start(&txn);
-//	(void)xenbus_transaction_start(&txn);
 
+        err = xenbus_transaction_start(&txn);
 	if (err) {
             minios_printk("\tError. xenbus_transaction_start(): %s\n", err);
 		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
@@ -278,16 +265,12 @@ static grant_ref_t offer_grant(unsigned int domu_client_id)
 
 	bmk_memset(server_page, 0, PAGE_SIZE);	
     	bmk_memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
-// not found during compilation!
-        // xen_comms.c:282: undefined reference to `rumpns__minios_phys_to_machine_mapping'
+
     	mfn = virt_to_mfn(server_page);
     	minios_printk("\tBase Frame: %x\n", mfn);
 
-        // not found during linking
-        // librumpdev_xenevent.a(xen_comms.o): In function `offer_grant':
-// /home/matt/projects/magicwand-commsbackbone/comms_chan/rump_comms/rump-xenevent/src-netbsd/sys/rump/dev/lib/libxenevent/xen_comms.c:285: undefined reference to `gnttab_grant_access'
-//	ref = gnttab_grant_access(domu_client_id, mfn, 0);
-        ref = 0;
+	ref = gnttab_grant_access(domu_client_id, mfn, 0);
+
     	minios_printk("\tGrant Ref for Interdomain: %u\n", ref);
 
 	return ref;
