@@ -13,11 +13,11 @@ CPPFLAGS += -Ixen
 .PATH:	${.CURDIR}/../../../../dev
 
 LIB=	rumpdev_xenevent
-COMMENT=Magicwand support for communication with Xen via /dev/xenevent
+COMMENT=Magicwand support for communication with xenevents device via /dev/xe
 
 IOCONF= XENEVENT.ioconf
 
-SRCS=	xenevent.c xen_comms.c xenevent_device.c
+SRCS=	xenevent.c xen_comms.c xenevent_device.c xenevent_netbsd.c
 
 # Do not rename symbols with these prefixes
 # Compare to list in platform/xen/librumpxen_xendev/Makefile

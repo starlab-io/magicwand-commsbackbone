@@ -15,6 +15,11 @@
 // system. Look at RUMP_SYM_NORENAME in this library's Makefile for
 // details.
 //
+// Include files come from
+// platform/xen/xen/include/mini-os
+// platform/xen/xen/include/xen
+// include/bmk-core
+//
 
 
 #include <sys/stdint.h>
@@ -30,7 +35,6 @@
 #else
 #error "Unsupported architecture"
 #endif
-// ^^^^ instead of offer_accept_gnt.h ^^^^^^
 
 // from offer_accept_gnt.c
 #include <xen/sched.h>
@@ -40,6 +44,7 @@
 #include <mini-os/mm.h>
 #include <mini-os/gnttab.h>
 #include <mini-os/gntmap.h>
+#include <mini-os/semaphore.h>
 
 #include <bmk-core/string.h>
 #include <bmk-core/printf.h>
@@ -51,717 +56,734 @@
 #include "xenevent_common.h"
 #include "xen_comms.h"
 
-#if 0
+
+//
+// The number of slots for read events. This defines the maximum
+// number of concurrent reads we can handle within our system.
+//
+#define MAX_READ_EVENTS 64
+
+
+//
+// Associate an outstanding read with an anticipated Xen event.
+//
+typedef struct _xen_read_event
+{
+    // Use this only with interlocked operations,
+    // e.g. synch_cmpxchg(ptr,old,new) from os.h
+    uint32_t in_use;
+    
+    event_id_t id;
+    
+    void * dest_mem;
+    size_t dest_sz;
+    size_t data_received;
+    // kmutex over in xenevent_netbsd module
+    //void * mutex;
+
+    // mini-os/semaphore.h
+    struct semaphore mutex;
+    
+//    struct _xen_read_event * prev;
+//    struct _xen_read_event * next;
+} xen_read_event_t;
+
 // Maintain all state here for future flexibility
 typedef struct _xen_comm_state
 {
-    bool g_comms_established;
+    bool comms_established;
 
     // alter only via interlocked operations - sys/atomic.h
-    uint32_t handle_ct; 
+    uint32_t handle_ct;
 
-    // Some sort of mutex here vvvv
+    xen_read_event_t read_events[ MAX_READ_EVENTS ];
     
-} xen_comm_state;
+    // Access protection for the linked list
+//    void * read_events_lock;
 
-static xen_comm_state g_state;
-#endif
+    // How many reads are occuring currently
+    uint32_t outstanding_reads;
 
-int  offer_accept_gnt_init(void);
-void offer_accept_gnt_fini(void);
+    // Shared memory
+    void *server_page;
+    void *client_page;
 
-/************************************
-*
-* XenStore Keys and Specs 
-*
-*************************************/
-/* DomId max digit width */ 
-#define MAX_DOMID_WIDTH           5
-/* Grant ref max digit width */ 
-#define MAX_GNT_REF_WIDTH         15
-/* Default key reset value */
-#define KEY_RESET_VAL             "0"
-/* Define out-of-band keys */
-#define SERVER_ID_PATH            "/unikernel/random/server_id" 
-#define CLIENT_ID_PATH            "/unikernel/random/client_id" 
-#define PRIVATE_ID_PATH           "domid"
-#define GRANT_REF_PATH            "/unikernel/random/gnt_ref"
-#define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
-#define EVT_CHN_PRT_PATH          "/unikernel/random/evt_chn_port"
-#define LOCAL_PRT_PATH            "/unikernel/random/client_local_port"
+    // Event channel page
+    void *event_channel_page;
 
-/************************************
-*
-*  Grant Mapping Variables 
-*
-*************************************/
-/* Default Nmbr of Grant Refs */
-#define DEFAULT_NMBR_GNT_REF      1
-/* Default Stride */
-#define DEFAULT_STRIDE            1
-/* Write access to shared mem */
-#define WRITE_ACCESS_ON           1
-/* First Domain Slot */
-#define FIRST_DOM_SLOT            0 
-/* First Grant Ref */
-#define FIRST_GNT_REF             0 
+    // Event channel local port
+    evtchn_port_t local_event_port;
 
-/************************************
-*
-* Test Message Variables and Specs 
-*
-*************************************/
-/* Test Message Size */
-#define TEST_MSG_SZ               64
-/* Max Message Width  */
-#define MAX_MSG_WIDTH             5
-/* Test Message */
-#define TEST_MSG                  "The abyssal plain is flat.\n"
+    // Grant map 
+    struct gntmap *gntmap_map;
+    
+} xen_comm_state_t;
 
-/*
-* For testing purposes, the same module is used 
-* both as a server and client. 
-* IS_SERVER 1 ==> Server Mode
-* IS_SERVER 0 ==> Client Mode
-*
-* Toggling this variable and recompiling the 
-* unikernel generates a server or a client. In 
-* testing the server comes up first, so it is 
-* compiled and spun up first.  The client comes up 
-* second, so it is compiled and spun up second. 
-* When this ordering is followed, the server and 
-* client follow a simple protocol to establish 
-* shared memory between them. 
-*/
-#define IS_SERVER            0 
-
-/* Shared memory */
-static void *server_page;
-static void *client_page;
-
-/* Event channel page */
-static void *evtchn_page;
-
-/* Event channel local port */
-static evtchn_port_t local_evtchn_prt;
-
-/* Grant map */
-static struct gntmap *gntmap_map;
+static xen_comm_state_t g_state;
 
 
-/* Key writer utility function
-*
-*  path -  Specifies path to XenStore key where data is written
-*  value - Value to write to XenStore key
-*
-*  return - 0 if successful, or 1 if not
-*/
+//
+// Addition to semaphore.h
+//
+#define init_mutex_locked(m) init_SEMAPHORE( (m), 0 )
 
-int write_to_key(const char *path, const char *value);
-//static
-int write_to_key(const char *path, const char *value)
+static void
+xe_comms_mutex_acquire( struct semaphore * m )
 {
-
-	xenbus_transaction_t txn;
-	int                  retry;
-	char                *err;
-	int                  res;
-
-	res = 0;
-
-        err = xenbus_transaction_start(&txn);
-	if (err) {
-            minios_printk("\tError. xenbus_transaction_start(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-		return 1;
-	}
-	
-	err = xenbus_write(txn, path, value);
-	if (err) {
-		minios_printk("\tError. xenbus_write(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-		res = 1;
-	} 
-
-	err = xenbus_transaction_end(txn, 0, &retry);
-	if (err) {
-		minios_printk("\tError. xenbus_transaction_read(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-		return 1;
-	}
-
-	return res;
+    DEBUG_PRINT( "Mutex %p: acquiring\n", m );
+    down( (m) );
+    DEBUG_PRINT( "Mutex %p: acquired\n", m );
 }
 
-
-/* Key reader utility function 
-*
-*  path - Path to XenStore key where data is read
-*
-*  return - Dynamically allocated memory where 
-*           value for key is stored, if successful.
-*           If not, the function returns a NULL pointer. 
-*
-*  note   - Caller is responsible for freeing char pointer
-            upon successful execution.
-*             
-*/
-static char *read_from_key(const char *path)
+static void
+xe_comms_mutex_release( struct semaphore * m )
 {
-	xenbus_transaction_t txn;
-	char                *cfg;
-	int                  retry;
-	char                *err;
-
-	cfg = NULL;
-
-	err = xenbus_transaction_start(&txn);
-	if (err) {
-		minios_printk("\tError. xenbus_transaction_start(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-                DEBUG_BREAK();
-		return NULL;
-	}
-	
-	err = xenbus_read(txn, path, &cfg);
-	if (err) {
-		minios_printk("\tError. xenbus_read(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-	}
-
-	err = xenbus_transaction_end(txn, 0, &retry);
-	if (err) {
-		minios_printk("\tError. xenbus_transaction_read(): %s\n", err);
-		bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-	}
-	/* 
-	 * When there is an error on xenbus_read(), cfg is NULL ==> 
-	 * Function returns NULL
-	*/
-	return cfg;
+    up( (m) );
+    DEBUG_PRINT( "Mutex %p: released\n", m );
 }
 
-/* Server-side function that grants a page of memory 
-*  to share with the client. 
-*
-*  domu_client_id - Domain Id of the client
-*
-*  return - Grant reference to shared memory
-*/
-static grant_ref_t offer_grant(unsigned int domu_client_id)
+static void
+xe_comms_enable_events( evtchn_port_t Port )
 {
-    	unsigned long  mfn;
-	grant_ref_t    ref;
-
-
-	server_page = bmk_pgalloc_one();
-
-	if (!server_page) {
-		return 0;
-		minios_printk("\tFailed to alloc page\n");
-	}
-
-    	minios_printk("\tServer page address: %p\n", server_page);
-
-	bmk_memset(server_page, 0, PAGE_SIZE);	
-    	bmk_memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
-
-    	mfn = virt_to_mfn(server_page);
-    	minios_printk("\tBase Frame: %x\n", mfn);
-
-	ref = gnttab_grant_access(domu_client_id, mfn, 0);
-
-    	minios_printk("\tGrant Ref for Interdomain: %u\n", ref);
-
-	return ref;
+   minios_unmask_evtchn( Port );
 }
 
-static void read_from_dedicated_channel(void)
+static void
+xe_comms_disable_events( evtchn_port_t Port )
 {
-	unsigned char              read_buf[TEST_MSG_SZ];
-    	char                      *err;
-	int                        res;
-    	char                      *msg;
-	unsigned int               msg_len;
-    	struct xenbus_event_queue  events;
-	unsigned int               count;
-
-    	xenbus_event_queue_init(&events);
-	count = 0;
-
-	while (count < 2) {
-
-		/* Wait on Msg Len */
-		xenbus_watch_path_token(XBT_NIL, MSG_LENGTH_PATH, MSG_LENGTH_PATH, &events);
-		while ((err = xenbus_read(XBT_NIL, MSG_LENGTH_PATH, &msg)) != NULL ||  msg[0] == '0') {
-		    bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-		    bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-		    xenbus_wait_for_watch(&events);
-		}
-
-		/* Read in the Message Length */
-		msg = read_from_key(MSG_LENGTH_PATH);
-		if (!msg) {
-			return;
-		}
-		msg_len = bmk_strtoul(msg, NULL, 10);
-		bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-		minios_printk("\tRead Msg Length from Key: %u\n", msg_len);
-
-		if (!client_page) {
-			minios_printk("\Error: Shared Mem Buf is NULL\n");
-			return;
-		}
-
-		bmk_memset(read_buf, 0, msg_len);
-		bmk_memcpy(read_buf, client_page, msg_len);
-
-		minios_printk("\tBuffer: %s\n",read_buf);
-
-		/* Clear value of message length key */
-		res = write_to_key(MSG_LENGTH_PATH, KEY_RESET_VAL);
-		if (res) {
-			return;
-		}
-		
-		count++;
-	}
-
-    	xenbus_unwatch_path_token(XBT_NIL, MSG_LENGTH_PATH, MSG_LENGTH_PATH);
+    minios_mask_evtchn( Port );
 }
 
-/* Client-side function that maps in a page of memory 
-*  granted by the server. 
-*
-*  domu_server_id   - Domain Id of the server 
-*  client_grant_ref - Client grant reference to 
-*                     shared memory
-*  msg_len          - Length of data the server writes
-*                     to shared memory
-*
-*  return - 0 if successful, 1 if not 
-*/
-static int accept_grant(domid_t      domu_server_id, 
-	                grant_ref_t  client_grant_ref,
-			unsigned int msg_len)
+//
+// Finds the first event in the xen_read_event_t array whose in_use
+// field is 0. Performs interlocked check.
+//
+// Return codes:
+//    BMK_EAGAIN - All the slots are busy. The caller should try again.
+//
+static int
+xe_comms_get_next_event_struct( xen_read_event_t ** AvailableEvent )
 {
 
-	uint32_t       count;
-	uint32_t       domids[DEFAULT_NMBR_GNT_REF];
-	int            domids_stride;
-	grant_ref_t    grant_refs[DEFAULT_NMBR_GNT_REF];
-	int            write;
+    int rc = BMK_EBUSY;
+    
+    for ( int i = 0; i < MAX_READ_EVENTS; i++ )
+    {
+    xen_read_event_t * evt = &g_state.read_events[i];
 
-	if (msg_len > PAGE_SIZE)
-		return 1;
-
-	unsigned char  read_buf[TEST_MSG_SZ];
-
-	bmk_memset(read_buf, 0, TEST_MSG_SZ);
-
-	gntmap_map = (struct gntmap *)bmk_pgalloc_one();
-	
-	gntmap_init(gntmap_map);
-
-	count = DEFAULT_NMBR_GNT_REF;
-	domids[FIRST_DOM_SLOT] = domu_server_id;
-	domids_stride = DEFAULT_STRIDE;
-	grant_refs[FIRST_GNT_REF] = client_grant_ref;
-	write = WRITE_ACCESS_ON;
-
-	client_page = (unsigned char *)gntmap_map_grant_refs(gntmap_map,
-		                                      	     count,
-			                                     domids,
-						             domids_stride,
-						             grant_refs,
-						             write);
-	if (!client_page) {
-		minios_printk("\tMapping in the Memory bombed out!\n");
-		return 1;
-	}
-
-	minios_printk("\tShared Mem: %p\n", client_page);
-
-    	bmk_memcpy(read_buf, client_page, msg_len);
-
-	minios_printk("\tBuffer: %s\n",read_buf);
-
-	return 0;
-}
-
-static int run_server(void)
-{
-	unsigned int 		  domid;
-	char                      domid_str[MAX_DOMID_WIDTH];
-    	struct xenbus_event_queue events;
-    	char*                     err;
-    	char*                     msg;
-	int                       res;
-	unsigned int              client_id;
-	grant_ref_t               grant_ref;
-	char                      grant_ref_str[MAX_GNT_REF_WIDTH];
-	char                      msg_len_str[MAX_MSG_WIDTH];
-
-        err = NULL;
-        msg = NULL;
-	client_id = 0;
-	res = 0;
-
-	/* Get DomId for the Server */
-
-	msg = read_from_key(PRIVATE_ID_PATH);
-	if (!msg) {
-		return 1;
-	}
-	domid = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-	minios_printk("\tRead Server DomId from Key: %u\n", domid);
-
-	/* Write Server DomId to Key */
-
-	bmk_memset(domid_str, 0, MAX_DOMID_WIDTH);
-	bmk_snprintf(domid_str, MAX_DOMID_WIDTH, "%u", domid);
-
-	res = write_to_key(SERVER_ID_PATH, domid_str);
-	if (res) {
-		return res;
-	}
-	
-	/* Wait on Client DomId */
-	
-    	xenbus_event_queue_init(&events);
-
-        xenbus_watch_path_token(XBT_NIL, CLIENT_ID_PATH, CLIENT_ID_PATH, &events);
-        while ((err = xenbus_read(XBT_NIL, CLIENT_ID_PATH, &msg)) != NULL ||  msg[0] == '0') {
-            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-            xenbus_wait_for_watch(&events);
+        // Synchronous compare exchange on the in_use field to see if
+        // this element is available. If the field's previous value
+        // was 0, then it is available (and we have taken it).
+        if ( 0 == synch_cmpxchg( &evt->in_use, evt->in_use, 1 ) )
+        //if ( 0 == synch_test_and_set_bit( &evt->in_use, evt->in_use, 1 ) )
+        {
+            // The caller must set the id. Don't leak an old one.
+            evt->id = EVENT_ID_INVALID;
+            *AvailableEvent = evt;
+            DEBUG_PRINT( "Found available event slot: ptr %p, idx %d\n", evt, i );
+            rc = 0;
+            break;
         }
+    }
 
-    	xenbus_unwatch_path_token(XBT_NIL, CLIENT_ID_PATH, CLIENT_ID_PATH);
-
-	minios_printk("\tAction on Client Id key\n");
-	
-	/* Get Client DomId */
-	
-	msg = NULL;
-	msg = read_from_key(CLIENT_ID_PATH);
-	if (!msg) {
-		return 1;
-	}
-	client_id = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-	minios_printk("\tRead Cliient Id from Key: %u\n", client_id);
-	
-	/* Reset Client Id */
-	res = write_to_key(CLIENT_ID_PATH, KEY_RESET_VAL);
-	if (res) {
-		return res;
-	}
-
-	/* Write Message Length */
-	bmk_memset(msg_len_str, 0, MAX_MSG_WIDTH);
-	bmk_snprintf(msg_len_str, MAX_MSG_WIDTH, "%u", TEST_MSG_SZ);
-	
-	res = write_to_key(MSG_LENGTH_PATH, msg_len_str);
-	if (res) {
-		return res;
-	}
-
-	/* Execute the Grant */
-	grant_ref = offer_grant(client_id);
-
-	bmk_memset(grant_ref_str, 0, MAX_GNT_REF_WIDTH);
-	bmk_snprintf(grant_ref_str, MAX_GNT_REF_WIDTH, "%u", grant_ref);
-	
-	/* Set Grant Ref Key */
-	write_to_key(GRANT_REF_PATH, grant_ref_str);
-	if (res) {
-		return res;
-	}
-
-	return 0;
+    return rc;
 }
 
-static void test_handler(evtchn_port_t port, struct pt_regs *regs, void *data)
+static int
+xe_comms_find_event_by_id( event_id_t Id,
+                           xen_read_event_t ** FoundEvent )
 {
-	minios_printk("\tEvent Channel handler called\n");
-	/*minios_wake_up(&blkfront_queue);*/
-}
+    int rc = BMK_ENOENT;
 
-static evtchn_port_t bind_to_interdom_chn(domid_t srvr_id, evtchn_port_t remote_prt_nmbr)
-{
-
-        int           err;
-	evtchn_port_t local_port;
-	char          local_prt_str[MAX_DOMID_WIDTH];
-
-	evtchn_page = bmk_pgalloc_one();
-
-	if (!evtchn_page) {
-    		minios_printk("\tFailed to alloc Event Channel page\n");
-		return 0;
-	}
-    	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
-	bmk_memset(evtchn_page, 0, PAGE_SIZE);	
-
-
-	err = minios_evtchn_bind_interdomain(srvr_id,
-                                             remote_prt_nmbr,
-				             test_handler,
-                                             evtchn_page,
-				             &local_port);
-        if(err) {
-    		minios_printk("\tCould not bind to event channel\n");
-		return 0;
-	}
-
-	minios_printk("\tLocal port for event channel: %u\n", local_port);
-
-	local_evtchn_prt = local_port;	
-
-	minios_unmask_evtchn(local_port);
-	//minios_unmask_evtchn(remote_prt_nmbr);
-
-	bmk_memset(local_prt_str, 0, MAX_DOMID_WIDTH);
-	bmk_snprintf(local_prt_str, MAX_DOMID_WIDTH, "%u", local_port);
-
-	err = write_to_key(LOCAL_PRT_PATH, local_prt_str);
-	if (err) {
-		return 0;
-	}
-	
-	return local_port;
-}
-
-static int run_client(void)
-{
-	domid_t                   domid;
-	char                      domid_str[MAX_DOMID_WIDTH];
-    	char*                     err;
-    	char*                     msg;
-	int                       res;
-	domid_t                   server_id;
-    	struct xenbus_event_queue events;
-	grant_ref_t		  client_grant_ref;
-	unsigned int              msg_len;
-	evtchn_port_t             evt_chn_prt_nmbr;
-
-    	//struct xenbus_event_queue events_2;
-
-        err = NULL;
-        msg = NULL;
-	res = 0;
-	server_id = 0;
-	domid = 0;
-	msg_len = 0;
-
-	/* Get DomId for the Client */
-
-	msg = read_from_key(PRIVATE_ID_PATH);
-	if (!msg) {
-		return 1;
-	}
-	domid = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-	minios_printk("\tRead Client DomId from Key: %u\n", domid);
-
-	/* Write Client DomId to Key */
-
-	bmk_memset(domid_str, 0, MAX_DOMID_WIDTH);
-	bmk_snprintf(domid_str, MAX_DOMID_WIDTH, "%u", domid);
-
-	res = write_to_key(CLIENT_ID_PATH, domid_str);
-	if (res) {
-		return res;
-	}
-	
-	/* Read Server Id from Key */
-
-	msg = read_from_key(SERVER_ID_PATH);
-	if (!msg) {
-		return 1;
-	}
-	server_id = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-	minios_printk("\tRead Server Id from Key: %u\n", server_id);
-	
-	/* Wait on Grant Ref */
-
-    	xenbus_event_queue_init(&events);
-
-        xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
-        while ((err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL ||  msg[0] == '0') {
-            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-            xenbus_wait_for_watch(&events);
+    *FoundEvent = NULL;
+    
+    for ( int i = 0; i < MAX_READ_EVENTS; i++ )
+    {
+        xen_read_event_t * evt = &g_state.read_events[i];
+        if ( Id == evt->id )
+        {
+            *FoundEvent = evt;
+            rc = 0;
+            break;
         }
+    }
 
-    	xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
-
-	minios_printk("\tAction on Grant State Key\n");
-
-	/* Read in Grant Ref */
-
-	msg = read_from_key(GRANT_REF_PATH);
-	if (!msg) {
-		return 1;
-	}
-	client_grant_ref = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-	
-	minios_printk("\tRead Grant Ref from Key: %u\n", client_grant_ref);
-	
-	/* Reset Grant State Key */
-	res = write_to_key(GRANT_REF_PATH, KEY_RESET_VAL);
-	if (res) {
-		return res;
-	}
-
-	/* Read in the Message Length */
-
-	msg = read_from_key(MSG_LENGTH_PATH);
-	if (!msg) {
-		return 1;
-	}
-	msg_len = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-
-	minios_printk("\tRead Msg Length from Key: %u\n", msg_len);
-
-	/* Map the Grant */
-	res =  accept_grant(server_id, 
-		            client_grant_ref,
-			    msg_len); 
-
-	/* Clear value of message length key */
-	res = write_to_key(MSG_LENGTH_PATH, KEY_RESET_VAL);
-	if (res) {
-		return res;
-	}
-
-	/* Read some strings from shared memory */
-	read_from_dedicated_channel();
-
-	/*
-        // Wait for Event Channel Port 
-        xenbus_watch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH, &events);
-        while ((err = xenbus_read(XBT_NIL, EVT_CHN_PRT_PATH, &msg)) != NULL ||  msg[0] == '0') {
-            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-            xenbus_wait_for_watch(&events);
-        }
-
-    	xenbus_unwatch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH);
-
-	minios_printk("\tAction on Event Channel Port Key\n");
-	*/
-
-	/* Read in Event Channel Port */
-
-	msg = read_from_key(EVT_CHN_PRT_PATH);
-	if (!msg) {
-		return 1;
-	}
-	evt_chn_prt_nmbr = bmk_strtoul(msg, NULL, 10);
-	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-	
-	minios_printk("\tRead Event Channel Port from Key: %u\n", evt_chn_prt_nmbr);
-	
-	/*
-	// Reset Event Channel Key 
-	res = write_to_key(EVT_CHN_PRT_PATH, KEY_RESET_VAL);
-	if (res) {
-		return res;
-	}
-	*/
-
-        bind_to_interdom_chn(server_id, evt_chn_prt_nmbr);
-
-	return 0;
+    return rc;
 }
 
-int offer_accept_gnt_init(void)
+
+//
+// Sets the in_use field of the given event to 0, using interlocked
+// function.
+//
+static void
+xe_comms_set_event_available( xen_read_event_t * TargetEvent )
 {
-	/* Initialize the Globals */
-        server_page = NULL;
-	client_page = NULL;
-	gntmap_map = NULL;
-	evtchn_page = NULL;
+    MYASSERT( NULL != TargetEvent );
 
-        local_evtchn_prt = 0;
-	//unbind_all_ports();
-
-	/* Execute mode: Server or Client */
-	if (IS_SERVER == 1) {
-		run_server();
-	} else {
-		run_client();
-	}
-
-	return 0;
+    TargetEvent->id = EVENT_ID_INVALID;
+    (void) synch_cmpxchg( &TargetEvent->in_use, TargetEvent->in_use, 0 );
 }
 
-void offer_accept_gnt_fini(void)
+
+static int
+xe_comms_write_int_to_key( const char * Path,
+                           const int Value );
+
+
+static int
+xe_comms_write_int_to_key( const char * Path,
+                           const int Value )
 {
-	if(gntmap_map) {
-		gntmap_fini(gntmap_map);	
-    		bmk_memfree(gntmap_map, BMK_MEMWHO_WIREDBMK);
-	}
+    xenbus_transaction_t    txn;
+    int                   retry;
+    char                   *err;
+    int                     res = 0;
+    char buf[MAX_KEY_VAL_WIDTH];
+    bool             started = false;
 
-	if(server_page)
-    		bmk_memfree(server_page, BMK_MEMWHO_WIREDBMK);
+    bmk_memset( buf, 0, sizeof(buf) );
+    bmk_snprintf( buf, sizeof(buf), "%u", Value );
 
-	if(client_page)
-    		bmk_memfree(client_page, BMK_MEMWHO_WIREDBMK);
+    DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, buf );
+    
+    err = xenbus_transaction_start(&txn);
+    if (err)
+    {
+        MYASSERT( !"xenbus_transaction_start" );
+        goto ErrorExit;
+    }
 
-	
-	minios_printk("\tUnbinding from Local Interdomain Event Channel Port: %u ...\n", local_evtchn_prt);
+    started = true;
+    
+    err = xenbus_write(txn, Path, buf);
+    if (err)
+    {
+        MYASSERT( !"xenbus_transaction_start" );
+        goto ErrorExit;
+    } 
 
-	minios_mask_evtchn(local_evtchn_prt);
-        minios_unbind_evtchn(local_evtchn_prt);
+ErrorExit:
+    if ( err )
+    {
+        res = 1;
+        DEBUG_PRINT( "Failure: %s\n", err );
+        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+    }
 
-	if(evtchn_page)
-    		bmk_memfree(evtchn_page, BMK_MEMWHO_WIREDBMK);
-
+    if ( started )
+    {
+        (void) xenbus_transaction_end(txn, 0, &retry);
+    }
+    
+    return res;
 }
 
+static int
+xe_comms_read_int_from_key( const char *Path,
+                            int * OutVal)
+{
+    xenbus_transaction_t txn;
+    char                *val;
+    int                retry;
+    char                *err;
+    int                  res = 0;
+    bool             started = false;
+    
+    *OutVal = 0;
+        
+    val = NULL;
 
-////////////////////////////////////////////////////
+    err = xenbus_transaction_start(&txn);
+    if (err)
+    {
+        MYASSERT( !"xenbus_transaction_start" );
+        goto ErrorExit;
+    }
+
+    started = true;
+    
+    err = xenbus_read(txn, Path, &val);
+    if (err)
+    {
+        MYASSERT( !"xenbus_read" );
+        goto ErrorExit;
+    }
+
+    *OutVal = bmk_strtoul( val, NULL, 10 );
+
+    DEBUG_PRINT( "Read from xenstore: %s => %s\n", Path, val );
+    
+ErrorExit:
+    if ( err )
+    {
+        res = 1;
+        DEBUG_PRINT( "Failure: %s\n", err );
+        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+    }
+
+    if ( started )
+    {
+        (void) xenbus_transaction_end(txn, 0, &retry);
+    }
+
+    if ( val )
+    {
+        bmk_memfree( val, BMK_MEMWHO_WIREDBMK );
+    }
+    
+    return res;
+}
+
 
 
 int
-xen_comms_init( void )
+xe_comms_read_data( event_id_t Id,
+                    void * Memory,
+                    size_t Size )
 {
     int rc = 0;
 
-    rc = offer_accept_gnt_init();
+    xen_read_event_t * readEvent = NULL;
+//    xen_read_event_t * evtData = NULL;
 
+
+    // There should be no event with the given id. Check this.
+    MYASSERT( BMK_ENOENT == xe_comms_find_event_by_id( Id, &readEvent ) );
+
+    /*
+    // Allocate
+    readEvent = (xen_read_event_t *)
+        bmk_memalloc( sizeof(*readEvent), 0, BMK_MEMWHO_RUMPKERN );
+    if ( NULL == readEvent )
+    {
+        MYASSERT( !"bmk_memalloc" );
+        rc = BMK_ENOMEM;
+        goto ErrorExit;
+    }
+    */
+
+    do
+    {
+        rc = xe_comms_get_next_event_struct( &readEvent );
+        DEBUG_PRINT( "Found available event structure: %p\n", readEvent );
+    } while ( BMK_EBUSY == rc );
+
+    MYASSERT( EVENT_ID_INVALID == readEvent->id );
+    readEvent->id = Id;
+    readEvent->dest_mem = Memory;
+    readEvent->dest_sz  = Size;
+
+    //
+    // Init the mutex and wait on it once, which will return
+    // immediately. Further waits will block.
+    //
+
+    init_mutex_locked( &readEvent->mutex );
+    
+    /*
+    rc = xenevent_mutex_init( &readEvent->mutex );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
     DEBUG_BREAK();
 
+    xenevent_mutex_wait( readEvent->mutex );
+    */
+    DEBUG_BREAK();
+/*
+    // Put the entry in the global list
+    readEvent->prev          = &g_state.read_events;
+    readEvent->next          = g_state.read_events.next;
+
+    if ( g_state.read_events.next )
+    {
+        g_state.read_events.next->prev = readEvent;
+    }
+    g_state.read_events.next       = readEvent;
+*/
+    
+    DEBUG_PRINT( "Traffic 0x%llx waiting on mutex at %p\n",
+                 Id, &readEvent->mutex );
+
+    DEBUG_BREAK();
+    
+    // The entry is in the list. Now it's safe to enable events.
+    if ( 1 == xenevent_atomic_inc( &g_state.outstanding_reads ) )
+    {
+        xe_comms_enable_events( g_state.local_event_port);
+    }
+
+    //
+    // Block this thread until this read event is satisfied by an event callback
+    //
+    //xenevent_mutex_wait( readEvent->mutex );
+
+    xe_comms_mutex_acquire( &readEvent->mutex );
+    DEBUG_PRINT( "Event has arrived and been processed\n" );
+    DEBUG_BREAK();
+
+    //
+    // The thread has passed the block and the read is satisfied. Clean up.
+    //
+    /*
+    readEvent->prev->next = readEvent->next;
+
+    if ( readEvent->next )
+    {
+        readEvent->next->prev = readEvent->prev;
+    }
+    */
+    
+    //
+    // If there are no other outstanding reads, disable event delivery.
+    //
+    if ( 0 == xenevent_atomic_dec( &g_state.outstanding_reads ) )
+    {
+        xe_comms_disable_events( g_state.local_event_port );
+    }
+
+//ErrorExit:
+
+    // Safe to do this unconditionally
+    xe_comms_set_event_available( readEvent );
+
+/*
+  if ( NULL != readEvent )
+    {
+//        if ( NULL != readEvent->mutex )
+//        {
+//            xenevent_mutex_destroy( readEvent->mutex );
+//        }
+        bmk_memfree( readEvent, BMK_MEMWHO_RUMPKERN );
+    }
+*/
     return rc;
 }
 
-int
-xen_comms_register_callback( xen_event_callback_t Callback )
+
+static int
+xe_comms_handle_arrived_data( event_id_t Id )
 {
     int rc = 0;
+//    bool found = false;
+    xen_read_event_t * curr = NULL;
 
+    rc = xe_comms_find_event_by_id( Id, &curr );
+    if ( 0 != rc )
+    {
+        goto ErrorExit;
+    }
+    
+    // Find the ID
+/*
+    xenevent_mutex_wait( g_state.read_events_lock );
+
+    curr = g_state.read_events.next;    
+
+    while ( NULL != curr )
+    {
+        if ( TrafficId == curr->id )
+        {
+            found = true;
+            break;
+        }
+        curr = curr->next;
+    } // while
+
+    if ( !found )
+    {
+        MYASSERT( !"No read event for traffic found" );
+        rc = BMK_ENOENT;
+        goto ErrorExit;
+    }
+*/
+    
+    // TODO: Copy the received data into the waiter's buffer
+    curr->data_received = MIN( curr->dest_sz, sizeof(TEST_MSG) );
+    bmk_memcpy( curr->dest_mem, TEST_MSG, curr->data_received );
+
+    // Release the waiting thread
+    //xenevent_mutex_release( curr->mutex );
+    
+    xe_comms_mutex_release( &curr->mutex );
+    
+ErrorExit:
+//    xenevent_mutex_release( g_state.read_events_lock );
     return rc;
 }
 
 
+/*
+ * Client-side function that maps in a page of memory 
+ *  granted by the server. 
+ *
+ *  domu_server_id   - Domain Id of the server 
+ *  client_grant_ref - Client grant reference to 
+ *                     shared memory
+ *  msg_len          - Length of data the server writes
+ *                     to shared memory
+ *
+ *  return - 0 if successful, 1 if not 
+ */
+static int
+xe_comms_accept_grant(domid_t      domu_server_id, 
+                      grant_ref_t  client_grant_ref)
+{
+    uint32_t       count;
+    uint32_t       domids[DEFAULT_NMBR_GNT_REF];
+    int            domids_stride;
+    grant_ref_t    grant_refs[DEFAULT_NMBR_GNT_REF];
+    int            write;
+
+    unsigned char  read_buf[TEST_MSG_SZ];
+
+    bmk_memset(read_buf, 0, TEST_MSG_SZ);
+
+    g_state.gntmap_map = (struct gntmap *)bmk_pgalloc_one();
+	
+    gntmap_init(g_state.gntmap_map);
+
+    count = DEFAULT_NMBR_GNT_REF;
+    domids[FIRST_DOM_SLOT] = domu_server_id;
+    domids_stride = DEFAULT_STRIDE;
+    grant_refs[FIRST_GNT_REF] = client_grant_ref;
+    write = WRITE_ACCESS_ON;
+
+    g_state.client_page = (unsigned char *)
+        gntmap_map_grant_refs(g_state.gntmap_map,
+                              count,
+                              domids,
+                              domids_stride,
+                              grant_refs,
+                              write);
+    if (NULL == g_state.client_page)
+    {
+        MYASSERT( !"Mapping in the Memory bombed out!\n");
+        return BMK_ENOMEM;
+    }
+
+    DEBUG_PRINT("Shared Mem: %p\n", g_state.client_page);
+
+    return 0;
+}
+
+static void
+xe_comms_event_callback( evtchn_port_t port,
+                         struct pt_regs *regs,
+                         void *data )
+{
+    DEBUG_PRINT("Event Channel %u\n", port );
+    DEBUG_BREAK();
+
+    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
+}
+
+static int
+xe_comms_bind_to_interdom_chn (domid_t srvr_id,
+                               evtchn_port_t remote_prt_nmbr)
+{
+    int err = 0;
+
+    g_state.event_channel_page = bmk_pgalloc_one();
+
+    if (NULL == g_state.event_channel_page)
+    {
+        DEBUG_PRINT("Failed to alloc Event Channel page\n");
+        err = BMK_ENOMEM;
+        goto ErrorExit;
+    }
+    
+    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_page);
+    bmk_memset(g_state.event_channel_page, 0, PAGE_SIZE);	
+
+    // Ports are bound in the masked state
+    // TODO: ^^^ Verify this 
+    err = minios_evtchn_bind_interdomain( srvr_id,
+                                          remote_prt_nmbr,
+                                          xe_comms_event_callback,
+                                          g_state.event_channel_page,
+                                          &g_state.local_event_port );
+    if (err)
+    {
+        MYASSERT(!"Could not bind to event channel\n");
+        goto ErrorExit;
+    }
+    // TODO: race condition between creation and masking ???? ^^^^^
+    xe_comms_disable_events( g_state.local_event_port );
+    
+    DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
+
+    err = xe_comms_write_int_to_key(LOCAL_PRT_PATH, g_state.local_event_port);
+    if (err)
+    {
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+////////////////////////////////////////////////////
+
+//
+// xe_comms_init
+//
+// Initializes the channel to Xen. This means we wait on the remote
+// (the "server") ID and grant reference to appear.
+//
+
 int
-xen_comms_fini( void )
+xe_comms_init( void )
+{
+    int rc = 0;
+    domid_t                   localId = 0;
+    domid_t                   remoteId = 0;
+
+    char*                     err = NULL;
+    char*                     msg = NULL;
+
+    struct xenbus_event_queue events;
+    grant_ref_t	              client_grant_ref = 0;
+    evtchn_port_t             evt_chn_prt_nmbr = 0;
+
+//    MYASSERT( NULL == g_state.read_events.next );
+//    MYASSERT( NULL == g_state.read_events.id );
+
+    bmk_memset( &g_state, 0, sizeof(g_state) );
+/*
+    rc = xenevent_mutex_init( &g_state.read_events_lock );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+*/  
+    //
+    // Init protocol
+    // XXX: update ??
+    //
+
+    // Read our own dom ID
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &localId );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Write our dom ID to agreed-upon path
+    rc = xe_comms_write_int_to_key( CLIENT_ID_PATH, localId );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Wait for the server ID.
+    xenbus_event_queue_init(&events);
+
+    xenbus_watch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH, &events);
+    while ( (rc = xe_comms_read_int_from_key( SERVER_ID_PATH, (int *) &remoteId ) ) != 0
+            || (0 == remoteId) )
+    {
+        DEBUG_PRINT( "Waiting for server to come online\n" );
+        bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        xenbus_wait_for_watch(&events);
+    }
+
+    xenbus_unwatch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH);
+    bmk_memset( &events, 0, sizeof(events) );
+
+    DEBUG_PRINT( "Discovered remote server ID: %u\n", remoteId );
+
+    // Wait for the grant reference
+    xenbus_event_queue_init(&events);
+
+    xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
+    while ( (err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL
+            ||  msg[0] == '0') {
+        bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        xenbus_wait_for_watch(&events);
+    }
+
+    xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
+
+    DEBUG_PRINT("Action on Grant State Key\n");
+
+    // Read in the grant reference
+    rc = xe_comms_read_int_from_key( GRANT_REF_PATH, &client_grant_ref );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+    
+    // Map in the page offered by the remote side
+    rc = xe_comms_accept_grant( remoteId, client_grant_ref );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Get the event port and bind to it
+    rc = xe_comms_read_int_from_key( EVT_CHN_PRT_PATH, &evt_chn_prt_nmbr );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // The event channel starts masked -- no events will be processed
+    // until the first read occurs.
+    rc = xe_comms_bind_to_interdom_chn( remoteId,
+                                        evt_chn_prt_nmbr );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+    
+ErrorExit:
+    return rc;
+}
+
+
+
+int
+xe_comms_fini( void )
 {
     int rc = 0;
 
-//    g_comms_established = false;
+    xe_comms_disable_events( g_state.local_event_port );
+    DEBUG_PRINT("Unbinding from Local Interdomain Event Channel Port: %u ...\n",
+                g_state.local_event_port);
+
+    minios_unbind_evtchn(g_state.local_event_port);
+
+    // ????
+    // minios_unbind_all_ports();
+    
+    if (g_state.event_channel_page)
+    {
+        bmk_memfree(g_state.event_channel_page, BMK_MEMWHO_WIREDBMK);
+    }
+
+    if (g_state.gntmap_map)
+    {
+        gntmap_fini( g_state.gntmap_map );
+        bmk_memfree( g_state.gntmap_map, BMK_MEMWHO_WIREDBMK );
+    }
+
+    if (g_state.server_page)
+    {
+        bmk_memfree(g_state.server_page, BMK_MEMWHO_WIREDBMK);
+    }
+    
+    if (g_state.client_page)
+    {
+        bmk_memfree(g_state.client_page, BMK_MEMWHO_WIREDBMK);
+    }
+
+//    xenevent_mutex_destroy( g_state.read_events_lock );
+
+    bmk_memset( &g_state, 0, sizeof(g_state) );
 
     return rc;
 }

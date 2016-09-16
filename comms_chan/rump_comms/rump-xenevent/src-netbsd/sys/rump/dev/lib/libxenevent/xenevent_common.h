@@ -4,8 +4,22 @@
 #define DEVICE_NAME "xe"
 #define DEVICE_PATH "/dev/xe"
 
-//#include <sys/stdint.h>
 #include <sys/stdbool.h> // bool, true, false
+
+// Basic error codes:
+#include <bmk-core/errno.h>
+// #define BMK_ENOENT              2
+// #define BMK_EIO                 5
+// #define BMK_ENXIO               6
+// #define BMK_E2BIG               7
+// #define BMK_EBADF               9
+// #define BMK_ENOMEM              12
+// #define BMK_EBUSY               16
+// #define BMK_EINVAL              22
+// #define BMK_EROFS               30
+// #define BMK_ETIMEDOUT           60
+// #define BMK_ENOSYS              78
+
 
 typedef uint32_t status_t;
 
@@ -23,7 +37,6 @@ typedef uint32_t status_t;
 #define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
 #define EVT_CHN_PRT_PATH          "/unikernel/random/evt_chn_port"
 #define LOCAL_PRT_PATH            "/unikernel/random/client_local_port"
-
 
 #define MYDEBUG 1 // -----------------------
 
@@ -44,7 +57,7 @@ typedef uint32_t status_t;
 //
 #ifdef MYDEBUG
 #  define DEBUG_BREAK() \
-    DEBUG_PRINT_FUNCTION ( "%s:%d paused\n", __FUNCTION__, __LINE__); \
+    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\tAt breakpoint\n", __FILE__, __LINE__, __FUNCTION__ ); \
     asm("int $3\n\t")
 #else
 #  define DEBUG_BREAK() ((void)0)
@@ -52,7 +65,7 @@ typedef uint32_t status_t;
 
 #ifdef MYDEBUG
 #  define DEBUG_PRINT(...) \
-    DEBUG_PRINT_FUNCTION ( "%s:%d ", __FUNCTION__, __LINE__); \
+    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\t", __FILE__, __LINE__, __FUNCTION__); \
     DEBUG_PRINT_FUNCTION(__VA_ARGS__)
 #else
 #  define DEBUG_PRINT(...) ((void)0)
@@ -69,11 +82,15 @@ typedef uint32_t status_t;
 #  define MYASSERT(...) ((void)0)
 #endif // MYDEBUG
 
-//
-// Symbols that every component can use
-//
-void
-//hex_dump( const char *desc, void *addr, size_t len );
-hex_dump( const char *desc, void *addr, int len );
+#ifndef MIN
+#  define MIN(x, y) ( (x) > (y) ? (y) : (x) )
+#endif // MIN
+
+#ifndef MAX
+#  define MAX(x, y) ( (x) > (y) ? (x) : (y) )
+#endif // MAX
+
+
+#include "xenevent_netbsd.h"
 
 #endif // xenevent_common_h

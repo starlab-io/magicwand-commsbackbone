@@ -50,38 +50,38 @@ static inline void init_SEMAPHORE(struct semaphore *sem, int count)
 
 static inline int trydown(struct semaphore *sem)
 {
-    unsigned long flags;
+    unsigned long lflags;
     int ret = 0;
-    local_irq_save(flags);
+    local_irq_save(lflags);
     if (sem->count > 0) {
         ret = 1;
         sem->count--;
     }
-    local_irq_restore(flags);
+    local_irq_restore(lflags);
     return ret;
 }
 
-static void inline down(struct semaphore *sem)
+static inline void down(struct semaphore *sem)
 {
-    unsigned long flags;
+    unsigned long lflags;
     while (1) {
         minios_wait_event(sem->wait, sem->count > 0);
-        local_irq_save(flags);
+        local_irq_save(lflags);
         if (sem->count > 0)
             break;
-        local_irq_restore(flags);
+        local_irq_restore(lflags);
     }
     sem->count--;
-    local_irq_restore(flags);
+    local_irq_restore(lflags);
 }
 
-static void inline up(struct semaphore *sem)
+static inline void up(struct semaphore *sem)
 {
-    unsigned long flags;
-    local_irq_save(flags);
+    unsigned long lflags;
+    local_irq_save(lflags);
     sem->count++;
     minios_wake_up(&sem->wait);
-    local_irq_restore(flags);
+    local_irq_restore(lflags);
 }
 
 /* FIXME! Thre read/write semaphores are unimplemented! */

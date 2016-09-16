@@ -73,3 +73,10 @@ debugrump() {
 export -f debugrump
 echo "Command debugrump <app> is available"
 
+
+buildtags() {
+    # Build etags for available API
+    find apps include platform/xen/xen src-netbsd/sys/sys src-netbsd/include -name "*.[ch]" -print | etags -
+}
+export -f buildtags
+echo "Command buildtags is available"
