@@ -36,7 +36,6 @@
 #error "Unsupported architecture"
 #endif
 
-// from offer_accept_gnt.c
 #include <xen/sched.h>
 #include <mini-os/xenbus.h>
 #include <mini-os/events.h>
@@ -78,14 +77,16 @@ typedef struct _xen_read_event
     void * dest_mem;
     size_t dest_sz;
     size_t data_received;
-    // kmutex over in xenevent_netbsd module
-    //void * mutex;
 
     // mini-os/semaphore.h
+    //
+    // This is used to communicate between the user-land thread that
+    // is waiting on the read() to complete, and the thread that
+    // handles the incoming Xen event by populating the data in this
+    // structure and releasing the mutex.
+    //
     struct semaphore mutex;
     
-//    struct _xen_read_event * prev;
-//    struct _xen_read_event * next;
 } xen_read_event_t;
 
 // Maintain all state here for future flexibility
@@ -98,9 +99,6 @@ typedef struct _xen_comm_state
 
     xen_read_event_t read_events[ MAX_READ_EVENTS ];
     
-    // Access protection for the linked list
-//    void * read_events_lock;
-
     // How many reads are occuring currently
     uint32_t outstanding_reads;
 
@@ -175,7 +173,6 @@ xe_comms_get_next_event_struct( xen_read_event_t ** AvailableEvent )
         // this element is available. If the field's previous value
         // was 0, then it is available (and we have taken it).
         if ( 0 == synch_cmpxchg( &evt->in_use, evt->in_use, 1 ) )
-        //if ( 0 == synch_test_and_set_bit( &evt->in_use, evt->in_use, 1 ) )
         {
             // The caller must set the id. Don't leak an old one.
             evt->id = EVENT_ID_INVALID;
@@ -336,7 +333,6 @@ ErrorExit:
 }
 
 
-
 int
 xe_comms_read_data( event_id_t Id,
                     void * Memory,
@@ -345,24 +341,14 @@ xe_comms_read_data( event_id_t Id,
     int rc = 0;
 
     xen_read_event_t * readEvent = NULL;
-//    xen_read_event_t * evtData = NULL;
-
 
     // There should be no event with the given id. Check this.
     MYASSERT( BMK_ENOENT == xe_comms_find_event_by_id( Id, &readEvent ) );
 
-    /*
-    // Allocate
-    readEvent = (xen_read_event_t *)
-        bmk_memalloc( sizeof(*readEvent), 0, BMK_MEMWHO_RUMPKERN );
-    if ( NULL == readEvent )
-    {
-        MYASSERT( !"bmk_memalloc" );
-        rc = BMK_ENOMEM;
-        goto ErrorExit;
-    }
-    */
-
+    //
+    // Get an available event. Keep doing it until one is
+    // available. TODO: Find a smarter way to do this... mutex?
+    //
     do
     {
         rc = xe_comms_get_next_event_struct( &readEvent );
@@ -375,39 +361,13 @@ xe_comms_read_data( event_id_t Id,
     readEvent->dest_sz  = Size;
 
     //
-    // Init the mutex and wait on it once, which will return
-    // immediately. Further waits will block.
+    // Prepare the event's mutex, which the Xen event handler will
+    // release. It starts off in an acquired state.
     //
-
     init_mutex_locked( &readEvent->mutex );
-    
-    /*
-    rc = xenevent_mutex_init( &readEvent->mutex );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
-    DEBUG_BREAK();
-
-    xenevent_mutex_wait( readEvent->mutex );
-    */
-    DEBUG_BREAK();
-/*
-    // Put the entry in the global list
-    readEvent->prev          = &g_state.read_events;
-    readEvent->next          = g_state.read_events.next;
-
-    if ( g_state.read_events.next )
-    {
-        g_state.read_events.next->prev = readEvent;
-    }
-    g_state.read_events.next       = readEvent;
-*/
     
     DEBUG_PRINT( "Traffic 0x%llx waiting on mutex at %p\n",
                  Id, &readEvent->mutex );
-
-    DEBUG_BREAK();
     
     // The entry is in the list. Now it's safe to enable events.
     if ( 1 == xenevent_atomic_inc( &g_state.outstanding_reads ) )
@@ -416,10 +376,9 @@ xe_comms_read_data( event_id_t Id,
     }
 
     //
-    // Block this thread until this read event is satisfied by an event callback
+    // Block this thread until this read event is satisfied by an event callback.
     //
-    //xenevent_mutex_wait( readEvent->mutex );
-
+    
     xe_comms_mutex_acquire( &readEvent->mutex );
     DEBUG_PRINT( "Event has arrived and been processed\n" );
     DEBUG_BREAK();
@@ -427,14 +386,6 @@ xe_comms_read_data( event_id_t Id,
     //
     // The thread has passed the block and the read is satisfied. Clean up.
     //
-    /*
-    readEvent->prev->next = readEvent->next;
-
-    if ( readEvent->next )
-    {
-        readEvent->next->prev = readEvent->prev;
-    }
-    */
     
     //
     // If there are no other outstanding reads, disable event delivery.
@@ -444,73 +395,37 @@ xe_comms_read_data( event_id_t Id,
         xe_comms_disable_events( g_state.local_event_port );
     }
 
-//ErrorExit:
-
     // Safe to do this unconditionally
     xe_comms_set_event_available( readEvent );
 
-/*
-  if ( NULL != readEvent )
-    {
-//        if ( NULL != readEvent->mutex )
-//        {
-//            xenevent_mutex_destroy( readEvent->mutex );
-//        }
-        bmk_memfree( readEvent, BMK_MEMWHO_RUMPKERN );
-    }
-*/
     return rc;
 }
 
-
+//
+// xe_comms_handle_arrived_data
+//
+// Invoked by the Xen event callback.
 static int
 xe_comms_handle_arrived_data( event_id_t Id )
 {
     int rc = 0;
-//    bool found = false;
     xen_read_event_t * curr = NULL;
 
+    // Find the ID
     rc = xe_comms_find_event_by_id( Id, &curr );
     if ( 0 != rc )
     {
         goto ErrorExit;
     }
     
-    // Find the ID
-/*
-    xenevent_mutex_wait( g_state.read_events_lock );
-
-    curr = g_state.read_events.next;    
-
-    while ( NULL != curr )
-    {
-        if ( TrafficId == curr->id )
-        {
-            found = true;
-            break;
-        }
-        curr = curr->next;
-    } // while
-
-    if ( !found )
-    {
-        MYASSERT( !"No read event for traffic found" );
-        rc = BMK_ENOENT;
-        goto ErrorExit;
-    }
-*/
-    
-    // TODO: Copy the received data into the waiter's buffer
+    // TODO: Copy the received data into the waiter's buffer.
     curr->data_received = MIN( curr->dest_sz, sizeof(TEST_MSG) );
     bmk_memcpy( curr->dest_mem, TEST_MSG, curr->data_received );
 
     // Release the waiting thread
-    //xenevent_mutex_release( curr->mutex );
-    
     xe_comms_mutex_release( &curr->mutex );
     
 ErrorExit:
-//    xenevent_mutex_release( g_state.read_events_lock );
     return rc;
 }
 
@@ -531,11 +446,12 @@ static int
 xe_comms_accept_grant(domid_t      domu_server_id, 
                       grant_ref_t  client_grant_ref)
 {
-    uint32_t       count;
-    uint32_t       domids[DEFAULT_NMBR_GNT_REF];
-    int            domids_stride;
+    uint32_t       count         = DEFAULT_NMBR_GNT_REF;
+    int            domids_stride = DEFAULT_STRIDE;
+    int            write         = WRITE_ACCESS_ON;;
+
     grant_ref_t    grant_refs[DEFAULT_NMBR_GNT_REF];
-    int            write;
+    uint32_t       domids[DEFAULT_NMBR_GNT_REF];
 
     unsigned char  read_buf[TEST_MSG_SZ];
 
@@ -545,11 +461,8 @@ xe_comms_accept_grant(domid_t      domu_server_id,
 	
     gntmap_init(g_state.gntmap_map);
 
-    count = DEFAULT_NMBR_GNT_REF;
     domids[FIRST_DOM_SLOT] = domu_server_id;
-    domids_stride = DEFAULT_STRIDE;
     grant_refs[FIRST_GNT_REF] = client_grant_ref;
-    write = WRITE_ACCESS_ON;
 
     g_state.client_page = (unsigned char *)
         gntmap_map_grant_refs(g_state.gntmap_map,
@@ -632,7 +545,6 @@ ErrorExit:
 // Initializes the channel to Xen. This means we wait on the remote
 // (the "server") ID and grant reference to appear.
 //
-
 int
 xe_comms_init( void )
 {
@@ -647,17 +559,8 @@ xe_comms_init( void )
     grant_ref_t	              client_grant_ref = 0;
     evtchn_port_t             evt_chn_prt_nmbr = 0;
 
-//    MYASSERT( NULL == g_state.read_events.next );
-//    MYASSERT( NULL == g_state.read_events.id );
-
     bmk_memset( &g_state, 0, sizeof(g_state) );
-/*
-    rc = xenevent_mutex_init( &g_state.read_events_lock );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
-*/  
+
     //
     // Init protocol
     // XXX: update ??
@@ -733,8 +636,7 @@ xe_comms_init( void )
 
     // The event channel starts masked -- no events will be processed
     // until the first read occurs.
-    rc = xe_comms_bind_to_interdom_chn( remoteId,
-                                        evt_chn_prt_nmbr );
+    rc = xe_comms_bind_to_interdom_chn( remoteId, evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
@@ -743,7 +645,6 @@ xe_comms_init( void )
 ErrorExit:
     return rc;
 }
-
 
 
 int
@@ -780,8 +681,6 @@ xe_comms_fini( void )
     {
         bmk_memfree(g_state.client_page, BMK_MEMWHO_WIREDBMK);
     }
-
-//    xenevent_mutex_destroy( g_state.read_events_lock );
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
 

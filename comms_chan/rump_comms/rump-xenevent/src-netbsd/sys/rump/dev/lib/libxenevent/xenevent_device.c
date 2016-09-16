@@ -113,8 +113,6 @@ xe_dev_init( void )
     }
 
     err = xe_comms_init();
-    
-//    DEBUG_BREAK();
 
 ErrorExit:
     return err;
@@ -138,7 +136,7 @@ xe_dev_open( dev_t Dev,
     int error = 0;
     DEBUG_PRINT("Opened device=%p, Flags=%x Fmt=%x Lwp=%p\n",
                 (void *)Dev, Flags, Fmt, Lwp);
-//    DEBUG_BREAK();
+
     return error;
 }
 
@@ -151,7 +149,7 @@ xe_dev_close( dev_t Dev,
     int error = 0;
     DEBUG_PRINT("Closed device=%p, Flags=%xx Fmt=%x Lwp=%p\n",
                 (void *)Dev, Flags, Fmt, Lwp);
-//    DEBUG_BREAK();
+
     return error;
 }
 
@@ -174,22 +172,11 @@ xe_dev_read( dev_t Dev,
     }
 
     DEBUG_BREAK();
-    // If we previously had 0 outstanding reads, then enable events
-//    if ( atomic_inc_32_nv( &g_outstanding_reads ) > 0 )
-//    {
-//        xen_comms_enable_events();
-//    }
     
     // TODO: use a meaningful ID (arg1)
     error = xe_comms_read_data( (event_id_t) 1,
                                 Uio->uio_iov[0].iov_base,
                                 Uio->uio_iov[0].iov_len );
-
-    // If we previously had 0 outstanding reads, then enable events
-//    if ( atomic_inc_32_nv( &g_outstanding_reads ) > 0 )
-//    {
-//        xen_comms_enable_events();
-//    }
 
     
     return error;
