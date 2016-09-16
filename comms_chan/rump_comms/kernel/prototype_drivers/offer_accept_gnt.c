@@ -437,47 +437,51 @@ static void test_handler(evtchn_port_t port, struct pt_regs *regs, void *data)
 
 static evtchn_port_t bind_to_interdom_chn(domid_t srvr_id, evtchn_port_t remote_prt_nmbr)
 {
+	int                       err;
+	evtchn_bind_interdomain_t op;
+	char                      local_prt_str[MAX_DOMID_WIDTH];
 
-        int           err;
-	evtchn_port_t local_port;
-	char          local_prt_str[MAX_DOMID_WIDTH];
+	// Bind to interdomain channel
+	op.remote_dom = srvr_id;
+	op.remote_port = remote_prt_nmbr;
+	err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &op);
+	if (err){
+		minios_printk("ERROR: bind_interdomain failed with return code =%d", err);
+		return 0;
+	}
 
+	// Malloc a page for handler
 	evtchn_page = bmk_pgalloc_one();
 
 	if (!evtchn_page) {
-    		minios_printk("\tFailed to alloc Event Channel page\n");
+		minios_printk("\tFailed to alloc Event Channel page\n");
 		return 0;
 	}
-    	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
-	bmk_memset(evtchn_page, 0, PAGE_SIZE);	
+	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
+	bmk_memset(evtchn_page, 0, PAGE_SIZE);
 
+	// Clear channel of events and unmask
+	minios_clear_evtchn(op.local_port);
+	minios_unmask_evtchn(op.local_port);
 
-	err = minios_evtchn_bind_interdomain(srvr_id,
-                                             remote_prt_nmbr,
-				             test_handler,
-                                             evtchn_page,
-				             &local_port);
-        if(err) {
-    		minios_printk("\tCould not bind to event channel\n");
-		return 0;
-	}
+	// Bind the handler
+	minios_bind_evtchn(op.local_port, test_handler, evtchn_page);
 
-	minios_printk("\tLocal port for event channel: %u\n", local_port);
+	minios_printk("\tLocal port for event channel: %u\n", op.local_port);
 
-	local_evtchn_prt = local_port;	
+	// Set Global
+	local_evtchn_prt = op.local_port;
 
-	minios_unmask_evtchn(local_port);
-	//minios_unmask_evtchn(remote_prt_nmbr);
-
+	// Set Local Port XenStore Key
 	bmk_memset(local_prt_str, 0, MAX_DOMID_WIDTH);
-	bmk_snprintf(local_prt_str, MAX_DOMID_WIDTH, "%u", local_port);
+	bmk_snprintf(local_prt_str, MAX_DOMID_WIDTH, "%u", op.local_port);
 
 	err = write_to_key(LOCAL_PRT_PATH, local_prt_str);
 	if (err) {
 		return 0;
 	}
-	
-	return local_port;
+
+	return op.local_port;	
 }
 
 static int run_client(void)
