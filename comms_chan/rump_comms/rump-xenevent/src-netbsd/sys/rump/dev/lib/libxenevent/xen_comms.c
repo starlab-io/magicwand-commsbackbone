@@ -78,6 +78,7 @@ typedef struct _xen_read_event
     size_t dest_sz;
     size_t data_received;
 
+    //
     // mini-os/semaphore.h
     //
     // This is used to communicate between the user-land thread that
@@ -103,7 +104,6 @@ typedef struct _xen_comm_state
     uint32_t outstanding_reads;
 
     // Shared memory
-    void *server_page;
     void *client_page;
 
     // Event channel page
@@ -140,6 +140,7 @@ xe_comms_mutex_release( struct semaphore * m )
     DEBUG_PRINT( "Mutex %p: released\n", m );
 }
 
+/*
 static void
 xe_comms_enable_events( evtchn_port_t Port )
 {
@@ -149,8 +150,9 @@ xe_comms_enable_events( evtchn_port_t Port )
 static void
 xe_comms_disable_events( evtchn_port_t Port )
 {
-    minios_mask_evtchn( Port );
+   minios_mask_evtchn( Port );
 }
+*/
 
 //
 // Finds the first event in the xen_read_event_t array whose in_use
@@ -167,7 +169,7 @@ xe_comms_get_next_event_struct( xen_read_event_t ** AvailableEvent )
     
     for ( int i = 0; i < MAX_READ_EVENTS; i++ )
     {
-    xen_read_event_t * evt = &g_state.read_events[i];
+        xen_read_event_t * evt = &g_state.read_events[i];
 
         // Synchronous compare exchange on the in_use field to see if
         // this element is available. If the field's previous value
@@ -372,7 +374,7 @@ xe_comms_read_data( event_id_t Id,
     // The entry is in the list. Now it's safe to enable events.
     if ( 1 == xenevent_atomic_inc( &g_state.outstanding_reads ) )
     {
-        xe_comms_enable_events( g_state.local_event_port);
+        minios_unmask_evtchn( g_state.local_event_port );
     }
 
     //
@@ -392,7 +394,8 @@ xe_comms_read_data( event_id_t Id,
     //
     if ( 0 == xenevent_atomic_dec( &g_state.outstanding_reads ) )
     {
-        xe_comms_disable_events( g_state.local_event_port );
+        //xe_comms_disable_events( g_state.local_event_port );
+        minios_mask_evtchn( g_state.local_event_port );
     }
 
     // Safe to do this unconditionally
@@ -490,29 +493,94 @@ xe_comms_event_callback( evtchn_port_t port,
     DEBUG_PRINT("Event Channel %u\n", port );
     DEBUG_BREAK();
 
+    //
+    // TODO: Extract the event type and connection ID from shared memory.
+    //
+    // If this is a new connection, deliver the event to the "new
+    // connection" thread.
+    //
+    // Otherwise, deliver the event to the thread that has registered
+    // for the given connection ID.
+    //
     (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
 }
+
+#if 0
+static int
+xe_comms_bind_to_interdom_chn (domid_t srvr_id,
+                               evtchn_port_t remote_prt_nmbr)
+{
+    int err = 0;
+    // Don't use minios_evtchn_bind_interdomain; spurious events are
+    // delivered to us when we do.
+    evtchn_bind_interdomain_t op = {0};
+
+    op.remote_dom  = srvr_id;
+    op.remote_port = remote_prt_nmbr;
+    // FAILS: err = -14
+    err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &op);
+    if (err)
+    {
+        minios_printk("ERROR: bind_interdomain failed with return code =%d\n", err);
+        MYASSERT( !"HYPERVISOR_event_channel_op" );
+        goto ErrorExit;
+    }
+    
+    g_state.event_channel_page = bmk_pgalloc_one();
+    if (NULL == g_state.event_channel_page)
+    {
+        MYASSERT( !"Failed to alloc Event Channel page" );
+        err = BMK_ENOMEM;
+        goto ErrorExit;
+    }
+
+    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_page);
+    bmk_memset(g_state.event_channel_page, 0, PAGE_SIZE);	
+
+    // Clear channel of events and unmask
+    minios_clear_evtchn(op.local_port);
+    minios_unmask_evtchn(op.local_port);
+
+    // Bind the handler
+    minios_bind_evtchn(op.local_port,
+                       xe_comms_event_callback,
+                       g_state.event_channel_page );
+
+    g_state.local_event_port = op.local_port;
+
+    DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
+
+    err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
+    if (err)
+    {
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+#endif
 
 static int
 xe_comms_bind_to_interdom_chn (domid_t srvr_id,
                                evtchn_port_t remote_prt_nmbr)
 {
     int err = 0;
-
+    // Don't use minios_evtchn_bind_interdomain; spurious events are
+    // delivered to us when we do.
+    
     g_state.event_channel_page = bmk_pgalloc_one();
-
     if (NULL == g_state.event_channel_page)
     {
-        DEBUG_PRINT("Failed to alloc Event Channel page\n");
+        MYASSERT( !"Failed to alloc Event Channel page" );
         err = BMK_ENOMEM;
         goto ErrorExit;
     }
-    
+
     DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_page);
     bmk_memset(g_state.event_channel_page, 0, PAGE_SIZE);	
-
+ 
     // Ports are bound in the masked state
-    // TODO: ^^^ Verify this 
     err = minios_evtchn_bind_interdomain( srvr_id,
                                           remote_prt_nmbr,
                                           xe_comms_event_callback,
@@ -523,12 +591,14 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
         MYASSERT(!"Could not bind to event channel\n");
         goto ErrorExit;
     }
-    // TODO: race condition between creation and masking ???? ^^^^^
-    xe_comms_disable_events( g_state.local_event_port );
     
+    // Clear channel of events and unmask
+//    minios_clear_evtchn( g_state.local_event_port );
+//    minios_unmask_evtchn( g_state.local_event_port );
+
     DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
 
-    err = xe_comms_write_int_to_key(LOCAL_PRT_PATH, g_state.local_event_port);
+    err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
     if (err)
     {
         goto ErrorExit;
@@ -537,8 +607,9 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 ErrorExit:
     return err;
 }
-////////////////////////////////////////////////////
 
+
+////////////////////////////////////////////////////
 //
 // xe_comms_init
 //
@@ -634,8 +705,6 @@ xe_comms_init( void )
         goto ErrorExit;
     }
 
-    // The event channel starts masked -- no events will be processed
-    // until the first read occurs.
     rc = xe_comms_bind_to_interdom_chn( remoteId, evt_chn_prt_nmbr );
     if ( rc )
     {
@@ -652,9 +721,12 @@ xe_comms_fini( void )
 {
     int rc = 0;
 
-    xe_comms_disable_events( g_state.local_event_port );
     DEBUG_PRINT("Unbinding from Local Interdomain Event Channel Port: %u ...\n",
                 g_state.local_event_port);
+
+    minios_mask_evtchn( g_state.local_event_port );
+    minios_clear_evtchn( g_state.local_event_port );
+
 
     minios_unbind_evtchn(g_state.local_event_port);
 
@@ -672,11 +744,6 @@ xe_comms_fini( void )
         bmk_memfree( g_state.gntmap_map, BMK_MEMWHO_WIREDBMK );
     }
 
-    if (g_state.server_page)
-    {
-        bmk_memfree(g_state.server_page, BMK_MEMWHO_WIREDBMK);
-    }
-    
     if (g_state.client_page)
     {
         bmk_memfree(g_state.client_page, BMK_MEMWHO_WIREDBMK);

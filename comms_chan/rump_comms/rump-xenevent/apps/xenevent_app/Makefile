@@ -9,7 +9,10 @@ CFLAGS = -ggdb -std=gnu99 -I../platform/xen/xen/include -I..
 CFLAGS+= -DMYDEBUG
 
 BAKE=rumprun-bake
-BAKE_FLAGS=-c ../xenevents.conf xen_events
+#BAKE_FLAGS=-c ../xenevents.conf xen_events
+
+# For testing without /dev/xe
+BAKE_FLAGS=xen_pv
 
 APPNAME=xenevent
 
@@ -20,15 +23,22 @@ all: $(APPNAME).run
 # We can call rumprun-bake in the most annoying manner possible;
 # but it shows exactly what the bake script is doing. Here's how:
 # bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)	
+#
+# Direct running instrutions:
+#@echo "Run    rumprun -S xen -i $@"
+#@echo " rumprun -S xen -dip -D 1234 $@"
+
 $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
-	@echo "Run    rumprun -S xen -di $@"
+	@echo "Run   ./run.sh"
 	@echo "Debug with:"
 	@echo " rumprun -S xen -dip -D 1234 $@"
+	####@echo " ./run.sh"
 	@echo "and"
 	@echo " gdb -ex 'target remote:1234' $@"
 
-$(APPNAME).bin: $(APPNAME).c networking.c
+# threads.c
+$(APPNAME).bin: $(APPNAME).c networking.c bitfield.c workqueue.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:

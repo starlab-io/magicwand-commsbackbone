@@ -10,12 +10,15 @@
 #define OUT
 #define INOUT
 
+#include <string.h>
+#define SHORT_FILE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__
+
 //
 // Debugging helpers
 //
 #ifdef MYDEBUG
 #  define DEBUG_BREAK() \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\tAt breakpoint\n", __FILE__, __LINE__, __FUNCTION__); \
+    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\tAt breakpoint\n", SHORT_FILE, __LINE__, __FUNCTION__); \
     asm("int $3\n\t")
 #else
 #  define DEBUG_BREAK() ((void)0)
@@ -23,7 +26,7 @@
 
 #ifdef MYDEBUG
 #  define DEBUG_PRINT(...)                                     \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\t", __FILE__, __LINE__, __FUNCTION__); \
+    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\t", SHORT_FILE, __LINE__, __FUNCTION__); \
     DEBUG_PRINT_FUNCTION(__VA_ARGS__)
 #else
 #  define DEBUG_PRINT(...) ((void)0)
