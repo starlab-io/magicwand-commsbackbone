@@ -1,4 +1,8 @@
 
+//
+// Calls the initialization code for Rump/NetBSD
+//
+
 // BEGIN headers netbsd/sys/rump/dev/lib/librnd/rnd_component.c
 #include <sys/cdefs.h>
 

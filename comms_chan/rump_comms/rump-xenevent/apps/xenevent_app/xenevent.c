@@ -1,7 +1,11 @@
 //
 // Application for Rump userspace that manages commands from the xen
-// shared memory and the associated network connections.
+// shared memory and the associated network connections. The
+// application is designed to minimize dynamic memory allocations
+// after startup.
 //
+
+
 
 #include <stdio.h> 
 #include <stdlib.h>
@@ -9,7 +13,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-//#include <rump/rump_syscalls.h>
 #include <rump/rump.h>
 #include <rump/rumpdefs.h>
 
@@ -19,11 +22,10 @@
 
 #include <errno.h>
 
-#include <atomic.h>
+#include <atomic.h> // atomic_cas_32 - interlocked compare and swap
 #include <sched.h>
 #include <pthread.h>
 #include <semaphore.h>
-
 
 #include "networking.h"
 #include "app_common.h"
@@ -67,6 +69,8 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
     int rc = EBUSY;
 
     *BufferItem = NULL;
+
+    // XXXXXXXXXXX update this to start at g_state.curr_buff_idx and circle around
     
     for ( int i = 0; i < BUFFER_ITEM_COUNT; i++ )
     {
@@ -82,6 +86,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
     
     return rc;
 }
+
 
 static void
 release_buffer_item( buffer_item_t * BufferItem )
@@ -172,7 +177,16 @@ assign_work_to_thread( IN buffer_item_t * BufferItem, OUT thread_item_t ** Assig
 ErrorExit:
     return rc;
 }
-    
+
+//
+// This is the function that the worker thread executes. Here's the
+// basic algorith:
+//
+// forever:
+//    wait for one work item to arrive
+//    get the work item from the workqueue
+//    process the work: if it's a shutdown command, then break out of loop
+//
 static void *
 worker_thread_func( void * Arg )
 {

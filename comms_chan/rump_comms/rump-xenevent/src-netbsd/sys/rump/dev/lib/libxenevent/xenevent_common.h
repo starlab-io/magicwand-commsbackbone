@@ -1,6 +1,13 @@
 #ifndef xenevent_common_h
 #define xenevent_common_h
 
+//
+// Decorators for function parameters
+//
+#define IN
+#define OUT
+#define INOUT
+
 #define DEVICE_NAME "xe"
 #define DEVICE_PATH "/dev/xe"
 
@@ -20,23 +27,9 @@
 // #define BMK_ETIMEDOUT           60
 // #define BMK_ENOSYS              78
 
-
 typedef uint32_t status_t;
 
-//
-// Define the out-of-band keys here.
-//
-// These should be in a header file that is common to both sides of
-// the system.
-//
 
-#define SERVER_ID_PATH            "/unikernel/random/server_id" 
-#define CLIENT_ID_PATH            "/unikernel/random/client_id" 
-#define PRIVATE_ID_PATH           "domid"
-#define GRANT_REF_PATH            "/unikernel/random/gnt_ref"
-#define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
-#define EVT_CHN_PRT_PATH          "/unikernel/random/evt_chn_port"
-#define LOCAL_PRT_PATH            "/unikernel/random/client_local_port"
 
 #define MYDEBUG 1 // -----------------------
 

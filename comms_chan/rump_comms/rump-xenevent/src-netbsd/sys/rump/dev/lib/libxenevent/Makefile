@@ -3,6 +3,7 @@
 # Therefore we actually have to go up the directory tree this far.
 CPPFLAGS += -I../../../../../../../platform/xen/xen/include
 CPPFLAGS += -I../../../../../../../include
+CPPFLAGS += -I../../../../../../../../common
 
 # Search host xen includes, such that <xen/xen.h> can be included
 CPPFLAGS += -Ixen
@@ -12,16 +13,16 @@ CPPFLAGS += -Ixen
 
 .PATH:	${.CURDIR}/../../../../dev
 
-LIB=	rumpdev_xenevent
-COMMENT=Magicwand support for communication with xenevents device via /dev/xe
+LIB = rumpdev_xenevent
+COMMENT = Magicwand support for communication with xenevents device via /dev/xe
 
-IOCONF= XENEVENT.ioconf
+IOCONF = XENEVENT.ioconf
 
-SRCS=	xenevent.c xen_comms.c xenevent_device.c xenevent_netbsd.c
+SRCS = xenevent.c xenevent_comms.c xenevent_device.c xenevent_netbsd.c xenevent_minios.c
 
 # Do not rename symbols with these prefixes
 # Compare to list in platform/xen/librumpxen_xendev/Makefile
-RUMP_SYM_NORENAME=xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text
+RUMP_SYM_NORENAME = xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text
 
 .include <bsd.lib.mk>
 .include <bsd.klinks.mk>

@@ -101,7 +101,7 @@ hex_dump( const char *desc, void *addr, int len )
 
 
 int
-xenevent_mutex_init( void ** Mutex )
+xenevent_mutex_init( xenevent_mutex_t* Mutex )
 {
     kmutex_t * mutex = NULL;
     int rc = 0;
@@ -116,14 +116,14 @@ xenevent_mutex_init( void ** Mutex )
     
     mutex_init( mutex, MUTEX_DEFAULT, IPL_HIGH);
 
-    *Mutex = (void *) mutex;
+    *Mutex = (xenevent_mutex_t) mutex;
 
 ErrorExit:
     return rc;
 }
 
 void
-xenevent_mutex_wait( void * Mutex )
+xenevent_mutex_wait( xenevent_mutex_t Mutex )
 {
     DEBUG_PRINT( "Waiting on mutex at %p\n", Mutex );
     DEBUG_BREAK();
@@ -132,7 +132,7 @@ xenevent_mutex_wait( void * Mutex )
 }
 
 void
-xenevent_mutex_release( void * Mutex )
+xenevent_mutex_release( xenevent_mutex_t Mutex )
 {
     DEBUG_PRINT( "Releasing mutex at %p\n", Mutex );
     mutex_exit( (kmutex_t *) Mutex );
@@ -140,11 +140,12 @@ xenevent_mutex_release( void * Mutex )
 
 
 void
-xenevent_mutex_destroy( void * Mutex )
+xenevent_mutex_destroy( xenevent_mutex_t * Mutex )
 {
-    if ( NULL != Mutex )
+    if ( NULL != *Mutex )
     {
-        free ( Mutex, 0 );
+        free ( *Mutex, 0 );
+        *Mutex = NULL;
     }
 }
 

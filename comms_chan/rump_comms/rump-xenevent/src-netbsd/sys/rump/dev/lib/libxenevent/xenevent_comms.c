@@ -27,6 +27,7 @@
 #include <mini-os/types.h>
 #include <xen/xen.h>
 #include <xen/io/xs_wire.h>
+#include <xen/io/ring.h>
 
 #if defined(__i386__)
 #include <mini-os/x86/x86_32/hypercall-x86_32.h>
@@ -53,16 +54,20 @@
 // Debug macros should use minios_printk, not printf
 #define DEBUG_PRINT_FUNCTION minios_printk
 #include "xenevent_common.h"
-#include "xen_comms.h"
+#include "xenevent_comms.h"
 
+#include "xenevent_minios.h"
+#include "message_types.h"
+#include "xen_keystore_defs.h"
 
 //
 // The number of slots for read events. This defines the maximum
 // number of concurrent reads we can handle within our system.
 //
-#define MAX_READ_EVENTS 64
+//#define MAX_READ_EVENTS 64
 
 
+/*
 //
 // Associate an outstanding read with an anticipated Xen event.
 //
@@ -78,42 +83,41 @@ typedef struct _xen_read_event
     size_t dest_sz;
     size_t data_received;
 
-    //
-    // mini-os/semaphore.h
-    //
-    // This is used to communicate between the user-land thread that
-    // is waiting on the read() to complete, and the thread that
-    // handles the incoming Xen event by populating the data in this
-    // structure and releasing the mutex.
-    //
-    struct semaphore mutex;
-    
 } xen_read_event_t;
+*/
+
+
+
+
 
 // Maintain all state here for future flexibility
 typedef struct _xen_comm_state
 {
     bool comms_established;
 
-    // alter only via interlocked operations - sys/atomic.h
-    uint32_t handle_ct;
-
-    xen_read_event_t read_events[ MAX_READ_EVENTS ];
+//    xen_read_event_t read_events[ MAX_READ_EVENTS ];
     
     // How many reads are occuring currently
-    uint32_t outstanding_reads;
+//    uint32_t outstanding_reads;
 
     // Shared memory
-    void *client_page;
-
-    // Event channel page
-    void *event_channel_page;
-
+    uint8_t * shared_mem;
+    size_t    shared_mem_size;
+    
+    // Event channel memory
+    uint8_t * event_channel_mem;
+    size_t    event_channel_mem_size;
+    
     // Event channel local port
     evtchn_port_t local_event_port;
 
     // Grant map 
     struct gntmap *gntmap_map;
+
+    // Semaphore that is signalled once for each message that has arrived
+    xenevent_semaphore_t messages_available;
+
+
     
 } xen_comm_state_t;
 
@@ -123,8 +127,13 @@ static xen_comm_state_t g_state;
 //
 // Addition to semaphore.h
 //
-#define init_mutex_locked(m) init_SEMAPHORE( (m), 0 )
+//#define init_mutex_locked(m) init_SEMAPHORE( (m), 0 )
 
+/***************************************************************************
+ * Basic utility functions
+ ***************************************************************************/
+
+/*
 static void
 xe_comms_mutex_acquire( struct semaphore * m )
 {
@@ -139,91 +148,7 @@ xe_comms_mutex_release( struct semaphore * m )
     up( (m) );
     DEBUG_PRINT( "Mutex %p: released\n", m );
 }
-
-/*
-static void
-xe_comms_enable_events( evtchn_port_t Port )
-{
-   minios_unmask_evtchn( Port );
-}
-
-static void
-xe_comms_disable_events( evtchn_port_t Port )
-{
-   minios_mask_evtchn( Port );
-}
 */
-
-//
-// Finds the first event in the xen_read_event_t array whose in_use
-// field is 0. Performs interlocked check.
-//
-// Return codes:
-//    BMK_EAGAIN - All the slots are busy. The caller should try again.
-//
-static int
-xe_comms_get_next_event_struct( xen_read_event_t ** AvailableEvent )
-{
-
-    int rc = BMK_EBUSY;
-    
-    for ( int i = 0; i < MAX_READ_EVENTS; i++ )
-    {
-        xen_read_event_t * evt = &g_state.read_events[i];
-
-        // Synchronous compare exchange on the in_use field to see if
-        // this element is available. If the field's previous value
-        // was 0, then it is available (and we have taken it).
-        if ( 0 == synch_cmpxchg( &evt->in_use, evt->in_use, 1 ) )
-        {
-            // The caller must set the id. Don't leak an old one.
-            evt->id = EVENT_ID_INVALID;
-            *AvailableEvent = evt;
-            DEBUG_PRINT( "Found available event slot: ptr %p, idx %d\n", evt, i );
-            rc = 0;
-            break;
-        }
-    }
-
-    return rc;
-}
-
-static int
-xe_comms_find_event_by_id( event_id_t Id,
-                           xen_read_event_t ** FoundEvent )
-{
-    int rc = BMK_ENOENT;
-
-    *FoundEvent = NULL;
-    
-    for ( int i = 0; i < MAX_READ_EVENTS; i++ )
-    {
-        xen_read_event_t * evt = &g_state.read_events[i];
-        if ( Id == evt->id )
-        {
-            *FoundEvent = evt;
-            rc = 0;
-            break;
-        }
-    }
-
-    return rc;
-}
-
-
-//
-// Sets the in_use field of the given event to 0, using interlocked
-// function.
-//
-static void
-xe_comms_set_event_available( xen_read_event_t * TargetEvent )
-{
-    MYASSERT( NULL != TargetEvent );
-
-    TargetEvent->id = EVENT_ID_INVALID;
-    (void) synch_cmpxchg( &TargetEvent->in_use, TargetEvent->in_use, 0 );
-}
-
 
 static int
 xe_comms_write_int_to_key( const char * Path,
@@ -334,18 +259,78 @@ ErrorExit:
     return res;
 }
 
+/***************************************************************************
+ * Functions for item read/write via Xen ring buffer
+ ***************************************************************************/
 
+/**
+ * xe_comms_handle_arrived_data
+ *
+ * Invoked by the Xen event callback.
+ */
+/*
+static int
+xe_comms_handle_arrived_data(void)
+{
+    int rc = 0;
+    
+//ErrorExit:
+    return rc;
+}
+*/
+
+static void
+xe_comms_event_callback( evtchn_port_t port,
+                         struct pt_regs *regs,
+                         void *data )
+{
+    DEBUG_PRINT("Event Channel %u\n", port );
+    DEBUG_BREAK();
+
+    //
+    // TODO: 
+    
+    //
+    // TODO: Extract the event type and connection ID from shared memory.
+    //
+    // If this is a new connection, deliver the event to the "new
+    // connection" thread.
+    //
+    // Otherwise, deliver the event to the thread that has registered
+    // for the given connection ID.
+    //
+
+//    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
+}
+
+
+int
+xe_comms_read_item( void * Memory,
+                    size_t Size )
+{
+        int rc = 0;
+
+//ErrorExit:
+    return rc;
+}
+
+int
+xe_comms_write_item( void * Memory,
+                     size_t Size )
+{
+        int rc = 0;
+
+//ErrorExit:
+    return rc;
+}
+
+/*
 int
 xe_comms_read_data( event_id_t Id,
                     void * Memory,
                     size_t Size )
 {
     int rc = 0;
-
-    xen_read_event_t * readEvent = NULL;
-
-    // There should be no event with the given id. Check this.
-    MYASSERT( BMK_ENOENT == xe_comms_find_event_by_id( Id, &readEvent ) );
 
     //
     // Get an available event. Keep doing it until one is
@@ -403,34 +388,7 @@ xe_comms_read_data( event_id_t Id,
 
     return rc;
 }
-
-//
-// xe_comms_handle_arrived_data
-//
-// Invoked by the Xen event callback.
-static int
-xe_comms_handle_arrived_data( event_id_t Id )
-{
-    int rc = 0;
-    xen_read_event_t * curr = NULL;
-
-    // Find the ID
-    rc = xe_comms_find_event_by_id( Id, &curr );
-    if ( 0 != rc )
-    {
-        goto ErrorExit;
-    }
-    
-    // TODO: Copy the received data into the waiter's buffer.
-    curr->data_received = MIN( curr->dest_sz, sizeof(TEST_MSG) );
-    bmk_memcpy( curr->dest_mem, TEST_MSG, curr->data_received );
-
-    // Release the waiting thread
-    xe_comms_mutex_release( &curr->mutex );
-    
-ErrorExit:
-    return rc;
-}
+*/
 
 
 /*
@@ -467,43 +425,25 @@ xe_comms_accept_grant(domid_t      domu_server_id,
     domids[FIRST_DOM_SLOT] = domu_server_id;
     grant_refs[FIRST_GNT_REF] = client_grant_ref;
 
-    g_state.client_page = (unsigned char *)
-        gntmap_map_grant_refs(g_state.gntmap_map,
-                              count,
-                              domids,
-                              domids_stride,
-                              grant_refs,
-                              write);
-    if (NULL == g_state.client_page)
+    g_state.shared_mem = (uint8_t *)
+        gntmap_map_grant_refs( g_state.gntmap_map,
+                               count,
+                               domids,
+                               domids_stride,
+                               grant_refs,
+                               write );
+    if (NULL == g_state.shared_mem)
     {
         MYASSERT( !"Mapping in the Memory bombed out!\n");
         return BMK_ENOMEM;
     }
 
-    DEBUG_PRINT("Shared Mem: %p\n", g_state.client_page);
+    DEBUG_PRINT("Shared Mem: %p\n", g_state.shared_mem);
 
     return 0;
 }
 
-static void
-xe_comms_event_callback( evtchn_port_t port,
-                         struct pt_regs *regs,
-                         void *data )
-{
-    DEBUG_PRINT("Event Channel %u\n", port );
-    DEBUG_BREAK();
 
-    //
-    // TODO: Extract the event type and connection ID from shared memory.
-    //
-    // If this is a new connection, deliver the event to the "new
-    // connection" thread.
-    //
-    // Otherwise, deliver the event to the thread that has registered
-    // for the given connection ID.
-    //
-    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
-}
 
 #if 0
 static int
@@ -526,16 +466,16 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
         goto ErrorExit;
     }
     
-    g_state.event_channel_page = bmk_pgalloc_one();
-    if (NULL == g_state.event_channel_page)
+    g_state.event_channel_mem = bmk_pgalloc_one();
+    if (NULL == g_state.event_channel_mem)
     {
         MYASSERT( !"Failed to alloc Event Channel page" );
         err = BMK_ENOMEM;
         goto ErrorExit;
     }
 
-    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_page);
-    bmk_memset(g_state.event_channel_page, 0, PAGE_SIZE);	
+    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_mem);
+    bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
 
     // Clear channel of events and unmask
     minios_clear_evtchn(op.local_port);
@@ -544,7 +484,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     // Bind the handler
     minios_bind_evtchn(op.local_port,
                        xe_comms_event_callback,
-                       g_state.event_channel_page );
+                       g_state.event_channel_mem );
 
     g_state.local_event_port = op.local_port;
 
@@ -569,22 +509,22 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     // Don't use minios_evtchn_bind_interdomain; spurious events are
     // delivered to us when we do.
     
-    g_state.event_channel_page = bmk_pgalloc_one();
-    if (NULL == g_state.event_channel_page)
+    g_state.event_channel_mem = bmk_pgalloc_one();
+    if (NULL == g_state.event_channel_mem)
     {
         MYASSERT( !"Failed to alloc Event Channel page" );
         err = BMK_ENOMEM;
         goto ErrorExit;
     }
 
-    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_page);
-    bmk_memset(g_state.event_channel_page, 0, PAGE_SIZE);	
+    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_mem);
+    bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
  
     // Ports are bound in the masked state
     err = minios_evtchn_bind_interdomain( srvr_id,
                                           remote_prt_nmbr,
                                           xe_comms_event_callback,
-                                          g_state.event_channel_page,
+                                          g_state.event_channel_mem,
                                           &g_state.local_event_port );
     if (err)
     {
@@ -617,7 +557,7 @@ ErrorExit:
 // (the "server") ID and grant reference to appear.
 //
 int
-xe_comms_init( void )
+xe_comms_init( IN xenevent_semaphore_t MsgAvailableSemaphore )
 {
     int rc = 0;
     domid_t                   localId = 0;
@@ -632,9 +572,10 @@ xe_comms_init( void )
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
 
+    g_state.messages_available = MsgAvailableSemaphore;
+    
     //
     // Init protocol
-    // XXX: update ??
     //
 
     // Read our own dom ID
@@ -710,6 +651,8 @@ xe_comms_init( void )
     {
         goto ErrorExit;
     }
+
+
     
 ErrorExit:
     return rc;
@@ -733,9 +676,9 @@ xe_comms_fini( void )
     // ????
     // minios_unbind_all_ports();
     
-    if (g_state.event_channel_page)
+    if (g_state.event_channel_mem)
     {
-        bmk_memfree(g_state.event_channel_page, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
     }
 
     if (g_state.gntmap_map)
@@ -744,9 +687,9 @@ xe_comms_fini( void )
         bmk_memfree( g_state.gntmap_map, BMK_MEMWHO_WIREDBMK );
     }
 
-    if (g_state.client_page)
+    if (g_state.shared_mem)
     {
-        bmk_memfree(g_state.client_page, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree(g_state.shared_mem, BMK_MEMWHO_WIREDBMK);
     }
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
