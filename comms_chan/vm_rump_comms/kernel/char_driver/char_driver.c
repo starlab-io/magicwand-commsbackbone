@@ -1,3 +1,4 @@
+
 /**
  * @file    char_driver.c
  * @author  Mark Mason 
@@ -18,17 +19,20 @@
 #include <xen/page.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
-//#include <xen/events/events_internal.h>
+
+#include <xen/evtchn.h>
 
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
 #define CLIENT_ID_KEY         "client_id" 
 #define GNT_REF_KEY           "gnt_ref" 
-#define EVT_CHN_PRT_KEY       "evt_chn_port"
-#define CLIENT_LOCAL_PRT_KEY  "client_local_port"
+
 #define MAX_GNT_REF_WIDTH     15
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
+
+#define SELF_EVT_CHN       "vm_evt_chn_prt"
+#define PAL_EVT_CHN        "uk_evt_chn_prt"
 
 #define KEY_RESET_VAL      "0"
 #define TEST_MSG_SZ         64
@@ -56,8 +60,10 @@ static grant_ref_t   foreign_grant_ref;
 static unsigned int  msg_counter;
 static unsigned int  is_client;
 static domid_t       client_dom_id;
-static int           event_channel_port;
-static int           remote_channel_port;
+static domid_t       srvr_dom_id;
+static int           self_event_channel;
+static int           pal_event_channel;
+
 
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
@@ -144,13 +150,15 @@ static void write_server_id_to_key(void)
 
    write_to_key(SERVER_ID_KEY, dom_id_str);
 
+   srvr_dom_id = simple_strtol(dom_id_str, NULL, 10);
+
    kfree(dom_id_str);
 }
 
 static void create_unbound_evt_chn(void) 
 {
    struct evtchn_alloc_unbound alloc_unbound; 
-   char                        event_channel_port_str[MAX_GNT_REF_WIDTH]; 
+   char                        self_event_channel_str[MAX_GNT_REF_WIDTH]; 
    int                         err;
    //struct evtchn_mask          mask;
 
@@ -168,15 +176,13 @@ static void create_unbound_evt_chn(void)
       printk(KERN_INFO "Event Channel Port: %d\n", alloc_unbound.port);
    }
    
-   //mask.port = alloc_unbound,port;
-   //HYPERVISOR_event_channel_op(EVTCHNOP_mask, &mask);
 
-   event_channel_port = alloc_unbound.port;
+   self_event_channel = alloc_unbound.port;
 
-   memset(event_channel_port_str, 0, MAX_GNT_REF_WIDTH);
-   snprintf(event_channel_port_str, MAX_GNT_REF_WIDTH, "%u", event_channel_port);
+   memset(self_event_channel_str, 0, MAX_GNT_REF_WIDTH);
+   snprintf(self_event_channel_str, MAX_GNT_REF_WIDTH, "%u", self_event_channel);
 
-   write_to_key(EVT_CHN_PRT_KEY,event_channel_port_str);
+   write_to_key(SELF_EVT_CHN,self_event_channel_str);
 
 }
 
@@ -184,12 +190,8 @@ static void send_evt(int evtchn_prt)
 {
 
    struct evtchn_send send;
-   //struct evtchn_unmask unmask;
 
    send.port = evtchn_prt;
-
-   //unmask.port = (evtchn_port_t)evtchn_prt;
-   //HYPERVISOR_event_channel_op(EVTCHNOP_unmask, &unmask);
 
    if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send)) {
       pr_err("Failed to send event\n");
@@ -205,10 +207,10 @@ static void free_unbound_evt_chn(void)
    struct evtchn_close close;
    int err;
 
-   if (!event_channel_port)
+   if (!self_event_channel)
       return;
       
-   close.port = event_channel_port;
+   close.port = self_event_channel;
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
 
@@ -374,43 +376,101 @@ static struct xenbus_watch client_id_watch = {
    .callback = client_id_state_changed
 };
 
-static void remote_port_state_changed(struct xenbus_watch *w,
-                                      const char **v,
-                                      unsigned int l)
+static irqreturn_t test_handler(int port, void * data)
 {
-   char     *remote_prt_str;
 
-   remote_prt_str = (char *)read_from_key(CLIENT_LOCAL_PRT_KEY);
+   printk(KERN_INFO "Test handler called\n");
 
-   if(XENBUS_IS_ERR_READ(remote_prt_str)) {
-      printk(KERN_INFO "Error reading  Client Port Key!!!\n");
+   return 0;
+}
+
+static void remote_evt_chn_state_changed(struct xenbus_watch *w,
+                                         const char **v,
+                                         unsigned int l)
+{
+   int       err;
+   char     *remote_evt_chn_str;
+   unsigned long irqflags;
+
+   //struct evtchn_unmask unmask;
+   //struct evtchn_bind_interdomain bind_interdomain;
+
+
+   irqflags = 0;
+   remote_evt_chn_str = (char *)read_from_key(PAL_EVT_CHN);
+
+   if(XENBUS_IS_ERR_READ(remote_evt_chn_str)) {
+      printk(KERN_INFO "Error reading remote event channel key!!!\n");
       return;
    }
 
-   if (strcmp(remote_prt_str,"0") == 0) {
-      kfree(remote_prt_str);
+   if (strcmp(remote_evt_chn_str,"0") == 0) {
+      kfree(remote_evt_chn_str);
       return;
    }
 
    //
-   // Get the remote port 
+   // Get the remote evt chn 
    // 
-   printk(KERN_INFO "Remote port changed value:\n");
-   printk(KERN_INFO "\tRead remote port key: %s\n", remote_prt_str);
+   printk(KERN_INFO "Remote evt chn changed value:\n");
+   printk(KERN_INFO "\tRead evt chn key: %s\n", remote_evt_chn_str);
 
-   remote_channel_port = simple_strtol(remote_prt_str, NULL, 10);
+   pal_event_channel = simple_strtol(remote_evt_chn_str, NULL, 10);
 
-   printk(KERN_INFO "\t\tuint form: %u\n", remote_channel_port);
+   printk(KERN_INFO "\t\tuint form: %u\n", pal_event_channel);
 
-   kfree(remote_prt_str);
+   kfree(remote_evt_chn_str);
 
-   //send_evt(remote_channel_port);
+
+   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
+                                               pal_event_channel,
+                                               test_handler,
+                                               irqflags,
+                                               DEVICE_NAME,
+                                               &majorNumber);
+                                               
+   /*
+   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
+                                               pal_event_channel,
+                                               test_handler,
+                                               irqflags,
+                                               NULL,
+                                               NULL);
+
+   // Bind to the evt chn
+   bind_interdomain.remote_dom = client_dom_id;
+   bind_interdomain.remote_port = pal_event_channel;
+
+   err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain,
+                                     &bind_interdomain);
+
+   if (err) {
+      printk(KERN_INFO "\tError binding to Evt Chn\n");
+      return;
+   }
+
+   // Clear evt chn
+   //sync_clear_bit(bind_interdomain.local_port, &s->evtchn_pending[0]);
+   
+   // Unmask port
+   unmask.port = bind_interdomain.local_port; 
+   HYPERVISOR_event_channel_op(EVTCHNOP_unmask, &unmask);
+
+   // Request IRQ
+   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, &majorNumber);
+
+   if (err) {
+      printk(KERN_INFO "\tError binding handler to Evt Chn\n");
+      return;
+   }
+   */
+
 }
 
-static struct xenbus_watch remote_port_watch = {
+static struct xenbus_watch remote_evt_chn_watch = {
 
-   .node = "/unikernel/random/client_local_port",
-   .callback = remote_port_state_changed
+   .node = "/unikernel/random/uk_evt_chn_prt",
+   .callback = remote_evt_chn_state_changed
 };
 
 static void initialize_keys(void)
@@ -419,8 +479,8 @@ static void initialize_keys(void)
    write_to_key(SERVER_ID_KEY, KEY_RESET_VAL);
    write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
    write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
-   write_to_key(EVT_CHN_PRT_KEY, KEY_RESET_VAL);
-   write_to_key(CLIENT_LOCAL_PRT_KEY, KEY_RESET_VAL);
+   write_to_key(SELF_EVT_CHN, KEY_RESET_VAL);
+   write_to_key(PAL_EVT_CHN, KEY_RESET_VAL);
 }
 
 /** @brief The LKM initialization function
@@ -435,8 +495,7 @@ static int __init mwchar_init(void) {
    msg_counter = 0;
    is_client = 0;
    client_dom_id = 0;
-   event_channel_port = 0;
-   remote_channel_port = 0;
+   self_event_channel = 0;
 
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
@@ -480,10 +539,10 @@ static int __init mwchar_init(void) {
       pr_err("Failed to set client id watcher\n");
    }
 
-   // 3. Watch Remote Port XenStore Key
-   err = register_xenbus_watch(&remote_port_watch);
+   // 3. Watch Remote Event Channel XenStore Key
+   err = register_xenbus_watch(&remote_evt_chn_watch);
    if (err) {
-      pr_err("Failed to set client local port watcher\n");
+      pr_err("Failed to set client evt chn watcher\n");
    }
 
    return 0;
@@ -502,7 +561,7 @@ static void __exit mwchar_exit(void){
 
    unregister_xenbus_watch(&client_id_watch);
 
-   unregister_xenbus_watch(&remote_port_watch);
+   unregister_xenbus_watch(&remote_evt_chn_watch);
 
    free_unbound_evt_chn();
 
@@ -567,7 +626,7 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
    printk(KERN_INFO "MWChar: Received %u characters from the user\n", (unsigned int)len);
 
    
-   send_evt(event_channel_port);
+   send_evt(self_event_channel);
 
    return len;
 }
