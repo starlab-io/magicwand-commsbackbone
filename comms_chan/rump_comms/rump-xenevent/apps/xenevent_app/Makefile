@@ -5,14 +5,18 @@
 ##
 
 CC = x86_64-rumprun-netbsd-gcc 
-CFLAGS = -ggdb -std=gnu99 -I../platform/xen/xen/include -I..
+CFLAGS = -ggdb -std=gnu99 
+CFLAGS += -I..
+CFLAGS += -I../../../common
+CFLAGS += -I../platform/xen/xen/include 
+
 CFLAGS+= -DMYDEBUG
 
 BAKE=rumprun-bake
-#BAKE_FLAGS=-c ../xenevents.conf xen_events
+BAKE_FLAGS=-c ../xenevents.conf xen_events
 
 # For testing without /dev/xe
-BAKE_FLAGS=xen_pv
+#BAKE_FLAGS=xen_pv
 
 APPNAME=xenevent
 

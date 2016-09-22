@@ -29,19 +29,14 @@
 
 typedef uint32_t status_t;
 
+// These need to be defined for the below macros to work
+extern void bmk_printf(const char *, ...);
+extern char *strrchr(const char *, int);
 
+#define DEBUG_PRINT_FUNCTION bmk_printf
 
-#define MYDEBUG 1 // -----------------------
-
-//
-// By default, these macros will use printf. If the user cannot define
-// printf due to header file conflicts, then the user must define
-// DEBUG_PRINT_FUNCTION to the symbol that should be used.
-//
-
-#ifndef DEBUG_PRINT_FUNCTION
-#   define DEBUG_PRINT_FUNCTION printf
-#endif
+// Don't display the whole path - just show the last component (i.e. the filename)
+#define SHORT_FILE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__
 
 //
 // These macros make use of printf, which the user must define. One
@@ -49,21 +44,28 @@ typedef uint32_t status_t;
 // symbol collisions.
 //
 #ifdef MYDEBUG
-#  define DEBUG_BREAK() \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\tAt breakpoint\n", __FILE__, __LINE__, __FUNCTION__ ); \
+#  define DEBUG_PREAMBLE() \
+    bmk_printf ( "[%s:%d] %s\t", SHORT_FILE, __LINE__, __FUNCTION__);
+#else
+#  define DEBUG_PREAMBLE()  ((void)0)
+#endif
+
+#ifdef MYDEBUG
+#  define DEBUG_BREAK()                                                 \
+    DEBUG_PREAMBLE();                                                   \
+    bmk_printf ( "At breakpoint\n" );                                   \
     asm("int $3\n\t")
 #else
 #  define DEBUG_BREAK() ((void)0)
 #endif
 
 #ifdef MYDEBUG
-#  define DEBUG_PRINT(...) \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\t", __FILE__, __LINE__, __FUNCTION__); \
-    DEBUG_PRINT_FUNCTION(__VA_ARGS__)
+#  define DEBUG_PRINT(...)                      \
+    DEBUG_PREAMBLE();                           \
+    bmk_printf(__VA_ARGS__)
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG
-
 
 #ifdef MYDEBUG 
 #define MYASSERT(x) \
@@ -82,8 +84,5 @@ typedef uint32_t status_t;
 #ifndef MAX
 #  define MAX(x, y) ( (x) > (y) ? (x) : (y) )
 #endif // MAX
-
-
-#include "xenevent_netbsd.h"
 
 #endif // xenevent_common_h

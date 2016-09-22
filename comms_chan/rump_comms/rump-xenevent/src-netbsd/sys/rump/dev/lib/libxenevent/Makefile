@@ -8,6 +8,9 @@ CPPFLAGS += -I../../../../../../../../common
 # Search host xen includes, such that <xen/xen.h> can be included
 CPPFLAGS += -Ixen
 
+# Enable debugging - breakpoints and messages
+CPPFLAGS += -DMYDEBUG
+
 # Definitely do NOT define this. It breaks the build.
 #CPPFLAGS+= -D__RUMP_KERNEL__
 
@@ -18,9 +21,13 @@ COMMENT = Magicwand support for communication with xenevents device via /dev/xe
 
 IOCONF = XENEVENT.ioconf
 
-SRCS = xenevent.c xenevent_comms.c xenevent_device.c xenevent_netbsd.c xenevent_minios.c
+SRCS = xenevent.c \
+       xenevent_comms.c \
+       xenevent_device.c \
+       xenevent_netbsd.c \
+       xenevent_minios.c
 
-# Do not rename symbols with these prefixes
+# Tell the Rump build system not to rename symbols with these prefixes
 # Compare to list in platform/xen/librumpxen_xendev/Makefile
 RUMP_SYM_NORENAME = xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text
 

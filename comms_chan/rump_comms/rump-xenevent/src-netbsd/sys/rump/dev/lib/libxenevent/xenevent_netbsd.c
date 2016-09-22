@@ -9,32 +9,15 @@
 #   include "opt_compat_netbsd.h"
 #endif
 
-#include <sys/param.h>
 #include <sys/atomic.h>
-#include <sys/conf.h>
-#include <sys/evcnt.h>
-#include <sys/kernel.h>
 #include <sys/kmem.h>
 #include <sys/kthread.h>
 #include <sys/malloc.h>
-#include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/poll.h>
-#include <sys/pool.h>
-//#include <sys/proc.h>
-#include <sys/rndpool.h>
-#include <sys/rndsource.h>
-#include <sys/select.h>
-#include <sys/stat.h>
 #include <sys/systm.h> // printf
 
-#include <sys/vfs_syscalls.h>
-
-//#include <rump-sys/kern.h>
-//#include <rump-sys/vfs.h>
-
-
 #include "xenevent_common.h"
+#include "xenevent_netbsd.h"
 
 
 //
@@ -46,7 +29,7 @@
 void
 hex_dump( const char *desc, void *addr, int len )
 {
-#ifdef MYDEBUG
+#ifdef MYDEBUG // do NOT use the DEBUG_PRINT() macro here
     int i;
     unsigned char buff[17];
     unsigned char *pc = (unsigned char*)addr;

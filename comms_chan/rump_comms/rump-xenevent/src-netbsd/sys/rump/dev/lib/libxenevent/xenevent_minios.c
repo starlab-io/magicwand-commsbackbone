@@ -5,7 +5,6 @@
 
 #include "xenevent_minios.h"
 
-#define DEBUG_PRINT_FUNCTION minios_printk
 #include "xenevent_common.h"
 
 int

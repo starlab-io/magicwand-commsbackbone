@@ -75,7 +75,7 @@ typedef struct _xen_dev_state
     // This is used to signal between the xen event channel callback
     // the the thread that is waiting on a read() to complete.
     //
-    xenevent_semaphore_t messages_available;
+//    xenevent_semaphore_t messages_available;
 
     // XCXXXXXXXXXXXXXX move to xenevent_comms.c ????????
     //
@@ -87,6 +87,12 @@ typedef struct _xen_dev_state
     // Only one thread can write to the device 
     //
     xenevent_mutex_t write_lock;
+
+    //
+    // Only one handle to device allowed
+    //
+    uint32_t open_count;
+    
 } xen_dev_state_t;
 
 static xen_dev_state_t g_state;
@@ -139,12 +145,42 @@ xe_dev_init( void )
         goto ErrorExit;
     }
 
+ErrorExit:
+    return rc;
+}
+
+int
+xe_dev_fini( void )
+{
+    int rc = 0;
+
+    return rc;
+}
+    
+
+static int
+xe_dev_open( dev_t Dev,
+             int Flags,
+             int Fmt,
+             struct lwp * Lwp )
+{
+    int rc = 0;
+    DEBUG_PRINT("Opened device=%p, Flags=%x Fmt=%x Lwp=%p\n",
+                (void *)Dev, Flags, Fmt, Lwp);
+
+    if ( xenevent_atomic_inc( &g_state.open_count ) > 1 )
+    {
+        rc = BMK_EBUSY;
+        MYASSERT( !"device is already open" );
+        goto ErrorExit;
+    }
+/*    
     rc = xenevent_semaphore_init( &g_state.messages_available );
     if ( 0 != rc )
     {
         goto ErrorExit;
     }
-
+*/
     rc = xenevent_mutex_init( &g_state.read_lock );
     if ( 0 != rc )
     {
@@ -157,37 +193,9 @@ xe_dev_init( void )
         goto ErrorExit;
     }
     
-    rc = xe_comms_init( g_state.messages_available );
+    rc = xe_comms_init();// g_state.messages_available );
+
 ErrorExit:
-    return rc;
-}
-
-int
-xe_dev_fini( void )
-{
-    int rc = 0;
-
-    xe_comms_fini();
-    
-    xenevent_semaphore_destroy( &g_state.messages_available );
-
-    xenevent_mutex_destroy( &g_state.read_lock );
-    xenevent_mutex_destroy( &g_state.write_lock );
-    
-    return rc;
-}
-    
-
-static int
-xe_dev_open( dev_t Dev,
-               int Flags,
-               int Fmt,
-               struct lwp * Lwp )
-{
-    int rc = 0;
-    DEBUG_PRINT("Opened device=%p, Flags=%x Fmt=%x Lwp=%p\n",
-                (void *)Dev, Flags, Fmt, Lwp);
-
     return rc;
 }
 
@@ -201,6 +209,19 @@ xe_dev_close( dev_t Dev,
     DEBUG_PRINT("Closed device=%p, Flags=%xx Fmt=%x Lwp=%p\n",
                 (void *)Dev, Flags, Fmt, Lwp);
 
+    if ( 0 != xenevent_atomic_dec( &g_state.open_count ) )
+    {
+        goto ErrorExit;
+    }
+        
+    xe_comms_fini();
+    
+//    xenevent_semaphore_destroy( &g_state.messages_available );
+
+    xenevent_mutex_destroy( &g_state.read_lock );
+    xenevent_mutex_destroy( &g_state.write_lock );
+
+ErrorExit:
     return rc;
 }
 
@@ -216,7 +237,8 @@ xe_dev_read( dev_t Dev,
              int Flag )
 {
     int rc = 0;
-
+    size_t bytes_read = 0;
+    
     // Only one reader at a time
     xenevent_mutex_wait( g_state.read_lock );
     
@@ -227,7 +249,8 @@ xe_dev_read( dev_t Dev,
     }
 
     rc = xe_comms_read_item( Uio->uio_iov[0].iov_base,
-                             Uio->uio_iov[0].iov_len );
+                             Uio->uio_iov[0].iov_len,
+                             &bytes_read );
 
     xenevent_mutex_release( g_state.read_lock );
     return rc;

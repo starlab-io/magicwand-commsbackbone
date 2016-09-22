@@ -4,7 +4,6 @@
 #include "xenevent_common.h"
 #include "xenevent_minios.h"
 
-
 //
 // Test Message Variables and Specs 
 //
@@ -26,14 +25,16 @@ typedef uint64_t event_id_t;
 #define EVENT_ID_INVALID (event_id_t)0
 
 int
-xe_comms_init( IN xenevent_semaphore_t MsgAvailableSemaphore );
+xe_comms_init( void );
+//xe_comms_init( IN xenevent_semaphore_t MsgAvailableSemaphore );
 
 int
 xe_comms_fini( void );
 
 int
 xe_comms_read_item( void * Memory,
-                    size_t Size );
+                    size_t Size,
+                    size_t * BytesRead );
 
 int
 xe_comms_write_item( void * Memory,

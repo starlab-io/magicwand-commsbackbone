@@ -37,6 +37,8 @@
 #include "workqueue.h"
 
 #include "config.h"
+#include "message_types.h"
+
 
 typedef struct _xenevent_globals
 {
@@ -463,7 +465,8 @@ int main(void)
     }
 
     // main thread dispatches commands to the other threads
-    rc = test_message_dispatcher();
+    //rc = test_message_dispatcher();
+    rc = message_dispatcher();
     
 ErrorExit:
     fini_state();
