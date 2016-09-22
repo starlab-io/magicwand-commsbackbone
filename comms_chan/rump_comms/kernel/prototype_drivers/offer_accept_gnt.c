@@ -36,8 +36,9 @@
 #define PRIVATE_ID_PATH           "domid"
 #define GRANT_REF_PATH            "/unikernel/random/gnt_ref"
 #define MSG_LENGTH_PATH           "/unikernel/random/msg_len"
-#define EVT_CHN_PRT_PATH          "/unikernel/random/evt_chn_port"
-#define LOCAL_PRT_PATH            "/unikernel/random/client_local_port"
+
+#define PAL_EVT_CHN               "/unikernel/random/vm_evt_chn_prt"
+#define SELF_EVT_CHN              "/unikernel/random/uk_evt_chn_prt"
 
 /************************************
 *
@@ -96,6 +97,12 @@ static evtchn_port_t local_evtchn_prt;
 
 /* Grant map */
 static struct gntmap *gntmap_map;
+
+static domid_t client_dom_id;
+static domid_t server_dom_id;
+
+/* Second Event channel */
+static evtchn_port_t evtchn_prt_2;
 
 /* Key writer utility function
 *
@@ -397,6 +404,8 @@ static int run_server(void)
 	client_id = bmk_strtoul(msg, NULL, 10);
 	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
 
+	client_dom_id = client_id;
+
 	minios_printk("\tRead Cliient Id from Key: %u\n", client_id);
 	
 	/* Reset Client Id */
@@ -429,59 +438,111 @@ static int run_server(void)
 	return 0;
 }
 
+static int send_event(evtchn_port_t port)
+{
+
+	int                err;
+	struct evtchn_send send;
+
+	send.port = port;
+
+	err = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+
+	if (err) {
+		minios_printk("\tError: Failed to send event\n");
+		minios_printk("\t\tPort Number: %u\n", port);
+	} else {
+		minios_printk("\tSent Event\n");
+	}
+
+	return err;
+}
+
 static void test_handler(evtchn_port_t port, struct pt_regs *regs, void *data)
 {
 	minios_printk("\tEvent Channel handler called\n");
-	/*minios_wake_up(&blkfront_queue);*/
+
+	send_event(evtchn_prt_2);
 }
 
 static evtchn_port_t bind_to_interdom_chn(domid_t srvr_id, evtchn_port_t remote_prt_nmbr)
 {
-	int                       err;
-	evtchn_bind_interdomain_t op;
-	char                      local_prt_str[MAX_DOMID_WIDTH];
 
-	// Bind to interdomain channel
-	op.remote_dom = srvr_id;
-	op.remote_port = remote_prt_nmbr;
-	err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &op);
-	if (err){
-		minios_printk("ERROR: bind_interdomain failed with return code =%d", err);
-		return 0;
-	}
+        int                       err;
+        evtchn_bind_interdomain_t op;
 
-	// Malloc a page for handler
+        // Bind to interdomain channel
+        op.remote_dom = srvr_id;
+        op.remote_port = remote_prt_nmbr;
+        err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &op);
+        if (err)
+        {
+             minios_printk("\tERROR: bind_interdomain failed with return code =%d", err);
+             return 0;
+        }
+
+        // Malloc a page for handler
 	evtchn_page = bmk_pgalloc_one();
 
 	if (!evtchn_page) {
-		minios_printk("\tFailed to alloc Event Channel page\n");
+    		minios_printk("\tFailed to alloc Event Channel page\n");
 		return 0;
 	}
-	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
-	bmk_memset(evtchn_page, 0, PAGE_SIZE);
+    	minios_printk("\tEvent Channel page address: %p\n", evtchn_page);
+	bmk_memset(evtchn_page, 0, PAGE_SIZE);	
 
-	// Clear channel of events and unmask
-	minios_clear_evtchn(op.local_port);
+        // Clear channel of events and unmask
+        minios_clear_evtchn(op.local_port);
 	minios_unmask_evtchn(op.local_port);
 
-	// Bind the handler
-	minios_bind_evtchn(op.local_port, test_handler, evtchn_page);
+        // Bind the handler
+        minios_bind_evtchn(op.local_port, test_handler, evtchn_page);
 
 	minios_printk("\tLocal port for event channel: %u\n", op.local_port);
 
-	// Set Global
-	local_evtchn_prt = op.local_port;
+        // Set Global
+	local_evtchn_prt = op.local_port;	
+	
+	return op.local_port;
+}
 
-	// Set Local Port XenStore Key
-	bmk_memset(local_prt_str, 0, MAX_DOMID_WIDTH);
-	bmk_snprintf(local_prt_str, MAX_DOMID_WIDTH, "%u", op.local_port);
+static void test_handler_2(evtchn_port_t port, struct pt_regs *regs, void *data)
+{
 
-	err = write_to_key(LOCAL_PRT_PATH, local_prt_str);
+	minios_printk("\tSecond Event Channel handler called\n");
+
+}
+
+static evtchn_port_t create_unbound_evtchn(void)
+{
+
+	int err;
+        evtchn_port_t evtchn;
+	char          evt_chn_prt_str[MAX_DOMID_WIDTH];
+
+        err = minios_evtchn_alloc_unbound(server_dom_id, test_handler_2, NULL, &evtchn);
+
+	if (err) {
+		minios_printk("\tError: Failed to allocate event channel\n");
+	} else {
+		minios_printk("\tSuccess: Allocated event channel\n");
+		minios_printk("\t\tEvent channel: %u\n", evtchn);
+	}
+
+	bmk_memset(evt_chn_prt_str, 0, MAX_DOMID_WIDTH);
+	bmk_snprintf(evt_chn_prt_str, MAX_DOMID_WIDTH, "%u", evtchn);
+
+	err = write_to_key(SELF_EVT_CHN, evt_chn_prt_str);
 	if (err) {
 		return 0;
 	}
 
-	return op.local_port;	
+        minios_clear_evtchn(evtchn);
+        minios_unmask_evtchn(evtchn);
+
+	evtchn_prt_2 = evtchn;
+
+	return evtchn;
 }
 
 static int run_client(void)
@@ -535,6 +596,8 @@ static int run_client(void)
 	}
 	server_id = bmk_strtoul(msg, NULL, 10);
 	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+
+	server_dom_id = server_id;
 
 	minios_printk("\tRead Server Id from Key: %u\n", server_id);
 	
@@ -595,23 +658,9 @@ static int run_client(void)
 	/* Read some strings from shared memory */
 	read_from_dedicated_channel();
 
-	/*
-        // Wait for Event Channel Port 
-        xenbus_watch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH, &events);
-        while ((err = xenbus_read(XBT_NIL, EVT_CHN_PRT_PATH, &msg)) != NULL ||  msg[0] == '0') {
-            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-            xenbus_wait_for_watch(&events);
-        }
-
-    	xenbus_unwatch_path_token(XBT_NIL, EVT_CHN_PRT_PATH, EVT_CHN_PRT_PATH);
-
-	minios_printk("\tAction on Event Channel Port Key\n");
-	*/
-
 	/* Read in Event Channel Port */
 
-	msg = read_from_key(EVT_CHN_PRT_PATH);
+	msg = read_from_key(PAL_EVT_CHN);
 	if (!msg) {
 		return 1;
 	}
@@ -619,16 +668,10 @@ static int run_client(void)
 	bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
 	
 	minios_printk("\tRead Event Channel Port from Key: %u\n", evt_chn_prt_nmbr);
-	
-	/*
-	// Reset Event Channel Key 
-	res = write_to_key(EVT_CHN_PRT_PATH, KEY_RESET_VAL);
-	if (res) {
-		return res;
-	}
-	*/
 
         bind_to_interdom_chn(server_id, evt_chn_prt_nmbr);
+
+	create_unbound_evtchn();
 
 	return 0;
 }
@@ -642,7 +685,6 @@ int offer_accept_gnt_init(void)
 	evtchn_page = NULL;
 
         local_evtchn_prt = 0;
-	//unbind_all_ports();
 
 	/* Execute mode: Server or Client */
 	if (IS_SERVER == 1) {
@@ -670,7 +712,6 @@ void offer_accept_gnt_fini(void)
 	
 	minios_printk("\tUnbinding from Local Interdomain Event Channel Port: %u ...\n", local_evtchn_prt);
 
-	minios_mask_evtchn(local_evtchn_prt);
         minios_unbind_evtchn(local_evtchn_prt);
 
 	if(evtchn_page)
