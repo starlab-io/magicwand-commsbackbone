@@ -622,7 +622,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     struct xenbus_event_queue events;
     grant_ref_t	              client_grant_ref = 0;
-    evtchn_port_t             evt_chn_prt_nmbr = 0;
+    evtchn_port_t             vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
 
@@ -694,13 +694,13 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Get the event port and bind to it
-    rc = xe_comms_read_int_from_key( EVT_CHN_PRT_PATH, &evt_chn_prt_nmbr );
+    rc = xe_comms_read_int_from_key( VM_EVT_CHN_PRT_PATH, &vm_evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
     }
 
-    rc = xe_comms_bind_to_interdom_chn( remoteId, evt_chn_prt_nmbr );
+    rc = xe_comms_bind_to_interdom_chn( remoteId, vm_evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
