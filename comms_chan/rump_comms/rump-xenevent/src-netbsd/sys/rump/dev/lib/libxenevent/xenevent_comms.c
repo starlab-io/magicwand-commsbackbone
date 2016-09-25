@@ -273,7 +273,7 @@ xe_comms_event_callback( evtchn_port_t port,
     DEBUG_PRINT("Event Channel %u\n", port );
     DEBUG_BREAK();
 
-    send_event(g_state.self_event_port);
+    //send_event(g_state.self_event_port);
 
     //
     // TODO: 
@@ -688,8 +688,8 @@ xe_comms_create_interdom_chn ( domid_t srvr_id )
     }
 
     // Clear channel of events and unmask
-    //minios_clear_evtchn( g_state.self_event_port );
-    //minios_unmask_evtchn( g_state.self_event_port );
+    minios_clear_evtchn( g_state.self_event_port );
+    minios_unmask_evtchn( g_state.self_event_port );
 
     DEBUG_PRINT("Local port for self event channel: %u\n", g_state.self_event_port );
 
@@ -811,6 +811,10 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     {
         goto ErrorExit;
     }
+
+    //send_event(g_state.self_event_port);
+    send_event(g_state.local_event_port);
+
     
 ErrorExit:
     return rc;
@@ -831,15 +835,17 @@ xe_comms_fini( void )
     minios_unbind_evtchn(g_state.local_event_port);
 
     
-    // ????
-    // minios_unbind_all_ports();
-
     xenevent_semaphore_destroy( &g_state.messages_available );
 
     
     if (g_state.event_channel_mem)
     {
         bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
+    }
+
+    if (g_state.self_event_channel_mem)
+    {
+        bmk_memfree(g_state.self_event_channel_mem, BMK_MEMWHO_WIREDBMK);
     }
 
     gntmap_fini( &g_state.gntmap_map );
