@@ -101,6 +101,12 @@ typedef struct _xen_comm_state
     // Event channel local port
     evtchn_port_t local_event_port;
     
+    // Self event channel memory
+    uint8_t * self_event_channel_mem;
+
+    // Self event channel local port
+    evtchn_port_t self_event_port;
+
     // Semaphore that is signalled once for each message that has arrived
     xenevent_semaphore_t messages_available;
 
@@ -225,6 +231,40 @@ ErrorExit:
  * Functions for item read/write via Xen ring buffer
  ***************************************************************************/
 
+static int
+send_event(evtchn_port_t port)
+{
+
+    int                err;
+    struct evtchn_send send;
+
+    send.port = port;
+
+    err = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+
+    if (err)
+    {
+        DEBUG_PRINT("Error: Failed to send event\n");
+        DEBUG_PRINT("Port Number: %u\n", send.port);
+        MYASSERT(!"Could not send event over self event channel\n");
+        goto ErrorExit;
+    }
+
+    /*
+    if (err) {
+        DEBUG_PRINT("\tError: Failed to send event\n");
+        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
+    } else {
+        DEBUG_PRINT("\tSent Event\n");
+        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
+    }
+    */
+
+ErrorExit:
+    return err;
+}
+
+
 static void
 xe_comms_event_callback( evtchn_port_t port,
                          struct pt_regs *regs,
@@ -232,6 +272,8 @@ xe_comms_event_callback( evtchn_port_t port,
 {
     DEBUG_PRINT("Event Channel %u\n", port );
     DEBUG_BREAK();
+
+    send_event(g_state.self_event_port);
 
     //
     // TODO: 
@@ -252,6 +294,30 @@ xe_comms_event_callback( evtchn_port_t port,
     // Release xe_comms_read_item() to check for another item
     //
     xenevent_semaphore_up( g_state.messages_available );
+}
+
+static void
+xe_comms_event_self_chn_callback( evtchn_port_t port,
+                                  struct pt_regs *regs,
+                                  void *data )
+{
+    DEBUG_PRINT("Self Event Channel %u\n", port );
+    DEBUG_BREAK();
+
+    //
+    // TODO: 
+
+    //
+    // TODO: Extract the event type and connection ID from shared memory.
+    //
+    // If this is a new connection, deliver the event to the "new
+    // connection" thread.
+    //
+    // Otherwise, deliver the event to the thread that has registered
+    // for the given connection ID.
+    //
+
+//    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
 }
 
 
@@ -587,12 +653,47 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     }
     
     // Clear channel of events and unmask
-//    minios_clear_evtchn( g_state.local_event_port );
-//    minios_unmask_evtchn( g_state.local_event_port );
+    minios_clear_evtchn( g_state.local_event_port );
+    minios_unmask_evtchn( g_state.local_event_port );
 
-    DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
+ErrorExit:
+    return err;
+}
 
-    err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
+static int
+xe_comms_create_interdom_chn ( domid_t srvr_id )
+{
+    int err = 0;
+
+    g_state.self_event_channel_mem = bmk_pgalloc_one();
+    if (NULL == g_state.self_event_channel_mem)
+    {
+        MYASSERT( !"Failed to alloc Self Event Channel page" );
+        err = BMK_ENOMEM;
+        goto ErrorExit;
+    }
+
+    DEBUG_PRINT("Self Event Channel page address: %p\n", g_state.self_event_channel_mem);
+    bmk_memset(g_state.self_event_channel_mem, 0, PAGE_SIZE);
+
+    err = minios_evtchn_alloc_unbound(srvr_id,
+                                      xe_comms_event_self_chn_callback,
+                                      g_state.self_event_channel_mem,
+                                      &g_state.self_event_port);
+
+    if (err)
+    {
+        MYASSERT(!"Could not create self event channel\n");
+        goto ErrorExit;
+    }
+
+    // Clear channel of events and unmask
+    //minios_clear_evtchn( g_state.self_event_port );
+    //minios_unmask_evtchn( g_state.self_event_port );
+
+    DEBUG_PRINT("Local port for self event channel: %u\n", g_state.self_event_port );
+
+    err = xe_comms_write_int_to_key( UK_EVT_CHN_PRT_PATH, g_state.self_event_port );
     if (err)
     {
         goto ErrorExit;
@@ -601,7 +702,6 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 ErrorExit:
     return err;
 }
-
 
 ////////////////////////////////////////////////////
 //
@@ -701,6 +801,12 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     rc = xe_comms_bind_to_interdom_chn( remoteId, vm_evt_chn_prt_nmbr );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    rc = xe_comms_create_interdom_chn ( remoteId );
     if ( rc )
     {
         goto ErrorExit;
