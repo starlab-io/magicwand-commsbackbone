@@ -9,6 +9,8 @@
 
 
 #include <stdint.h>
+#include <stdbool.h>
+
 
 //
 // This type holds one buffer index
@@ -36,5 +38,8 @@ workqueue_enqueue( workqueue_t * wq, work_queue_buffer_idx_t item );
 
 work_queue_buffer_idx_t
 workqueue_dequeue( workqueue_t * wq );
+
+bool
+workqueue_is_empty( workqueue_t * wq );
 
 #endif // work_queue_h

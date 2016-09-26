@@ -9,6 +9,7 @@
 #include <semaphore.h>
 #include <stddef.h>
 
+#include "message_types.h"
 #include "networking.h"
 #include "workqueue.h"
 #include "config.h"
@@ -44,14 +45,26 @@ typedef struct _worker_thread
     // workqueue API. Access to it is protected by a mutex.
     //
     
-    work_queue_buffer_idx_t work_queue_space[ BUFFER_ITEM_COUNT ];
+    //work_queue_buffer_idx_t work_queue_space[ BUFFER_ITEM_COUNT ];
     
     workqueue_t * work_queue;
 
     //
-    // The socket under management.
+    // The socket under management - save it's metadata for easy state
+    // lookup.
     //
-    socket_t sockfd;
+    int          sock_fd;
+
+    //
+    // This socket metadata is the native NetBSD values, e.g. for AF_INET6.
+    //
+    int          sock_domain;
+    int          sock_type;
+    int          sock_protocol;
+
+    mt_port_t    port_num;
+
+    uint8_t      remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
     
 } thread_item_t;
 

@@ -66,7 +66,7 @@
 // mwevent_sring_t
 // mwevent_front_ring_t
 // mwevent_back_ring_t
-DEFINE_RING_TYPES( mwevent, command_message_t, response_message_t );
+DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 
 
 // Maintain all state here for future flexibility
@@ -166,8 +166,8 @@ ErrorExit:
 }
 
 static int
-xe_comms_read_int_from_key( const char *Path,
-                            int * OutVal)
+xe_comms_read_int_from_key( IN const char *Path,
+                            OUT int * OutVal)
 {
     xenbus_transaction_t txn;
     char                *val;
@@ -221,6 +221,37 @@ ErrorExit:
     return res;
 }
 
+static int
+xe_comms_wait_and_read_int_from_key( IN const char *Path,
+                                     OUT int * OutVal)
+{
+    int     rc = 0;
+    bool printed = false;
+    struct xenbus_event_queue events;
+
+    bmk_memset( &events, 0, sizeof(events) );
+    xenbus_event_queue_init(&events);
+
+    xenbus_watch_path_token(XBT_NIL, Path, Path, &events);
+
+    // Wait until we can read the key and its value is non-zero
+    while ( (rc = xe_comms_read_int_from_key( Path, OutVal ) ) != 0
+            || (0 == *OutVal) )
+    {
+        if ( !printed )
+        {
+            DEBUG_PRINT( "Waiting for key %s to appear\n", Path );
+            printed = true;
+        }
+        xenbus_wait_for_watch(&events);
+    }
+
+    xenbus_unwatch_path_token(XBT_NIL, Path, Path );
+
+    return rc;
+}
+
+
 /***************************************************************************
  * Functions for item read/write via Xen ring buffer
  ***************************************************************************/
@@ -269,11 +300,10 @@ xe_comms_read_item( void * Memory,
 {
     int rc = 0;
     bool available = false;
-    command_message_t * command = NULL;
+    mt_request_generic_t * request = NULL;
 
     do
     {
-//        available = RING_HAS_UNCONSUMED_REQUESTS( &g_state.shared_ring );
         available = RING_HAS_UNCONSUMED_REQUESTS( &g_state.back_ring );
 
         if ( !available )
@@ -285,22 +315,22 @@ xe_comms_read_item( void * Memory,
     } while ( !available );
 
     // Consume the request
-    command = (command_message_t *)
+    request = (mt_request_generic_t *)
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    if ( command->size > Size )
+    if ( request->base.size > Size )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Command buffer is too big for destination buffer" );
         goto ErrorExit;
     }
 
-    *BytesRead = command->size;
-    bmk_memcpy( Memory, command, *BytesRead );
+    // Total size: header + payload sizes
+    *BytesRead = sizeof(request->base) + request->base.size;
+    bmk_memcpy( Memory, request, *BytesRead );
 
 ErrorExit:
-//    ++g_state.shared_ring.req_cons;
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
     
@@ -544,6 +574,8 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 
     DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
 
+
+    
     err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
     if (err)
     {
@@ -587,11 +619,15 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     }
     
     // Clear channel of events and unmask
-//    minios_clear_evtchn( g_state.local_event_port );
-//    minios_unmask_evtchn( g_state.local_event_port );
+    minios_clear_evtchn( g_state.local_event_port );
+    minios_unmask_evtchn( g_state.local_event_port );
 
     DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
 
+    //////////////////////
+    minios_notify_remote_via_evtchn( g_state.local_event_port );
+
+    
     err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
     if (err)
     {
@@ -617,20 +653,16 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     domid_t                   localId = 0;
     domid_t                   remoteId = 0;
 
-    char*                     err = NULL;
-    char*                     msg = NULL;
+//    char*                     err = NULL;
+//    char*                     msg = NULL;
 
-    struct xenbus_event_queue events;
+//    struct xenbus_event_queue events;
     grant_ref_t	              client_grant_ref = 0;
     evtchn_port_t             evt_chn_prt_nmbr = 0;
 
+    DEBUG_BREAK();
     bmk_memset( &g_state, 0, sizeof(g_state) );
 
-    // The front end initializes the shared ring
-//    SHARED_RING_INIT( &g_state.shared_ring );
-    BACK_RING_INIT( &g_state.back_ring,
-                    g_state.shared_ring,
-                    PAGE_SIZE * DEFAULT_NMBR_GNT_REF);
 
 //    g_state.messages_available = MsgAvailableSemaphore;
 
@@ -659,21 +691,12 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Wait for the server ID.
-    xenbus_event_queue_init(&events);
-
-    xenbus_watch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH, &events);
-    while ( (rc = xe_comms_read_int_from_key( SERVER_ID_PATH, (int *) &remoteId ) ) != 0
-            || (0 == remoteId) )
+    rc = xe_comms_wait_and_read_int_from_key( SERVER_ID_PATH,
+                                              (int *) &remoteId );
+    if ( rc )
     {
-        DEBUG_PRINT( "Waiting for server to come online\n" );
-        bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-        xenbus_wait_for_watch(&events);
+        goto ErrorExit;
     }
-
-    xenbus_unwatch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH);
-    bmk_memset( &events, 0, sizeof(events) );
-
     DEBUG_PRINT( "Discovered remote server ID: %u\n", remoteId );
 
     // Wait for the grant reference
@@ -694,7 +717,8 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Get the event port and bind to it
-    rc = xe_comms_read_int_from_key( EVT_CHN_PRT_PATH, &evt_chn_prt_nmbr );
+    rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PRT_PATH,
+                                              &evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
@@ -705,6 +729,16 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     {
         goto ErrorExit;
     }
+
+    // The grant has been accepted. We can use shared memory for the
+    // ring buffer now.
+
+    // The front end initializes the shared ring
+    //    SHARED_RING_INIT( &g_state.shared_ring );
+    BACK_RING_INIT( &g_state.back_ring,
+                    g_state.shared_ring,
+                    PAGE_SIZE * DEFAULT_NMBR_GNT_REF);
+
     
 ErrorExit:
     return rc;

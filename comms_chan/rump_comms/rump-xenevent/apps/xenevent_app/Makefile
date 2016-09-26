@@ -42,7 +42,7 @@ $(APPNAME).run: $(APPNAME).bin
 	@echo " gdb -ex 'target remote:1234' $@"
 
 # threads.c
-$(APPNAME).bin: $(APPNAME).c networking.c bitfield.c workqueue.c
+$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
