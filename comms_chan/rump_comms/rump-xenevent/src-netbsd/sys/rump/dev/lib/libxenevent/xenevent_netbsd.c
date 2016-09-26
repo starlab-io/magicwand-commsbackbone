@@ -109,7 +109,6 @@ void
 xenevent_mutex_wait( xenevent_mutex_t Mutex )
 {
     DEBUG_PRINT( "Waiting on mutex at %p\n", Mutex );
-    DEBUG_BREAK();
     mutex_enter( (kmutex_t *) Mutex );
     DEBUG_PRINT( "Completed wait on mutex at %p\n", Mutex );
 }

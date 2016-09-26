@@ -247,8 +247,9 @@ xe_comms_wait_and_read_int_from_key( IN const char *Path,
     {
         if ( !printed )
         {
-            DEBUG_PRINT( "Waiting for key %s to appear\n", Path );
-            printed = true;
+            DEBUG_PRINT( "Waiting for key %s to appear. Read value %d\n",
+                         Path, *OutVal );
+            //printed = true;
         }
         xenbus_wait_for_watch(&events);
     }
@@ -377,8 +378,14 @@ xe_comms_read_item( void * Memory,
                     size_t * BytesRead )
 {
     int rc = 0;
-    bool available = false;
-    mt_request_generic_t * request = NULL;
+
+    DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
+    send_event( g_state.local_event_port );
+
+#if 0
+
+//    bool available = false;
+//    mt_request_generic_t * request = NULL;
 
     do
     {
@@ -409,9 +416,10 @@ xe_comms_read_item( void * Memory,
     bmk_memcpy( Memory, request, *BytesRead );
 
 ErrorExit:
+
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
-    
+#endif    
     return rc;
 }
 
@@ -643,6 +651,21 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     minios_clear_evtchn( g_state.local_event_port );
     minios_unmask_evtchn( g_state.local_event_port );
 
+    // Indicate that the VM's event channel is bound
+    err = xe_comms_write_int_to_key( VM_EVT_CHN_IS_BOUND, 1 );
+    if ( err )
+    {
+        goto ErrorExit;
+    }
+
+    bmk_printf( "Waiting." );
+    for ( int i = 0; i < 10; i++ )
+    {
+        if ( i % 5 == 0 ) bmk_printf(".");
+    }
+
+    send_event( g_state.local_event_port );
+    
 ErrorExit:
     return err;
 }
@@ -790,7 +813,10 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 #endif
     //send_event(g_state.self_event_port);
-    send_event(g_state.local_event_port);
+    for ( int i = 0; i < 3; i++ )
+    {
+        send_event(g_state.local_event_port);
+    }
     
 ErrorExit:
     return rc;

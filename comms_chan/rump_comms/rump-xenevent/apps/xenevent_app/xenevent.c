@@ -545,7 +545,7 @@ init_state( void )
     {
         goto ErrorExit;
     }
-
+#if 0
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
         rc = pthread_create( &g_state.worker_threads[ i ].self,
@@ -558,7 +558,7 @@ init_state( void )
             goto ErrorExit;
         }
     }
-    
+#endif 
     //
     // Initialize the threads
     //
@@ -588,6 +588,18 @@ fini_state( void )
         sem_destroy( &g_state.worker_threads[i].awaiting_work_sem );
 
     } // for
+
+    if ( g_state.input_fd > 0 )
+    {
+        close( g_state.input_fd );
+    }
+
+#ifdef NORUMP
+    if ( g_state.output_fd > 0 )
+    {
+        close( g_state.output_fd );
+    }
+#endif
 }
 
 //
@@ -713,6 +725,29 @@ ErrorExit:
     return rc;
 } // test_message_dispatcher
 
+static int
+test_message_dispatcher2( void )
+{
+    int rc = 0;
+    int devfd = 0;
+    size_t size = 0;
+    int ct = 0;
+    bool more_processing = false;
+    char buf[100];
+    while( ct++ < 10 )
+    {
+        // Read just sends an event -
+        size = read( g_state.input_fd, buf, sizeof(buf) );
+
+        DEBUG_PRINT( "Read %d bytes from input_fd. Waiting a bit\n", 0 );
+        sleep(5);
+        
+    } // while
+
+ErrorExit:
+    return rc;
+} // test_message_dispatcher2
+
 
 
 int main(void)
@@ -726,15 +761,9 @@ int main(void)
         goto ErrorExit;
     }
 
-    while ( true )
-    {
-        sleep(1);
-    }
-
-    
     // main thread dispatches commands to the other threads
-    //rc = test_message_dispatcher();
-    rc = message_dispatcher();
+    rc = test_message_dispatcher2();
+    //rc = message_dispatcher();
     
 ErrorExit:
     fini_state();
