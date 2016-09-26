@@ -22,6 +22,10 @@
 
 #include <xen/evtchn.h>
 
+//#include <asm/sync_bitops.h>
+//#include <asm/xen/hypervisor.h>
+//#include <xen/xen-ops.h>
+
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
 #define CLIENT_ID_KEY         "client_id" 
@@ -80,6 +84,14 @@ static struct file_operations fops =
    .write = dev_write,
    .release = dev_release,
 };
+
+typedef struct char_driver_dev {
+
+   evtchn_port_t evtchn;
+
+} char_driver_dev_t;
+
+static char_driver_dev_t *c_dev;
 
 static int write_to_key(const char *path, const char *value)
 {
@@ -196,7 +208,7 @@ static void send_evt(int evtchn_prt)
    if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send)) {
       pr_err("Failed to send event\n");
    } else {
-      printk(KERN_INFO "Sent Event\n");
+      printk(KERN_INFO "Sent Event. Port: %u\n", send.port);
    }
 
 }
@@ -392,11 +404,12 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
    char     *remote_evt_chn_str;
    unsigned long irqflags;
 
-   //struct evtchn_unmask unmask;
-   //struct evtchn_bind_interdomain bind_interdomain;
+   /*
+   struct evtchn_unmask unmask;
+   struct evtchn_bind_interdomain bind_interdomain;
+   */
 
-
-   irqflags = 0;
+   irqflags = 24;
    remote_evt_chn_str = (char *)read_from_key(PAL_EVT_CHN);
 
    if(XENBUS_IS_ERR_READ(remote_evt_chn_str)) {
@@ -421,7 +434,16 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
 
    kfree(remote_evt_chn_str);
 
+   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
+                                               pal_event_channel,
+                                               test_handler,
+                                               irqflags,
+                                               DEVICE_NAME,
+                                               c_dev);
+                                               
+   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", err);
 
+   /*
    err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
                                                pal_event_channel,
                                                test_handler,
@@ -429,6 +451,9 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
                                                DEVICE_NAME,
                                                &majorNumber);
                                                
+   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", err);
+   */
+
    /*
    err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
                                                pal_event_channel,
@@ -437,6 +462,9 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
                                                NULL,
                                                NULL);
 
+   */
+
+   /*
    // Bind to the evt chn
    bind_interdomain.remote_dom = client_dom_id;
    bind_interdomain.remote_port = pal_event_channel;
@@ -449,13 +477,33 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
       return;
    }
 
-   // Clear evt chn
-   //sync_clear_bit(bind_interdomain.local_port, &s->evtchn_pending[0]);
-   
+   err = bind_evtchn_to_irq(bind_interdomain.local_port);
+
+   if (err) {
+      printk(KERN_INFO "\tError binding Evt Chn to IRQ\n");
+      return;
+   }
+
    // Unmask port
    unmask.port = bind_interdomain.local_port; 
    HYPERVISOR_event_channel_op(EVTCHNOP_unmask, &unmask);
 
+   c_dev->evtchn = bind_interdomain.local_port;
+
+   // Request IRQ
+   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, c_dev);
+
+   if (err) {
+      printk(KERN_INFO "\tError binding handler to IRQ\n");
+      return;
+   }
+
+   */ 
+
+   /*
+   // Clear evt chn
+   sync_clear_bit(bind_interdomain.local_port, &xen_dummy_shared_info->evtchn_pending[0]);
+   
    // Request IRQ
    err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, &majorNumber);
 
@@ -464,6 +512,8 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
       return;
    }
    */
+
+   send_evt(self_event_channel);
 
 }
 
@@ -496,6 +546,7 @@ static int __init mwchar_init(void) {
    is_client = 0;
    client_dom_id = 0;
    self_event_channel = 0;
+   
 
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
@@ -545,6 +596,11 @@ static int __init mwchar_init(void) {
       pr_err("Failed to set client evt chn watcher\n");
    }
 
+   
+   c_dev = kmalloc(sizeof(char_driver_dev_t), GFP_KERNEL);
+   if (c_dev)
+       memset(c_dev,0,sizeof(char_driver_dev_t));
+
    return 0;
 }
 
@@ -571,6 +627,8 @@ static void __exit mwchar_exit(void){
 
       unregister_xenbus_watch(&msg_len_watch);
    }
+
+   kfree(c_dev);
 
    printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");
    printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");
