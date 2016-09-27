@@ -273,7 +273,7 @@ xe_comms_event_callback( evtchn_port_t port,
     DEBUG_PRINT("Event Channel %u\n", port );
     DEBUG_BREAK();
 
-    //send_event(g_state.self_event_port);
+    send_event(g_state.self_event_port);
 
     //
     // TODO: 
@@ -812,8 +812,12 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
         goto ErrorExit;
     }
 
+    DEBUG_PRINT("Calling send_event() ... \n");
+    DEBUG_BREAK();
+
+    send_event(g_state.self_event_port);
     //send_event(g_state.self_event_port);
-    send_event(g_state.local_event_port);
+    //send_event(g_state.local_event_port);
 
     
 ErrorExit:
