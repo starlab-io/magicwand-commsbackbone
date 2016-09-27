@@ -20,6 +20,7 @@
 #include <xen/xenbus.h>
 #include <xen/events.h>
 
+//#include <xen/events/events_internal.h>
 #include <xen/evtchn.h>
 
 //#include <asm/sync_bitops.h>
@@ -400,16 +401,15 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
                                          const char **v,
                                          unsigned int l)
 {
-   int       err;
+   //int       err;
    char     *remote_evt_chn_str;
-   unsigned long irqflags;
+   //unsigned long irqflags;
+   int           irq;
 
-   /*
-   struct evtchn_unmask unmask;
-   struct evtchn_bind_interdomain bind_interdomain;
-   */
+   //struct evtchn_unmask unmask;
+   //struct evtchn_bind_interdomain bind_interdomain;
 
-   irqflags = 24;
+   //irqflags = 24;
    remote_evt_chn_str = (char *)read_from_key(PAL_EVT_CHN);
 
    if(XENBUS_IS_ERR_READ(remote_evt_chn_str)) {
@@ -434,14 +434,15 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
 
    kfree(remote_evt_chn_str);
 
-   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
+   irq = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
                                                pal_event_channel,
                                                test_handler,
-                                               irqflags,
-                                               DEVICE_NAME,
-                                               c_dev);
+                                               0,
+                                               NULL,
+                                               NULL);
                                                
-   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", err);
+   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", irq);
+   
 
    /*
    err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
@@ -476,13 +477,21 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
       printk(KERN_INFO "\tError binding to Evt Chn\n");
       return;
    }
+   */
 
+   //irq = get_evtchn_to_irq(bind_interdomain.local_port);
+
+   /*
    err = bind_evtchn_to_irq(bind_interdomain.local_port);
 
    if (err) {
       printk(KERN_INFO "\tError binding Evt Chn to IRQ\n");
       return;
    }
+   */
+
+   /*
+   irq = bind_evtchn_to_irq(bind_interdomain.local_port);
 
    // Unmask port
    unmask.port = bind_interdomain.local_port; 
@@ -490,22 +499,30 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
 
    c_dev->evtchn = bind_interdomain.local_port;
 
-   // Request IRQ
-   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, c_dev);
+   printk(KERN_INFO "\tMajor Number: %u\n", majorNumber);
 
+   // Request IRQ
+   //request_irq(irq, test_handler, irqflags, DEVICE_NAME, &majorNumber);
+   request_irq(irq, test_handler, 0, NULL, NULL);
+   printk(KERN_INFO "\tIRQ Number: %d\n", irq);
+   */
+
+   /*
    if (err) {
       printk(KERN_INFO "\tError binding handler to IRQ\n");
       return;
    }
+   */
 
-   */ 
 
    /*
    // Clear evt chn
    sync_clear_bit(bind_interdomain.local_port, &xen_dummy_shared_info->evtchn_pending[0]);
-   
+   */
+
    // Request IRQ
-   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, &majorNumber);
+   /*
+   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, c_dev);
 
    if (err) {
       printk(KERN_INFO "\tError binding handler to Evt Chn\n");
@@ -513,7 +530,11 @@ static void remote_evt_chn_state_changed(struct xenbus_watch *w,
    }
    */
 
-   send_evt(self_event_channel);
+   //send_evt(self_event_channel);
+   //send_evt(bind_interdomain.local_port);
+
+   notify_remote_via_irq(irq);
+
 
 }
 
