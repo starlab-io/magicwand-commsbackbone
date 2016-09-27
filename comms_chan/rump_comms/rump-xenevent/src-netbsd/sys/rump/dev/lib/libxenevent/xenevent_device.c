@@ -241,6 +241,8 @@ xe_dev_read( dev_t Dev,
     
     // Only one reader at a time
     xenevent_mutex_wait( g_state.read_lock );
+
+    DEBUG_BREAK();
     
     for ( int i = 0; i < Uio->uio_iovcnt; i++ )
     {

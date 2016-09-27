@@ -136,7 +136,7 @@ int workqueue_enqueue( workqueue_t * wq, work_queue_buffer_idx_t item )
     --wq->available_slots;
 
     DEBUG_PRINT("%d - Enqueued item: %d\n", wq->id, item );
-    DEBUG_BREAK();
+
 ErrorExit:
     pthread_mutex_unlock( &wq->lock );
     return rc;
@@ -148,10 +148,10 @@ workqueue_dequeue( workqueue_t * wq )
     work_queue_buffer_idx_t item = INVALID_WORK_QUEUE_IDX;
 
     pthread_mutex_lock( &wq->lock );
-
-    // Ensure there's something to get.
+    
     if ( wq->item_ct == wq->available_slots )
     {
+        // Ensure there's something to get.
         DEBUG_PRINT( "Requested item not available in workqueue %d\n", wq->id);
         goto ErrorExit;
     }
@@ -170,4 +170,14 @@ ErrorExit:
     pthread_mutex_unlock( &wq->lock );
     
     return item;
+}
+
+bool
+workqueue_is_empty( workqueue_t * wq )
+{
+    pthread_mutex_lock( &wq->lock );
+    bool res =  ( wq->item_ct == wq->available_slots );
+    pthread_mutex_unlock( &wq->lock );
+
+    return res;
 }
