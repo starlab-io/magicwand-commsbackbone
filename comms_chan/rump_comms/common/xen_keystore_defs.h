@@ -38,9 +38,12 @@
 
 #define GRANT_REF_PATH            XENEVENT_XENSTORE_ROOT "/gnt_ref"
 #define MSG_LENGTH_PATH           XENEVENT_XENSTORE_ROOT "/msg_len"
+
 #define VM_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_prt"
 #define UK_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/uk_evt_chn_prt"
-#define LOCAL_PRT_PATH            XENEVENT_XENSTORE_ROOT "/client_local_port"
+
+#define VM_EVT_CHN_IS_BOUND       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_is_bound"
+
 
 //
 //  Grant Mapping Variables 

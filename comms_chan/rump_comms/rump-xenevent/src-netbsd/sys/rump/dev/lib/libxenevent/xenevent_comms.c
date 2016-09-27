@@ -66,7 +66,7 @@
 // mwevent_sring_t
 // mwevent_front_ring_t
 // mwevent_back_ring_t
-DEFINE_RING_TYPES( mwevent, command_message_t, response_message_t );
+DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 
 
 // Maintain all state here for future flexibility
@@ -101,6 +101,13 @@ typedef struct _xen_comm_state
     // Event channel local port
     evtchn_port_t local_event_port;
     
+    // Self event channel memory - for creating an unbound event channel.
+    // XXXXX remove this
+    uint8_t * self_event_channel_mem;
+
+    // Self event channel local port
+    evtchn_port_t self_event_port;
+
     // Semaphore that is signalled once for each message that has arrived
     xenevent_semaphore_t messages_available;
 
@@ -166,8 +173,8 @@ ErrorExit:
 }
 
 static int
-xe_comms_read_int_from_key( const char *Path,
-                            int * OutVal)
+xe_comms_read_int_from_key( IN const char *Path,
+                            OUT int * OutVal)
 {
     xenbus_transaction_t txn;
     char                *val;
@@ -221,9 +228,84 @@ ErrorExit:
     return res;
 }
 
+static int
+xe_comms_wait_and_read_int_from_key( IN const char *Path,
+                                     OUT int * OutVal)
+{
+    int     rc = 0;
+    bool printed = false;
+    struct xenbus_event_queue events;
+
+    bmk_memset( &events, 0, sizeof(events) );
+    xenbus_event_queue_init(&events);
+
+    xenbus_watch_path_token(XBT_NIL, Path, Path, &events);
+
+    // Wait until we can read the key and its value is non-zero
+    while ( (rc = xe_comms_read_int_from_key( Path, OutVal ) ) != 0
+            || (0 == *OutVal) )
+    {
+        if ( !printed )
+        {
+            DEBUG_PRINT( "Waiting for key %s to appear. Read value %d\n",
+                         Path, *OutVal );
+            //printed = true;
+        }
+        xenbus_wait_for_watch(&events);
+    }
+
+    xenbus_unwatch_path_token(XBT_NIL, Path, Path );
+
+    return rc;
+}
+
+
 /***************************************************************************
  * Functions for item read/write via Xen ring buffer
  ***************************************************************************/
+
+static int
+send_event(evtchn_port_t port)
+{
+
+    int                err;
+//    struct evtchn_send send;
+
+    DEBUG_PRINT( "Sending event to (local) port %d\n", port );
+    err = minios_notify_remote_via_evtchn( port );
+    if ( err )
+    {
+        MYASSERT( !"Failed to send event" );
+    }
+#if 0
+    
+    send.port = port;
+
+    err = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+
+    if (err)
+    {
+        DEBUG_PRINT("Error: Failed to send event\n");
+        DEBUG_PRINT("Port Number: %u\n", send.port);
+        MYASSERT(!"Could not send event over event channel\n");
+        goto ErrorExit;
+    }
+
+    /*
+    if (err) {
+        DEBUG_PRINT("\tError: Failed to send event\n");
+        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
+    } else {
+        DEBUG_PRINT("\tSent Event\n");
+        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
+    }
+    */
+
+ErrorExit:
+#endif
+    return err;
+}
+
 
 static void
 xe_comms_event_callback( evtchn_port_t port,
@@ -232,6 +314,8 @@ xe_comms_event_callback( evtchn_port_t port,
 {
     DEBUG_PRINT("Event Channel %u\n", port );
     DEBUG_BREAK();
+
+    //send_event(g_state.self_event_port);
 
     //
     // TODO: 
@@ -254,6 +338,32 @@ xe_comms_event_callback( evtchn_port_t port,
     xenevent_semaphore_up( g_state.messages_available );
 }
 
+#if 0
+// Unused
+static void
+xe_comms_event_self_chn_callback( evtchn_port_t port,
+                                  struct pt_regs *regs,
+                                  void *data )
+{
+    DEBUG_PRINT("Self Event Channel %u\n", port );
+    DEBUG_BREAK();
+
+    //
+    // TODO: 
+
+    //
+    // TODO: Extract the event type and connection ID from shared memory.
+    //
+    // If this is a new connection, deliver the event to the "new
+    // connection" thread.
+    //
+    // Otherwise, deliver the event to the thread that has registered
+    // for the given connection ID.
+    //
+
+//    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
+}
+#endif
 
 /**
  * xe_comms_read_item
@@ -268,12 +378,17 @@ xe_comms_read_item( void * Memory,
                     size_t * BytesRead )
 {
     int rc = 0;
-    bool available = false;
-    command_message_t * command = NULL;
+
+    DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
+    send_event( g_state.local_event_port );
+
+#if 0
+
+//    bool available = false;
+//    mt_request_generic_t * request = NULL;
 
     do
     {
-//        available = RING_HAS_UNCONSUMED_REQUESTS( &g_state.shared_ring );
         available = RING_HAS_UNCONSUMED_REQUESTS( &g_state.back_ring );
 
         if ( !available )
@@ -285,25 +400,26 @@ xe_comms_read_item( void * Memory,
     } while ( !available );
 
     // Consume the request
-    command = (command_message_t *)
+    request = (mt_request_generic_t *)
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    if ( command->size > Size )
+    if ( request->base.size > Size )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Command buffer is too big for destination buffer" );
         goto ErrorExit;
     }
 
-    *BytesRead = command->size;
-    bmk_memcpy( Memory, command, *BytesRead );
+    // Total size: header + payload sizes
+    *BytesRead = sizeof(request->base) + request->base.size;
+    bmk_memcpy( Memory, request, *BytesRead );
 
 ErrorExit:
-//    ++g_state.shared_ring.req_cons;
+
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
-    
+#endif    
     return rc;
 }
 
@@ -499,61 +615,6 @@ xe_comms_accept_grant(domid_t      domu_server_id,
     return 0;
 }
 
-#if 0
-static int
-xe_comms_bind_to_interdom_chn (domid_t srvr_id,
-                               evtchn_port_t remote_prt_nmbr)
-{
-    int err = 0;
-    // Don't use minios_evtchn_bind_interdomain; spurious events are
-    // delivered to us when we do.
-    evtchn_bind_interdomain_t op = {0};
-
-    op.remote_dom  = srvr_id;
-    op.remote_port = remote_prt_nmbr;
-    // FAILS: err = -14
-    err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain, &op);
-    if (err)
-    {
-        minios_printk("ERROR: bind_interdomain failed with return code =%d\n", err);
-        MYASSERT( !"HYPERVISOR_event_channel_op" );
-        goto ErrorExit;
-    }
-    
-    g_state.event_channel_mem = bmk_pgalloc_one();
-    if (NULL == g_state.event_channel_mem)
-    {
-        MYASSERT( !"Failed to alloc Event Channel page" );
-        err = BMK_ENOMEM;
-        goto ErrorExit;
-    }
-
-    DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_mem);
-    bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
-
-    // Clear channel of events and unmask
-    minios_clear_evtchn(op.local_port);
-    minios_unmask_evtchn(op.local_port);
-
-    // Bind the handler
-    minios_bind_evtchn(op.local_port,
-                       xe_comms_event_callback,
-                       g_state.event_channel_mem );
-
-    g_state.local_event_port = op.local_port;
-
-    DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
-
-    err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
-    if (err)
-    {
-        goto ErrorExit;
-    }
-
-ErrorExit:
-    return err;
-}
-#endif
 
 static int
 xe_comms_bind_to_interdom_chn (domid_t srvr_id,
@@ -587,12 +648,63 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     }
     
     // Clear channel of events and unmask
-//    minios_clear_evtchn( g_state.local_event_port );
-//    minios_unmask_evtchn( g_state.local_event_port );
+    minios_clear_evtchn( g_state.local_event_port );
+    minios_unmask_evtchn( g_state.local_event_port );
 
-    DEBUG_PRINT("Local port for event channel: %u\n", g_state.local_event_port );
+    // Indicate that the VM's event channel is bound
+    err = xe_comms_write_int_to_key( VM_EVT_CHN_IS_BOUND, 1 );
+    if ( err )
+    {
+        goto ErrorExit;
+    }
 
-    err = xe_comms_write_int_to_key( LOCAL_PRT_PATH, g_state.local_event_port );
+    bmk_printf( "Waiting." );
+    for ( int i = 0; i < 10; i++ )
+    {
+        if ( i % 5 == 0 ) bmk_printf(".");
+    }
+
+    send_event( g_state.local_event_port );
+    
+ErrorExit:
+    return err;
+}
+
+#if 0
+// Creates an unbound event channel
+static int
+xe_comms_create_interdom_chn ( domid_t srvr_id )
+{
+    int err = 0;
+
+    g_state.self_event_channel_mem = bmk_pgalloc_one();
+    if (NULL == g_state.self_event_channel_mem)
+    {
+        MYASSERT( !"Failed to alloc Self Event Channel page" );
+        err = BMK_ENOMEM;
+        goto ErrorExit;
+    }
+
+    DEBUG_PRINT("Self Event Channel page address: %p\n", g_state.self_event_channel_mem);
+    bmk_memset(g_state.self_event_channel_mem, 0, PAGE_SIZE);
+
+    err = minios_evtchn_alloc_unbound(srvr_id,
+                                      xe_comms_event_self_chn_callback,
+                                      g_state.self_event_channel_mem,
+                                      &g_state.self_event_port);
+    if (err)
+    {
+        MYASSERT(!"Could not create self event channel\n");
+        goto ErrorExit;
+    }
+
+    // Clear channel of events and unmask
+    minios_clear_evtchn( g_state.self_event_port );
+    minios_unmask_evtchn( g_state.self_event_port );
+
+    DEBUG_PRINT("Local port for self event channel: %u\n", g_state.self_event_port );
+
+    err = xe_comms_write_int_to_key( UK_EVT_CHN_PRT_PATH, g_state.self_event_port );
     if (err)
     {
         goto ErrorExit;
@@ -601,6 +713,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 ErrorExit:
     return err;
 }
+#endif
 
 
 ////////////////////////////////////////////////////
@@ -613,26 +726,15 @@ ErrorExit:
 int
 xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 {
-    int rc = 0;
-    domid_t                   localId = 0;
-    domid_t                   remoteId = 0;
+    int             rc = 0;
+    domid_t         localId = 0;
+    domid_t         remoteId = 0;
 
-    char*                     err = NULL;
-    char*                     msg = NULL;
+    grant_ref_t	    client_grant_ref = 0;
+    evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
-    struct xenbus_event_queue events;
-    grant_ref_t	              client_grant_ref = 0;
-    evtchn_port_t             evt_chn_prt_nmbr = 0;
-
+    DEBUG_BREAK();
     bmk_memset( &g_state, 0, sizeof(g_state) );
-
-    // The front end initializes the shared ring
-//    SHARED_RING_INIT( &g_state.shared_ring );
-    BACK_RING_INIT( &g_state.back_ring,
-                    g_state.shared_ring,
-                    PAGE_SIZE * DEFAULT_NMBR_GNT_REF);
-
-//    g_state.messages_available = MsgAvailableSemaphore;
 
     rc = xenevent_semaphore_init( &g_state.messages_available );
     if ( 0 != rc )
@@ -641,7 +743,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
     
     //
-    // Init protocol
+    // Begin init protocol
     //
 
     // Read our own dom ID
@@ -659,27 +761,17 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Wait for the server ID.
-    xenbus_event_queue_init(&events);
-
-    xenbus_watch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH, &events);
-    while ( (rc = xe_comms_read_int_from_key( SERVER_ID_PATH, (int *) &remoteId ) ) != 0
-            || (0 == remoteId) )
+    rc = xe_comms_wait_and_read_int_from_key( SERVER_ID_PATH,
+                                              (int *) &remoteId );
+    if ( rc )
     {
-        DEBUG_PRINT( "Waiting for server to come online\n" );
-        bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-        xenbus_wait_for_watch(&events);
+        goto ErrorExit;
     }
-
-    xenbus_unwatch_path_token(XBT_NIL, SERVER_ID_PATH, SERVER_ID_PATH);
-    bmk_memset( &events, 0, sizeof(events) );
-
     DEBUG_PRINT( "Discovered remote server ID: %u\n", remoteId );
 
+    //
     // Wait for the grant reference
     //
-    // XXXXXX this likely requires that our event channel is set up, or
-    // we arrange for some other locking indication
     rc = receive_grant_references();
     if ( rc )
     {
@@ -694,16 +786,36 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Get the event port and bind to it
-    rc = xe_comms_read_int_from_key( EVT_CHN_PRT_PATH, &evt_chn_prt_nmbr );
+    rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PRT_PATH,
+                                              &vm_evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
     }
 
-    rc = xe_comms_bind_to_interdom_chn( remoteId, evt_chn_prt_nmbr );
+    rc = xe_comms_bind_to_interdom_chn( remoteId, vm_evt_chn_prt_nmbr );
     if ( rc )
     {
         goto ErrorExit;
+    }
+
+    // The grant has been accepted. We can use shared memory for the
+    // ring buffer now. We're the back end, so we only perform the back init.
+    BACK_RING_INIT( &g_state.back_ring,
+                    g_state.shared_ring,
+                    PAGE_SIZE * DEFAULT_NMBR_GNT_REF);
+#if 0
+    // We do not currently create an unbound channel.
+    rc = xe_comms_create_interdom_chn ( remoteId );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+#endif
+    //send_event(g_state.self_event_port);
+    for ( int i = 0; i < 3; i++ )
+    {
+        send_event(g_state.local_event_port);
     }
     
 ErrorExit:
@@ -725,9 +837,6 @@ xe_comms_fini( void )
     minios_unbind_evtchn(g_state.local_event_port);
 
     
-    // ????
-    // minios_unbind_all_ports();
-
     xenevent_semaphore_destroy( &g_state.messages_available );
 
     
@@ -735,6 +844,11 @@ xe_comms_fini( void )
     {
         bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
     }
+
+//    if (g_state.self_event_channel_mem)
+//    {
+//        bmk_memfree(g_state.self_event_channel_mem, BMK_MEMWHO_WIREDBMK);
+//    }
 
     gntmap_fini( &g_state.gntmap_map );
 

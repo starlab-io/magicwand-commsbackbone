@@ -23,13 +23,15 @@
 #include <xen/xenbus.h>
 
 #include <xen/events.h>
+#include <xen/interface/callback.h>
 
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
 #define CLIENT_ID_KEY         "client_id" 
 #define GNT_REF_KEY           "gnt_ref" 
-#define EVT_CHN_PRT_KEY       "evt_chn_port"
-#define CLIENT_LOCAL_PRT_KEY  "client_local_port"
+#define EVT_CHN_PRT_KEY       "vm_evt_chn_prt"
+#define VM_EVT_CHN_IS_BOUND   "vm_evt_chn_is_bound"
+#define CLIENT_LOCAL_PRT_KEY  "client_local_prt"
 #define MAX_GNT_REF_WIDTH     15
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
@@ -64,6 +66,20 @@ struct udphdr      *udp_header;
 struct iphdr       *ip_header;
 struct tcphdr      *tcp_header;
 
+static int          irqs_handled = 0;
+
+
+static void send_evt(int evtchn_prt)
+{
+   // note also: notify_remote_via_irq()
+   struct evtchn_send send = { .port = evtchn_prt };
+   printk(KERN_INFO "Sending event to port %d\n", evtchn_prt );
+
+   if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send))
+      pr_err("Failed to send event\n");
+}
+
+
 static unsigned int process_packet(unsigned int            hooknum,
                                    struct sk_buff          *skb,
                                    const struct net_device *in,
@@ -74,10 +90,18 @@ static unsigned int process_packet(unsigned int            hooknum,
    unsigned int dst_port;
    unsigned int src_port;
 
+static int callct = 0;
+
    ip_header = (struct iphdr *)skb_network_header(skb);
 
    if (!ip_header)
       return NF_ACCEPT;
+
+   if (callct++ % 1000 == 0)
+      printk(KERN_INFO "*** event handler called %d times\n", irqs_handled );
+
+   if ( callct % 20 == 0 )
+      send_evt(event_channel_port);
 
    // UDP
    if (ip_header->protocol == IPPROTO_UDP) {
@@ -174,6 +198,7 @@ static char *read_from_key(const char *path)
 
    if (path) {
       str = (char *)xenbus_read(txn, ROOT_NODE, path, NULL);
+      printk(KERN_INFO "Read %s from path %s %s\n", str, ROOT_NODE, path );
    } else {
       str = (char *)xenbus_read(txn, PRIVATE_ID_PATH, "", NULL);
    }
@@ -208,13 +233,18 @@ static void write_server_id_to_key(void)
    kfree(dom_id_str);
 }
 
+// xen_callback_t
+static long event_callback( int Cmd, void * Arg )
+{
+    printk(KERN_INFO "GNT_SRVT: event_callback invoked: cmd=%d arg=%p\n", Cmd, Arg);
+    return 0;
+}
+
 static void create_unbound_evt_chn(void) 
 {
    struct evtchn_alloc_unbound alloc_unbound; 
    char                        event_channel_port_str[MAX_GNT_REF_WIDTH]; 
    int                         err;
-
-   //struct evtchn_unmask unmask;
 
    if (!client_dom_id)
       return;
@@ -227,29 +257,19 @@ static void create_unbound_evt_chn(void)
    if (err) {
       pr_err("Failed to set up event channel\n");
    } else {
-      printk(KERN_INFO "Event Channel Port: %d\n", alloc_unbound.port);
+      printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", DOMID_SELF, client_dom_id, alloc_unbound.port);
    }
    event_channel_port = alloc_unbound.port;
 
+   printk(KERN_INFO "Event channel's local port: %d\n", event_channel_port );
    memset(event_channel_port_str, 0, MAX_GNT_REF_WIDTH);
    snprintf(event_channel_port_str, MAX_GNT_REF_WIDTH, "%u", event_channel_port);
 
+   // The event channel is done setting up on this side by the time it is published
    write_to_key(EVT_CHN_PRT_KEY,event_channel_port_str);
 
    //unmask.port = event_channel_port;
    //(void)HYPERVISOR_event_channel_op(EVTCHNOP_unmask, &unmask);
-
-}
-
-static void send_evt(int evtchn_prt)
-{
-
-   struct evtchn_send send;
-
-   send.port = evtchn_prt;
-
-   if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send))
-      pr_err("Failed to send event\n");
 
 }
 
@@ -461,7 +481,7 @@ static void remote_port_state_changed(struct xenbus_watch *w,
 
    kfree(remote_prt_str);
 
-   send_evt(remote_channel_port);
+   //send_evt(remote_channel_port);
 }
 
 static struct xenbus_watch remote_port_watch = {
@@ -470,6 +490,98 @@ static struct xenbus_watch remote_port_watch = {
    .callback = remote_port_state_changed
 };
 
+
+static irqreturn_t irq_event_handler( int port, void * data )
+{
+    unsigned long flags;
+
+    local_irq_save( flags );
+    printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
+           port, data, irqs_handled);
+   
+    ++irqs_handled;
+
+//enum irqreturn {
+//          IRQ_NONE                = (0 << 0),
+//          IRQ_HANDLED             = (1 << 0),
+//          IRQ_WAKE_THREAD         = (1 << 1),
+//  };
+
+    local_irq_restore( flags );
+    return IRQ_HANDLED;
+}
+
+
+static void vm_port_is_bound(struct xenbus_watch *w,
+                             const char **v,
+                             unsigned int l)
+{
+   char     *is_bound_str; 
+
+   //struct evtchn_unmask unmask;
+   //struct evtchn_bind_virq bindev;
+   struct callback_register cbreg;
+   int irq = 0;
+   int rc = 0;
+   int i = 0;
+
+   printk(KERN_INFO "Checking whether %s is asserted\n",
+          VM_EVT_CHN_IS_BOUND);
+   is_bound_str = (char *) read_from_key( VM_EVT_CHN_IS_BOUND );
+   if(XENBUS_IS_ERR_READ(is_bound_str)) {
+      printk(KERN_INFO "Error reading evtchn bound key!!\n");
+      return;
+   }
+   if (strcmp(is_bound_str,"0") == 0) {
+      kfree(is_bound_str);
+      return;
+   }
+
+   printk(KERN_INFO "The remote event channel is bound\n");
+
+   cbreg.type = CALLBACKTYPE_event;
+   cbreg.flags = CALLBACKF_mask_events;
+   cbreg.address = (xen_callback_t) event_callback;
+
+#define is_canonical_address(x) (((long)(x) >> 47) == ((long)(x) >> 63))
+
+   printk(KERN_INFO "Registering event callback %p (%d)\n", 
+          (void *)event_callback, is_canonical_address(event_callback) );
+
+   // returns err = -38 (ENOSYS)
+   rc = HYPERVISOR_callback_op( CALLBACKOP_register, &cbreg );
+   if ( rc )
+      pr_err("Failed to set event callback: %d\n", rc);
+
+  
+   // bind the event channel to a VIRQ
+   //bindev.virq = VIRQ_ARCH_0;
+   //bindev.vcpu = 0;
+   //irq = bind_evtchn_to_irq( event_channel_port );
+   irq = bind_evtchn_to_irqhandler( event_channel_port,
+                                    irq_event_handler,
+                                    0, NULL, NULL );
+   printk( KERN_INFO "Bound event channel %d to irq: %d\n",
+           event_channel_port, irq );
+
+
+   for ( i = 0; i < 1; i++ )
+   {
+      // 
+      printk( KERN_INFO "NOT Sending event via IRQ %d\n", irq );
+      //notify_remote_via_irq( irq );
+      //notify_remote_via_evtchn( event_channel_port );
+      //send_evt(event_channel_port);
+   }
+}
+
+static struct xenbus_watch evtchn_bound_watch = {
+
+   .node = ROOT_NODE "/" VM_EVT_CHN_IS_BOUND,
+   .callback = vm_port_is_bound
+};
+
+
 static void initialize_keys(void)
 {
    write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
@@ -477,6 +589,7 @@ static void initialize_keys(void)
    write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
    write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
    write_to_key(EVT_CHN_PRT_KEY, KEY_RESET_VAL);
+   write_to_key(VM_EVT_CHN_IS_BOUND, KEY_RESET_VAL);
    write_to_key(CLIENT_LOCAL_PRT_KEY, KEY_RESET_VAL);
 }
 
@@ -518,6 +631,13 @@ static int __init gnt_srvr_init(void) {
       pr_err("Failed to set client local port watcher\n");
    }
 
+   // 4. Watch for our port being bound
+   err = register_xenbus_watch(&evtchn_bound_watch);
+   if (err) {
+      pr_err("Failed to set client local port watcher\n");
+   }
+
+
    return 0;
 }
 
@@ -532,6 +652,8 @@ static void __exit gnt_srvr_exit(void){
    unregister_xenbus_watch(&client_id_watch);
 
    unregister_xenbus_watch(&remote_port_watch);
+
+   unregister_xenbus_watch(&evtchn_bound_watch);
 
    free_unbound_evt_chn();
 
