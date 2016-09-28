@@ -13,13 +13,15 @@
 
 
 //
-// This type holds one buffer index
+// This type holds one buffer index. Max index is 0x7fff.
 //
 
-typedef uint16_t work_queue_buffer_idx_t;
+typedef int16_t work_queue_buffer_idx_t;
 
-// Invalid item -- invalid index.
-#define INVALID_WORK_QUEUE_IDX ((work_queue_buffer_idx_t)-2)
+//
+// Indicates a slot in the work queue what is unassigned.
+//
+#define WORK_QUEUE_UNASSIGNED_IDX ((work_queue_buffer_idx_t)-1)
 
 struct _workqueue;
 typedef struct _workqueue workqueue_t;
@@ -41,5 +43,10 @@ workqueue_dequeue( workqueue_t * wq );
 
 bool
 workqueue_is_empty( workqueue_t * wq );
+
+int
+workqueue_get_contents( workqueue_t * wq,
+                        work_queue_buffer_idx_t * items,
+                        size_t size );
 
 #endif // work_queue_h

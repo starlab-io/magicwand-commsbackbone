@@ -5,6 +5,8 @@
 ***************************************************************************/
 
 //
+// Module for communicating with Xen.
+//
 // This code relies heavily on minios. Note in particular:
 //
 // minios must export the symbols we need here. This means that the
@@ -313,57 +315,12 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
-    DEBUG_BREAK();
-
-    //send_event(g_state.self_event_port);
-
-    //
-    // TODO: 
-    
-    //
-    // TODO: Extract the event type and connection ID from shared memory.
-    //
-    // If this is a new connection, deliver the event to the "new
-    // connection" thread.
-    //
-    // Otherwise, deliver the event to the thread that has registered
-    // for the given connection ID.
-    //
-
-//    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
 
     //
     // Release xe_comms_read_item() to check for another item
     //
     xenevent_semaphore_up( g_state.messages_available );
 }
-
-#if 0
-// Unused
-static void
-xe_comms_event_self_chn_callback( evtchn_port_t port,
-                                  struct pt_regs *regs,
-                                  void *data )
-{
-    DEBUG_PRINT("Self Event Channel %u\n", port );
-    DEBUG_BREAK();
-
-    //
-    // TODO: 
-
-    //
-    // TODO: Extract the event type and connection ID from shared memory.
-    //
-    // If this is a new connection, deliver the event to the "new
-    // connection" thread.
-    //
-    // Otherwise, deliver the event to the thread that has registered
-    // for the given connection ID.
-    //
-
-//    (void) xe_comms_handle_arrived_data( (event_id_t) 1 );
-}
-#endif
 
 /**
  * xe_comms_read_item
@@ -381,11 +338,6 @@ xe_comms_read_item( void * Memory,
 
     DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
     send_event( g_state.local_event_port );
-
-#if 0
-
-//    bool available = false;
-//    mt_request_generic_t * request = NULL;
 
     do
     {
@@ -419,7 +371,7 @@ ErrorExit:
 
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
-#endif    
+
     return rc;
 }
 
@@ -460,75 +412,11 @@ xe_comms_write_item( void * Memory,
     return rc;
 }
 
-/*
-int
-xe_comms_read_data( event_id_t Id,
-                    void * Memory,
-                    size_t Size )
-{
-    int rc = 0;
-
-    //
-    // Get an available event. Keep doing it until one is
-    // available. TODO: Find a smarter way to do this... mutex?
-    //
-    do
-    {
-        rc = xe_comms_get_next_event_struct( &readEvent );
-        DEBUG_PRINT( "Found available event structure: %p\n", readEvent );
-    } while ( BMK_EBUSY == rc );
-
-    MYASSERT( EVENT_ID_INVALID == readEvent->id );
-    readEvent->id = Id;
-    readEvent->dest_mem = Memory;
-    readEvent->dest_sz  = Size;
-
-    //
-    // Prepare the event's mutex, which the Xen event handler will
-    // release. It starts off in an acquired state.
-    //
-    init_mutex_locked( &readEvent->mutex );
-    
-    DEBUG_PRINT( "Traffic 0x%llx waiting on mutex at %p\n",
-                 Id, &readEvent->mutex );
-    
-    // The entry is in the list. Now it's safe to enable events.
-    if ( 1 == xenevent_atomic_inc( &g_state.outstanding_reads ) )
-    {
-        minios_unmask_evtchn( g_state.local_event_port );
-    }
-
-    //
-    // Block this thread until this read event is satisfied by an event callback.
-    //
-    
-    xe_comms_mutex_acquire( &readEvent->mutex );
-    DEBUG_PRINT( "Event has arrived and been processed\n" );
-    DEBUG_BREAK();
-
-    //
-    // The thread has passed the block and the read is satisfied. Clean up.
-    //
-    
-    //
-    // If there are no other outstanding reads, disable event delivery.
-    //
-    if ( 0 == xenevent_atomic_dec( &g_state.outstanding_reads ) )
-    {
-        //xe_comms_disable_events( g_state.local_event_port );
-        minios_mask_evtchn( g_state.local_event_port );
-    }
-
-    // Safe to do this unconditionally
-    xe_comms_set_event_available( readEvent );
-
-    return rc;
-}
-*/
-
 
 /*
- *
+ * Receive a set of grant references from the PVM. For now, this is
+ * just one via XenStore. How to handle multiple? Specially-formatted
+ * string in XenStore, or an array of refs in shared memory.
  */
 static int
 receive_grant_references( void )
@@ -733,7 +621,6 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     grant_ref_t	    client_grant_ref = 0;
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
-    DEBUG_BREAK();
     bmk_memset( &g_state, 0, sizeof(g_state) );
 
     rc = xenevent_semaphore_init( &g_state.messages_available );

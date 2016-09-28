@@ -1,8 +1,52 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 //
-// Application for Rump userspace that manages commands from the xen
-// shared memory and the associated network connections. The
-// application is designed to minimize dynamic memory allocations
-// after startup.
+// Application for Rump userspace that manages commands from the
+// protected virtual machine (PVM) over xen shared memory, as well as
+// the associated network connections. The application is designed to
+// minimize dynamic memory allocations after startup and to handle
+// multiple blocking network operations simultaneously.
+//
+//
+// This application processes incoming requests as follows:
+//
+// 1. The dispatcher function selects an available buffer from the
+//     buffer pool and reads an incoming request into it.
+//
+// 2. The dispatcher examines the request:
+//    (a) If the request is for a new socket request, it selects an
+//        available thread for the socket.
+//
+//    (b) Otherwise, the request is for an existing connection. It
+//        finds the thread that is handling the connection and assigns
+//        the request to that thread.
+//
+//    A request is assigned to a thread by placing its associated
+//    buffer index into the thread's work queue and signalling to the
+//    thread that work is available via a semaphore.
+//
+// 3. Worker threads are initialized on startup and block on a
+//    semaphore until work becomes available. When there's work to do,
+//    the thread unblocks and processes the oldest request in its
+//    queue against the socket file descriptor it was assigned. In
+//    case the request is for a new socket, it is processed
+//    immediately by the dispatcher thread so subsequent requests
+//    against that socket can find the thread that handled it.
+// 
+// The main functions to understand here are:
+//
+// worker_thread_func:
+// One runs per worker thread. It waits for requests processes them
+// against the socket that the worker thread is assigned.
+//
+// message_dispatcher:
+// Finds an available buffer and reads a request into it. Finds the
+// thread that will process the request, and, if applicable, adds the
+// request to its work queue and signals to it that work is there.
 //
 
 #include <stdio.h> 
@@ -13,15 +57,11 @@
 
 #include "rumpdeps.h"
 
-#ifndef NORUMP
-#endif // NORUMP
-
 #include <sys/fcntl.h>
 #include <unistd.h>
 #include <string.h>
 
 #include <errno.h>
-
 
 #include <sched.h>
 #include <pthread.h>
@@ -74,12 +114,61 @@ typedef struct _xenevent_globals
 
 static xenevent_globals_t g_state;
 
+static void
+debug_print_state( void )
+{
+#ifdef MYDEBUG
+    static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+    
+    pthread_mutex_lock( &m );
+    
+    printf("Buffers:\n------------------------------\n");
+    for ( int i = 0; i < BUFFER_ITEM_COUNT; i++ )
+    {
+        buffer_item_t * curr = &g_state.buffer_items[i];
+        printf("  %d: used %d thread %d\n",
+                    curr->idx, curr->in_use,
+                    (curr->assigned_thread ? curr->assigned_thread->idx : -1) );
+    }
+    printf("\n");
+
+    printf("Threads:\n------------------------------\n");
+    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {
+        int pending = 0;
+        thread_item_t * curr = &g_state.worker_threads[i];
+        work_queue_buffer_idx_t queue[ BUFFER_ITEM_COUNT ];
+        
+        (void) sem_getvalue( &curr->awaiting_work_sem, &pending );
+        
+        printf("  %d: used %d sock %d, pending items %d\n",
+               curr->idx, curr->in_use, curr->sock_fd, pending );
+
+        if ( curr->in_use )
+        {
+            workqueue_get_contents( curr->work_queue, queue, NUMBER_OF(queue) );
+            printf("    queue: " );
+            for ( int j = 0; j < NUMBER_OF(queue); j++ )
+            {
+                printf( "  %d", (signed int)queue[j] );
+            }
+            printf("\n");
+        }
+    }
+    printf("\n");
+
+    pthread_mutex_unlock( &m );
+#endif
+}
+
+
+
 static int
 open_device( void )
 {
     int rc = 0;
     size_t size = 0;
-    DEBUG_BREAK();    
+
     g_state.input_fd = open( XENEVENT_DEVICE, O_RDWR );
     
     if ( g_state.input_fd < 0 )
@@ -107,7 +196,7 @@ DEBUG_open_device( void )
     if ( g_state.input_fd < 0 )
     {
         rc = errno;
-        MYASSERT( !"open" );
+        MYASSERT( !"open: are you running this within Rump?" );
         goto ErrorExit;
     }
 
@@ -119,7 +208,7 @@ DEBUG_open_device( void )
     if ( g_state.output_fd < 0 )
     {
         rc = errno;
-        MYASSERT( !"open" );
+        MYASSERT( !"open: are you running this within Rump?" );
         goto ErrorExit;
     }
 
@@ -134,90 +223,117 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 {
     int rc = EBUSY;
 
+    buffer_item_t * curr = NULL;
+    
     *BufferItem = NULL;
 
-    DEBUG_PRINT( "Looking for availble buffer item\n" );
     // XXXXXXXXXXX update this to start at g_state.curr_buff_idx and circle around
     
     for ( int i = 0; i < BUFFER_ITEM_COUNT; i++ )
     {
-        if ( 0 == atomic_cas_32( &g_state.buffer_items[i].in_use, 0, 1 ) )
+        curr =  &g_state.buffer_items[i];
+        MYASSERT( NULL != curr->region );
+
+        if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
         {
-            DEBUG_PRINT( "Reserving unused buffer %d\n", g_state.buffer_items[i].idx );
+            DEBUG_PRINT( "Reserving unused buffer %d\n", curr->idx );
             // Value was 0 (now it's 1), so it was available and we
             // have acquired it
+            MYASSERT( 1 == curr->in_use );
             rc = 0;
-            *BufferItem = &g_state.buffer_items[i];
+            *BufferItem = curr;
             break;
         }
+        else
+        {
+            DEBUG_PRINT( "NOT reserving used buffer %d\n", curr->idx );
+        }
     }
-    
+
+    //MYASSERT( 0 == rc );
+    if ( rc )
+    {
+        DEBUG_PRINT( "All buffers are in use!!\n" );
+    }
+
     return rc;
 }
 
 
+//
+// Release the buffer item: unassign its thread and mark it as
+// available. It need not have been assigned.
+//
 static void
 release_buffer_item( buffer_item_t * BufferItem )
 {
     BufferItem->assigned_thread = NULL;
 
-    uint32_t prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
+    DEBUG_PRINT( "Releasing buffer %d\n", BufferItem->idx );
 
-    // Verify that the buffer was previously reserved
-    //MYASSERT( 1 == prev );
+    (void) atomic_cas_32( &BufferItem->in_use, 1, 0 );
 }
 
 
-static int
-reserve_available_worker_thread( OUT thread_item_t ** WorkerThread )
-{
-    int rc = EBUSY;
-
-    *WorkerThread = NULL;
-    
-    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
-    {
-        if ( 0 == atomic_cas_32( &g_state.worker_threads[i].in_use, 0, 1 ) )
-        {
-            DEBUG_PRINT( "Reserving unused worker thread %d\n",
-                         g_state.worker_threads[i].idx );
-            // Value was 0 (now it's 1), so it was available and we
-            // have acquired it
-            rc = 0;
-            *WorkerThread = &g_state.worker_threads[i];
-            break;
-        }
-    }
-    
-    return rc;
-}
-
-// XXXXXXXXXXXXXXXX combine above and below functions into one,
-// taking into account MT_INVALID_SOCKET_FD
-
+//
+// Find a thread for the given socket. If Socket is
+// MT_INVALID_SOCKET_FD, we find an unused thread. Otherwise, we find
+// the thread that has already been assigned to work on Socket.
+//
 static int
 get_worker_thread_for_socket( IN mt_socket_fd_t Socket,
                               OUT thread_item_t ** WorkerThread )
 {
     int rc = EBUSY;
-
+    thread_item_t * curr = NULL;
+    bool found = false;
+    
     *WorkerThread = NULL;
 
     DEBUG_PRINT( "Looking for worker thread for socket %d\n", Socket );
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
-        DEBUG_PRINT( "Worker thread %d: busy %d sock %d\n", i,
-                     g_state.worker_threads[i].in_use, 
-                     g_state.worker_threads[i].sock_fd );
-        
-        // Look for thread that is already busy and is working on the socket we want
-        if ( 1 == atomic_cas_32( &g_state.worker_threads[i].in_use, 1, 1 ) &&
-             ( Socket == g_state.worker_threads[i].sock_fd ) )
+        curr = &g_state.worker_threads[i];
+
+        DEBUG_PRINT( "Worker thread %d: busy %d sock %d\n",
+                     i, curr->in_use, curr->sock_fd );
+
+        if ( MT_INVALID_SOCKET_FD == Socket )
         {
-            rc = 0;
-            *WorkerThread = &g_state.worker_threads[i];
-            break;
+            // Look for any available thread and secure ownership of it.
+            if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
+            {
+                found = true;
+                break;
+            }
+        }
+        else
+        {
+            // Look for the busy thread that is working on the socket we want
+            if ( 1 == atomic_cas_32( &(curr->in_use), 1, 1 ) &&
+                 ( Socket == curr->sock_fd ) )
+            {
+                found = true;
+                break;
+            }
+        }
+    } // for
+
+    if ( found )
+    {
+        rc = 0;
+        *WorkerThread = curr;
+    }
+    else
+    {
+        if ( MT_INVALID_SOCKET_FD == Socket )
+        {
+            DEBUG_PRINT( "No thread is available to process this new socket\n" );
+        }
+        else
+        {
+            MYASSERT( !"Programming error: cannot find thread that is processing established socket" );
         }
     }
     
@@ -229,7 +345,14 @@ static void
 release_worker_thread( thread_item_t * ThreadItem )
 {
     // Verify that the thread's workqueue is empty
-    MYASSERT( workqueue_is_empty( ThreadItem->work_queue ) );
+
+    DEBUG_PRINT( "Releasing worker thread %d\n", ThreadItem->idx );
+
+    if ( !workqueue_is_empty( ThreadItem->work_queue ) )
+    {
+        debug_print_state();
+        MYASSERT( !"Releasing thread with non-empty queue!" );
+    }
     
     uint32_t prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     
@@ -238,6 +361,21 @@ release_worker_thread( thread_item_t * ThreadItem )
 }
 
 
+
+static void
+set_response_to_internal_error( IN  mt_request_generic_t * Request,
+                                OUT mt_response_generic_t * Response )
+{
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    
+    Response->base.type   = MT_RESPONSE( Request->base.type );
+    Response->base.id     = Request->base.id;
+    Response->base.sockfd = Request->base.sockfd;
+
+    Response->base.status = MT_STATUS_INTERNAL_ERROR;
+}
+                                
 //
 // Write a response for an internal error encountered by the dispatch
 // thread. This runs in the context of the dispatch thread because a
@@ -246,18 +384,17 @@ release_worker_thread( thread_item_t * ThreadItem )
 static int
 send_dispatch_error_response( mt_request_generic_t * Request )
 {
-    mt_response_base_t  response = {0};
+    mt_response_generic_t response = {0};
     int rc = 0;
     
-    // Keep the 0 size
-    response.type   = MT_RESPONSE( Request->base.type );
-    response.id     = Request->base.id;
-    response.sockfd = Request->base.sockfd;
-
-    response.status = MT_STATUS_INTERNAL_ERROR;
+    set_response_to_internal_error( Request, &response );
     
-    rc = write( g_state.output_fd, &response, sizeof(response) );
-    MYASSERT( 0 == rc );
+    size_t written = write( g_state.output_fd, &response, sizeof(response) );
+    if ( written != sizeof(response) )
+    {
+        rc = errno;
+        MYASSERT( !"Failed to send response" );
+    }
 
     return rc;
 }
@@ -272,7 +409,6 @@ process_buffer_item( buffer_item_t * BufferItem )
 {
     int rc = 0;
     mt_response_generic_t  response;
-    
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
     thread_item_t * worker = BufferItem->assigned_thread;
 
@@ -280,8 +416,6 @@ process_buffer_item( buffer_item_t * BufferItem )
     
     mt_request_id_t reqtype = request->base.type;
 
-    // Do cleanup after processing this?
-    bool cleanup = ( MtRequestSocketClose == reqtype );
     
     DEBUG_PRINT( "Processing buffer item %d\n", BufferItem->idx );
     int req = MT_RESPONSE_MASK & reqtype;
@@ -317,6 +451,10 @@ process_buffer_item( buffer_item_t * BufferItem )
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
+        // Send back an internal error
+        set_response_to_internal_error( request, &response );
+        response.base.type = MtResponseInvalid;
+        break;
     }
 
     // No matter the results of the network operation, we sent the
@@ -327,37 +465,55 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     size_t written = write( g_state.output_fd,
                             &response,
-                            sizeof(mt_request_generic_t) );
-    if ( written != sizeof(mt_request_generic_t) )
+                            sizeof(response) );
+
+    if ( written != sizeof(response) )
     {
         rc = errno;
         MYASSERT( !"write" );
     }
 
-    if ( cleanup )
+    // We're done with the buffer item
+    release_buffer_item( BufferItem );
+
+    // If we closed the socket, we can release the thread.
+    if ( MtRequestSocketClose == reqtype )
     {
-        release_buffer_item( BufferItem );
         release_worker_thread( worker );
     }
 
     return rc;
 }
 
+/**
+ * assign_work_to_thread
+ *
+ * Identify the thread that should process the given buffer item. In
+ * the case of a request to create a socket, the processing is done
+ * here.
+ *
+ * Exit condition: One of these is true -
+ * (1) the buffer item has been processed, or
+ * (2) the buffer item has been successfully assigned to
+ *     a worker thread, or
+ * (3) an error reponse has been written.
+ */
 static int
 assign_work_to_thread( IN buffer_item_t   * BufferItem,
                        OUT thread_item_t ** AssignedThread,
                        OUT bool           * ProcessFurther )
 {
     int rc = 0;
-
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
-
     mt_request_id_t request_type = MT_RESPONSE_GET_TYPE( request );
+    // Release the buffer item, unless it is successfully assigned to the worker thread.
+    bool release_item = true;
 
+    // Typically the caller needs to do more work on this buffer
     *ProcessFurther = true;
     
-    DEBUG_PRINT( "Looking for thread for request\n" );
-    DEBUG_BREAK();
+    DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
+                 BufferItem->idx );
 
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
@@ -365,15 +521,21 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     if ( MtRequestSocketCreate == request_type )
     {
         // Request is for a new socket, so we assign the task to an
-        // unassigned thread. However, we must also complete this
-        // request so that future work for this socket goes to the
-        // right thread.
+        // unassigned thread. The thread and socket will be bound
+        // together during the socket's lifetime. However, we must
+        // also complete this request now so that future work for this
+        // socket goes to the right thread. So in this special case,
+        // the buffer item is not processed by the thread that's
+        // assigned to the socket.
 
         *ProcessFurther = false;
         
-        rc = reserve_available_worker_thread( AssignedThread );
+        rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, AssignedThread );
         if ( rc )
         {
+            // No worker thread is available, but we must associate a
+            // new socket and an available thread now. We could yield
+            // and try again. For now, give up.
             goto ErrorExit;
         }
 
@@ -397,17 +559,27 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         {
             goto ErrorExit;
         }
+
+        // The buffer item was successfully assigned to the worker thread
+        release_item = false;
     }
 
-    DEBUG_PRINT( "Assigned thread %d work item %d\n",
-                 (*AssignedThread)->idx, BufferItem->idx );
+    DEBUG_PRINT( "Work item %d assigned to thread %d\n",
+                 BufferItem->idx, (*AssignedThread)->idx );
 
 ErrorExit:
-    // Something here failed. Report the error.
+    // Something here failed. Report the error. The worker thread will
+    // not release the buffer item, so do it here.
     if ( rc )
     {
+        *ProcessFurther = false;
         DEBUG_PRINT( "An internal failure occured. Sending error reponse.\n" );
         (void) send_dispatch_error_response( request );
+    }
+
+    if ( release_item )
+    {
+        release_buffer_item( BufferItem );
     }
 
     return rc;
@@ -415,7 +587,7 @@ ErrorExit:
 
 //
 // This is the function that the worker thread executes. Here's the
-// basic algorith:
+// basic algorithm:
 //
 // forever:
 //    wait for one work item to arrive
@@ -438,14 +610,14 @@ worker_thread_func( void * Arg )
         currbuf = NULL;
         
         // Block until work arrives
-        DEBUG_PRINT( "Thread %d is waiting for work\n", myitem->idx );
+        DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
 
         sem_wait( &myitem->awaiting_work_sem );
         
-        DEBUG_PRINT( "Thread %d is working\n", myitem->idx );
+        DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
 
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
-        empty = (INVALID_WORK_QUEUE_IDX == buf_idx);
+        empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
         if ( empty )
         {
             if ( !g_state.shutdown_pending )
@@ -491,42 +663,41 @@ static int
 init_state( void )
 {
     int rc = 0;
-    DEBUG_BREAK();
     
     bzero( &g_state, sizeof(g_state) );
-
-    DEBUG_BREAK();
 
     //
     // Init the buffer items
     //
-    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    for ( int i = 0; i < BUFFER_ITEM_COUNT; i++ )
     {
-        g_state.buffer_items[i].idx    = i;
-        g_state.buffer_items[i].offset = ONE_REQUEST_REGION_SIZE * i;
-        g_state.buffer_items[i].region =
-            &g_state.in_request_buf[ g_state.buffer_items[i].offset ];
+        buffer_item_t * curr = &g_state.buffer_items[i];
+
+        curr->idx    = i;
+        curr->offset = ONE_REQUEST_REGION_SIZE * i;
+        curr->region = &g_state.in_request_buf[ curr->offset ];
     }
 
     //
     // Init the threads' state, so that posting to the semaphores
-    // works later.
+    // works as soon as the threads start up.
     //
 
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
-        g_state.worker_threads[i].idx = i;
+        thread_item_t * curr = &g_state.worker_threads[i];
+        curr->idx = i;
 
         // Alloc the work queue.
-        g_state.worker_threads[i].work_queue = workqueue_alloc( BUFFER_ITEM_COUNT );
-        if ( NULL == g_state.worker_threads[i].work_queue )
+        curr->work_queue = workqueue_alloc( BUFFER_ITEM_COUNT );
+        if ( NULL == curr->work_queue )
         {
             rc = ENOMEM;
             MYASSERT( !"work_queue: allocation failure" );
             goto ErrorExit;
         }
 
-        sem_init( &g_state.worker_threads[i].awaiting_work_sem,
+        sem_init( &curr->awaiting_work_sem,
                   BUFFER_ITEM_COUNT, 0 );
     }
 
@@ -545,7 +716,10 @@ init_state( void )
     {
         goto ErrorExit;
     }
-#if 0
+
+    //
+    // Start up the threads
+    //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
         rc = pthread_create( &g_state.worker_threads[ i ].self,
@@ -558,11 +732,7 @@ init_state( void )
             goto ErrorExit;
         }
     }
-#endif 
-    //
-    // Initialize the threads
-    //
-    
+
 ErrorExit:
     return rc;
 }
@@ -572,7 +742,8 @@ static int
 fini_state( void )
 {
     //
-    // Join the threads
+    // Join the threads - assert a shutdown pending and signal all
+    // their semaphores
     //
 
     DEBUG_PRINT( "Shutting down all threads\n" );
@@ -581,13 +752,14 @@ fini_state( void )
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
-        sem_post( &g_state.worker_threads[i].awaiting_work_sem );
+        thread_item_t * curr = &g_state.worker_threads[i];
         
-        pthread_join( g_state.worker_threads[i].self, NULL );
-        workqueue_free( g_state.worker_threads[i].work_queue );
-        sem_destroy( &g_state.worker_threads[i].awaiting_work_sem );
-
-    } // for
+        sem_post( &curr->awaiting_work_sem );
+        
+        pthread_join( curr->self, NULL );
+        workqueue_free( curr->work_queue );
+        sem_destroy( &curr->awaiting_work_sem );
+    }
 
     if ( g_state.input_fd > 0 )
     {
@@ -626,7 +798,7 @@ message_dispatcher( void )
         {
             // Failed to find an available buffer item.
             // Yield this thread and try again.
-            MYASSERT( !"No buffer items are available" );
+            DEBUG_PRINT( "Warning: No buffer items are available. Yielding execution." );
             sched_yield();
             continue;
         }
@@ -640,17 +812,22 @@ message_dispatcher( void )
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size != ONE_REQUEST_REGION_SIZE )
         {
-            rc = ENOTSUP;
-            MYASSERT( !"Received request with invalid size" );
+            // rc == size == 0 means we hit an expected end of input
+            rc = errno;
+            if ( 0 != size )
+            {
+                MYASSERT( !"Received request with invalid size" );
+            }
             goto ErrorExit;
         }
 
-        // Assign the buffer to a thread
+        // Assign the buffer to a thread. If fails, reports to PVM but
+        // keeps going.
         rc = assign_work_to_thread( myitem, &assigned_thread, &more_processing );
         if ( rc )
         {
             MYASSERT( !"No thread is available to work on this request." );
-            goto ErrorExit;
+            continue;
         }
 
         if ( more_processing )
@@ -753,7 +930,6 @@ ErrorExit:
 int main(void)
 {
     int rc = 0;
-    DEBUG_BREAK();
     
     rc = init_state();
     if ( rc )
@@ -762,9 +938,9 @@ int main(void)
     }
 
     // main thread dispatches commands to the other threads
-    rc = test_message_dispatcher2();
-    //rc = message_dispatcher();
-    
+    //rc = test_message_dispatcher2();
+    rc = message_dispatcher();
+
 ErrorExit:
     fini_state();
     return rc;

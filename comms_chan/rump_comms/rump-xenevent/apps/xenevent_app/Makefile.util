@@ -1,0 +1,33 @@
+##
+## Makefile for building test traffic
+##
+
+# Builds dispatcher outside of Rump
+CC = gcc
+CFLAGS = -ggdb -std=gnu99 -DNORUMP
+CFLAGS += -I..
+CFLAGS += -I../../../common
+CFLAGS += -I../platform/xen/xen/include 
+
+CFLAGS+= -DMYDEBUG
+
+TARGETS = dump_requests dump_responses build_traffic dispatcher
+all: $(TARGETS)
+
+build_traffic: build_traffic.o
+	$(CC) -o $@ $^
+
+dump_requests: dump_requests.o
+	$(CC) -o $@ $^
+
+dump_responses: dump_responses.o
+	$(CC) -o $@ $^
+
+dispatcher: xenevent.o networking.o workqueue.o
+	$(CC) -o $@ $^ -lpthread
+
+%.o : %.c
+	$(CC) $(CFLAGS) -c -o $@ $^    
+
+clean:
+	rm -f $(TARGETS) *.o
