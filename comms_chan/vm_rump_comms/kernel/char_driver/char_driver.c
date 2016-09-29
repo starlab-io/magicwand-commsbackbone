@@ -19,13 +19,7 @@
 #include <xen/page.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
-
-//#include <xen/events/events_internal.h>
-#include <xen/evtchn.h>
-
-//#include <asm/sync_bitops.h>
-//#include <asm/xen/hypervisor.h>
-//#include <xen/xen-ops.h>
+#include <xen/interface/callback.h>
 
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
@@ -36,8 +30,8 @@
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
 
-#define SELF_EVT_CHN       "vm_evt_chn_prt"
-#define PAL_EVT_CHN        "uk_evt_chn_prt"
+#define VM_EVT_CHN_PRT_PATH  "vm_evt_chn_prt"
+#define VM_EVT_CHN_IS_BOUND  "vm_evt_chn_is_bound"
 
 #define KEY_RESET_VAL      "0"
 #define TEST_MSG_SZ         64
@@ -67,8 +61,9 @@ static unsigned int  is_client;
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
 static int           self_event_channel;
-static int           pal_event_channel;
 
+static int          irqs_handled = 0;
+static int          irq = 0;
 
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
@@ -85,14 +80,6 @@ static struct file_operations fops =
    .write = dev_write,
    .release = dev_release,
 };
-
-typedef struct char_driver_dev {
-
-   evtchn_port_t evtchn;
-
-} char_driver_dev_t;
-
-static char_driver_dev_t *c_dev;
 
 static int write_to_key(const char *path, const char *value)
 {
@@ -173,7 +160,6 @@ static void create_unbound_evt_chn(void)
    struct evtchn_alloc_unbound alloc_unbound; 
    char                        self_event_channel_str[MAX_GNT_REF_WIDTH]; 
    int                         err;
-   //struct evtchn_mask          mask;
 
    if (!client_dom_id)
       return;
@@ -186,17 +172,16 @@ static void create_unbound_evt_chn(void)
    if (err) {
       pr_err("Failed to set up event channel\n");
    } else {
-      printk(KERN_INFO "Event Channel Port: %d\n", alloc_unbound.port);
+      printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", DOMID_SELF, client_dom_id, alloc_unbound.port);
    }
-   
 
    self_event_channel = alloc_unbound.port;
 
+   printk(KERN_INFO "Event channel's local port: %d\n", self_event_channel );
    memset(self_event_channel_str, 0, MAX_GNT_REF_WIDTH);
    snprintf(self_event_channel_str, MAX_GNT_REF_WIDTH, "%u", self_event_channel);
 
-   write_to_key(SELF_EVT_CHN,self_event_channel_str);
-
+   write_to_key(VM_EVT_CHN_PRT_PATH,self_event_channel_str);
 }
 
 static void send_evt(int evtchn_prt)
@@ -211,10 +196,31 @@ static void send_evt(int evtchn_prt)
    } else {
       printk(KERN_INFO "Sent Event. Port: %u\n", send.port);
    }
-
 }
 
-static void free_unbound_evt_chn(void)
+static int 
+is_evt_chn_closed(void)
+{
+   
+   struct evtchn_status status;
+   int                  rc;
+
+   status.dom = DOMID_SELF;
+   status.port = self_event_channel;
+
+   rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
+
+   if (rc < 0)
+     return 1;
+
+   if (status.status != EVTCHNSTAT_closed)
+      return 0;
+
+   return 1;
+}
+
+static void 
+free_unbound_evt_chn(void)
 {
 
    struct evtchn_close close;
@@ -232,10 +238,10 @@ static void free_unbound_evt_chn(void)
    } else {
       printk(KERN_INFO "Closed Event Channel Port: %d\n", close.port);
    }
-
 }
 
-static grant_ref_t offer_grant(domid_t domu_client_id) 
+static grant_ref_t 
+offer_grant(domid_t domu_client_id) 
 {
 
    int ret;
@@ -274,9 +280,10 @@ static grant_ref_t offer_grant(domid_t domu_client_id)
    return ret;
 }
 
-static void msg_len_state_changed(struct xenbus_watch *w,
-                                  const char **v,
-                                  unsigned int l)
+static void 
+msg_len_state_changed(struct xenbus_watch *w,
+                      const char **v,
+                      unsigned int l)
 {
    char *msg_len_str;
 
@@ -332,7 +339,6 @@ static void client_id_state_changed(struct xenbus_watch *w,
    char      gnt_ref_str[MAX_GNT_REF_WIDTH]; 
    int       err;
 
-
    client_id_str = (char *)read_from_key(CLIENT_ID_KEY);
 
    if(XENBUS_IS_ERR_READ(client_id_str)) {
@@ -369,6 +375,7 @@ static void client_id_state_changed(struct xenbus_watch *w,
    // Offer Grant to Client  
    offer_grant((domid_t)client_dom_id);
 
+   // Reset Client Id Xenstore Key
    write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
 
    // Write Grant Ref to key 
@@ -389,159 +396,58 @@ static struct xenbus_watch client_id_watch = {
    .callback = client_id_state_changed
 };
 
-static irqreturn_t test_handler(int port, void * data)
+static irqreturn_t irq_event_handler( int port, void * data )
 {
+    unsigned long flags;
 
-   printk(KERN_INFO "Test handler called\n");
-
-   return 0;
-}
-
-static void remote_evt_chn_state_changed(struct xenbus_watch *w,
-                                         const char **v,
-                                         unsigned int l)
-{
-   //int       err;
-   char     *remote_evt_chn_str;
-   //unsigned long irqflags;
-   int           irq;
-
-   //struct evtchn_unmask unmask;
-   //struct evtchn_bind_interdomain bind_interdomain;
-
-   //irqflags = 24;
-   remote_evt_chn_str = (char *)read_from_key(PAL_EVT_CHN);
-
-   if(XENBUS_IS_ERR_READ(remote_evt_chn_str)) {
-      printk(KERN_INFO "Error reading remote event channel key!!!\n");
-      return;
-   }
-
-   if (strcmp(remote_evt_chn_str,"0") == 0) {
-      kfree(remote_evt_chn_str);
-      return;
-   }
-
-   //
-   // Get the remote evt chn 
-   // 
-   printk(KERN_INFO "Remote evt chn changed value:\n");
-   printk(KERN_INFO "\tRead evt chn key: %s\n", remote_evt_chn_str);
-
-   pal_event_channel = simple_strtol(remote_evt_chn_str, NULL, 10);
-
-   printk(KERN_INFO "\t\tuint form: %u\n", pal_event_channel);
-
-   kfree(remote_evt_chn_str);
-
-   irq = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
-                                               pal_event_channel,
-                                               test_handler,
-                                               0,
-                                               NULL,
-                                               NULL);
-                                               
-   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", irq);
+    local_irq_save( flags );
+    printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
+           port, data, irqs_handled);
    
+    ++irqs_handled;
 
-   /*
-   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
-                                               pal_event_channel,
-                                               test_handler,
-                                               irqflags,
-                                               DEVICE_NAME,
-                                               &majorNumber);
-                                               
-   printk(KERN_INFO "\tBind Evt Chn Call returned: %d\n", err);
-   */
-
-   /*
-   err = bind_interdomain_evtchn_to_irqhandler(client_dom_id,
-                                               pal_event_channel,
-                                               test_handler,
-                                               irqflags,
-                                               NULL,
-                                               NULL);
-
-   */
-
-   /*
-   // Bind to the evt chn
-   bind_interdomain.remote_dom = client_dom_id;
-   bind_interdomain.remote_port = pal_event_channel;
-
-   err = HYPERVISOR_event_channel_op(EVTCHNOP_bind_interdomain,
-                                     &bind_interdomain);
-
-   if (err) {
-      printk(KERN_INFO "\tError binding to Evt Chn\n");
-      return;
-   }
-   */
-
-   //irq = get_evtchn_to_irq(bind_interdomain.local_port);
-
-   /*
-   err = bind_evtchn_to_irq(bind_interdomain.local_port);
-
-   if (err) {
-      printk(KERN_INFO "\tError binding Evt Chn to IRQ\n");
-      return;
-   }
-   */
-
-   /*
-   irq = bind_evtchn_to_irq(bind_interdomain.local_port);
-
-   // Unmask port
-   unmask.port = bind_interdomain.local_port; 
-   HYPERVISOR_event_channel_op(EVTCHNOP_unmask, &unmask);
-
-   c_dev->evtchn = bind_interdomain.local_port;
-
-   printk(KERN_INFO "\tMajor Number: %u\n", majorNumber);
-
-   // Request IRQ
-   //request_irq(irq, test_handler, irqflags, DEVICE_NAME, &majorNumber);
-   request_irq(irq, test_handler, 0, NULL, NULL);
-   printk(KERN_INFO "\tIRQ Number: %d\n", irq);
-   */
-
-   /*
-   if (err) {
-      printk(KERN_INFO "\tError binding handler to IRQ\n");
-      return;
-   }
-   */
-
-
-   /*
-   // Clear evt chn
-   sync_clear_bit(bind_interdomain.local_port, &xen_dummy_shared_info->evtchn_pending[0]);
-   */
-
-   // Request IRQ
-   /*
-   err = request_irq(bind_interdomain.local_port, test_handler, irqflags, DEVICE_NAME, c_dev);
-
-   if (err) {
-      printk(KERN_INFO "\tError binding handler to Evt Chn\n");
-      return;
-   }
-   */
-
-   //send_evt(self_event_channel);
-   //send_evt(bind_interdomain.local_port);
-
-   notify_remote_via_irq(irq);
-
-
+    local_irq_restore( flags );
+    return IRQ_HANDLED;
 }
 
-static struct xenbus_watch remote_evt_chn_watch = {
 
-   .node = "/unikernel/random/uk_evt_chn_prt",
-   .callback = remote_evt_chn_state_changed
+static void vm_port_is_bound(struct xenbus_watch *w,
+                             const char **v,
+                             unsigned int l)
+{
+   char     *is_bound_str; 
+   int       i;
+
+   printk(KERN_INFO "Checking whether %s is asserted\n",
+          VM_EVT_CHN_IS_BOUND);
+   is_bound_str = (char *) read_from_key( VM_EVT_CHN_IS_BOUND );
+   if(XENBUS_IS_ERR_READ(is_bound_str)) {
+      printk(KERN_INFO "Error reading evtchn bound key!!\n");
+      return;
+   }
+   if (strcmp(is_bound_str,"0") == 0) {
+      kfree(is_bound_str);
+      return;
+   }
+
+   printk(KERN_INFO "The remote event channel is bound\n");
+
+   irq = bind_evtchn_to_irqhandler( self_event_channel,
+                                    irq_event_handler,
+                                    0, NULL, NULL );
+   printk( KERN_INFO "Bound event channel %d to irq: %d\n",
+           self_event_channel, irq );
+
+   for ( i = 0; i < 1; i++ )
+   {
+      printk( KERN_INFO "NOT Sending event via IRQ %d\n", irq );
+   }
+}
+
+static struct xenbus_watch evtchn_bound_watch = {
+
+   .node = ROOT_NODE "/" VM_EVT_CHN_IS_BOUND,
+   .callback = vm_port_is_bound
 };
 
 static void initialize_keys(void)
@@ -550,8 +456,8 @@ static void initialize_keys(void)
    write_to_key(SERVER_ID_KEY, KEY_RESET_VAL);
    write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
    write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
-   write_to_key(SELF_EVT_CHN, KEY_RESET_VAL);
-   write_to_key(PAL_EVT_CHN, KEY_RESET_VAL);
+   write_to_key(VM_EVT_CHN_PRT_PATH, KEY_RESET_VAL);
+   write_to_key(VM_EVT_CHN_IS_BOUND, KEY_RESET_VAL);
 }
 
 /** @brief The LKM initialization function
@@ -568,7 +474,6 @@ static int __init mwchar_init(void) {
    client_dom_id = 0;
    self_event_channel = 0;
    
-
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
@@ -611,21 +516,16 @@ static int __init mwchar_init(void) {
       pr_err("Failed to set client id watcher\n");
    }
 
-   // 3. Watch Remote Event Channel XenStore Key
-   err = register_xenbus_watch(&remote_evt_chn_watch);
+   // 3. Watch for our port being bound
+   err = register_xenbus_watch(&evtchn_bound_watch);
    if (err) {
-      pr_err("Failed to set client evt chn watcher\n");
+      pr_err("Failed to set client local port watcher\n");
    }
-
    
-   c_dev = kmalloc(sizeof(char_driver_dev_t), GFP_KERNEL);
-   if (c_dev)
-       memset(c_dev,0,sizeof(char_driver_dev_t));
-
    return 0;
 }
 
-/** @brief The LKM cleanup function
+/** @brief The driver cleanup function
  */
 static void __exit mwchar_exit(void){
 
@@ -638,18 +538,21 @@ static void __exit mwchar_exit(void){
 
    unregister_xenbus_watch(&client_id_watch);
 
-   unregister_xenbus_watch(&remote_evt_chn_watch);
-
-   free_unbound_evt_chn();
+   unregister_xenbus_watch(&evtchn_bound_watch);
 
    initialize_keys();
 
    if (is_client) {
-
       unregister_xenbus_watch(&msg_len_watch);
    }
 
-   kfree(c_dev);
+   if (irq) {
+      unbind_from_irqhandler(irq, NULL);
+   }
+
+   if (!is_evt_chn_closed()) {
+      free_unbound_evt_chn();
+   }
 
    printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");
    printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");

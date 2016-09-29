@@ -29,9 +29,11 @@
 #define SERVER_ID_KEY         "server_id" 
 #define CLIENT_ID_KEY         "client_id" 
 #define GNT_REF_KEY           "gnt_ref" 
+
 #define EVT_CHN_PRT_KEY       "vm_evt_chn_prt"
 #define VM_EVT_CHN_IS_BOUND   "vm_evt_chn_is_bound"
 #define CLIENT_LOCAL_PRT_KEY  "client_local_prt"
+
 #define MAX_GNT_REF_WIDTH     15
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"

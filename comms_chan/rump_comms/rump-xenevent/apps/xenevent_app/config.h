@@ -16,7 +16,7 @@
 // Number of buffer items. This is the number of requests (from the
 // protected VM) that we can queue.
 //
-#define BUFFER_ITEM_COUNT 4
+#define BUFFER_ITEM_COUNT 8
 
 #define WORK_QUEUE_ITEM_COUNT BUFFER_ITEM_COUNT
 
@@ -24,7 +24,7 @@
 // Network config - hardcoded for now
 //
 
-#define XEN_HOST_ADDR "10.190.2.100"
+#define XEN_HOST_ADDR "10.190.2.104"
 #define XEN_HOST_PORT 5555
 #define TEST_STRING "Hello from Rump unikernel!\n"
 

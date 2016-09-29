@@ -104,7 +104,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     WorkerThread->sock_type     = native_type;
     WorkerThread->sock_protocol = Request->sock_protocol;
 
-    DEBUG_PRINT ( "Worker thread %d is assigned socket %d\n",
+    DEBUG_PRINT ( "**** Thread %d <== socket %d\n",
                   WorkerThread->idx, sockfd );
     
     return Response->base.status;
@@ -128,6 +128,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     MYASSERT( NULL != WorkerThread );
     
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( 1 == WorkerThread->in_use );
     
     serverHints.ai_family    = WorkerThread->sock_domain;
     serverHints.ai_socktype  = WorkerThread->sock_type;
@@ -173,8 +174,8 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     if (serverIter == NULL)
     {
         // Looped off the end of the list with no connection.
-        DEBUG_PRINT( "Couldn't connect() to any known address for %s\n",
-                     Request->hostname );
+        DEBUG_PRINT( "Couldn't connect() to %s:%s\n",
+                     Request->hostname, portBuf );
         DEBUG_BREAK();
         Response->base.status = EADDRNOTAVAIL;
     }
@@ -225,8 +226,6 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                     OUT mt_response_socket_read_t * Response,
                     IN thread_item_t              * WorkerThread )
 {
-    int rc = 0;
-    
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -248,7 +247,7 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
         if ( rcv < 0 )
         {
             Response->base.status = errno;
-            MYASSERT( !rc );
+            MYASSERT( !"recv" );
             break;
         }
 
@@ -268,13 +267,11 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
                      OUT mt_response_socket_write_t * Response,
                      IN thread_item_t               * WorkerThread )
 {
-    int rc = 0;
-
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    Response->base.size   = 0; // track total bytes sent here
+    ssize_t totSent = 0; // track total bytes sent here
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
@@ -283,25 +280,26 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
                   WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
 
         
-    while ( Response->base.size < Request->base.size )
+    while ( totSent < Request->base.size )
     {
         ssize_t sent = send( Request->base.sockfd,
-                             &Request->bytes[ Response->base.size ],
-                             Request->base.size - Response->base.size,
+                             &Request->bytes[ totSent ],
+                             Request->base.size - totSent,
                              0 );
-        if ( send < 0 )
+        if ( sent < 0 )
         {
             Response->base.status = errno;
-            MYASSERT( !rc );
+            MYASSERT( !"send" );
             break;
         }
 
-        Response->base.size += sent;
+        totSent += sent;
     }
 
     Response->base.type = MtResponseSocketWrite;
     Response->base.id   = Request->base.id;
     Response->base.sockfd = Request->base.sockfd;
+    Response->base.size   = sizeof( *Response ) - sizeof(Response->base);
 
     return Response->base.status;
 }

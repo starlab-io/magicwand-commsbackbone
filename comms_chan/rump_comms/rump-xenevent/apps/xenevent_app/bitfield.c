@@ -101,38 +101,3 @@ int bitfield_get_first_zero(bitfield_t *bf)
         return -1;
     return i;
 }
-
-/*
-  BROKEN
-static int first_one(uint8_t val)
-{
-    int i;
-    for (i = 0; i < 8; i++) {
-        if (!(val & 0x01))
-            return i;
-        val >>= 1;
-    }
-    return -1;
-}
-    
-int bitfield_get_and_clear_nonzero(bitfield_t *bf)
-{
-    size_t i;
-    for (i = 0; i < (bf->max_bits + 7) / 8; i++)
-    {
-        if (bf->bits[i] != 0x0)
-        {
-            break;
-        }
-    }
-    if ( i == (bf->max_bits + 7) / 8)
-        return -1;
-    
-    i = i * 8 + first_zero(bf->bits[i]);
-    if (i >= bf->max_bits)
-        return -1;
-    return i;
-
-    }
-
-*/
