@@ -53,6 +53,11 @@
 // Default Nmbr of Grant Refs
 //
 
+#define XENEVENT_GRANT_REF_COUNT 64
+
+#define XENEVET_GRANT_REF_DELIM " "
+
+/*
 #define DEFAULT_NMBR_GNT_REF      1
 // Default Stride
 #define DEFAULT_STRIDE            1
@@ -62,5 +67,7 @@
 #define FIRST_DOM_SLOT            0 
 // First Grant Ref 
 #define FIRST_GNT_REF             0 
+*/
+
 
 #endif // xenevent_config_h
