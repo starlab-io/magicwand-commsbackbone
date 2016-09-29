@@ -413,7 +413,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
     thread_item_t * worker = BufferItem->assigned_thread;
 
-    mt_request_id_t reqtype = MT_REQUEST_GET_TYPE( request );
+    mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
     
     MYASSERT( NULL != worker );
     
@@ -504,7 +504,8 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
 {
     int rc = 0;
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
-    mt_request_id_t request_type = MT_RESPONSE_GET_TYPE( request );
+    mt_request_type_t request_type = MT_RESPONSE_GET_TYPE( request );
+    
     // Release the buffer item, unless it is successfully assigned to the worker thread.
     bool release_item = true;
 

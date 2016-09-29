@@ -55,7 +55,7 @@ typedef enum
     MtRequestSocketClose   = MT_REQUEST( 3 ),
     MtRequestSocketRead    = MT_REQUEST( 4 ),
     MtRequestSocketWrite   = MT_REQUEST( 5 ),
-} mt_request_id_t;
+} mt_request_type_t;
 
 
 typedef enum
@@ -122,7 +122,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     mt_sig_t          sig;
     
     // MtRequest*
-    mt_request_id_t   type;
+    mt_request_type_t   type;
     
     // Size of the populated bytes in the payload. This struct not included.
     mt_size_t   size;

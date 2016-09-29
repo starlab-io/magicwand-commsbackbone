@@ -23,7 +23,6 @@
 // include/bmk-core
 //
 
-
 #include <sys/stdint.h>
 
 #include <mini-os/types.h>
@@ -97,10 +96,6 @@ typedef struct _xen_comm_state
     // Event channel local port
     evtchn_port_t local_event_port;
     
-    // Self event channel memory - for creating an unbound event channel.
-    // XXXXX remove this
-    uint8_t * self_event_channel_mem;
-
     // Semaphore that is signalled once for each message that has arrived
     xenevent_semaphore_t messages_available;
 
@@ -278,7 +273,7 @@ static int
 send_event(evtchn_port_t port)
 {
 
-    int                err;
+    int  err;
 
     DEBUG_PRINT( "Sending event to (local) port %d\n", port );
     err = minios_notify_remote_via_evtchn( port );
@@ -297,6 +292,9 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
+    DEBUG_BREAK();
+
+    send_event(port);
 
     //
     // Release xe_comms_read_item() to check for another item
@@ -702,19 +700,13 @@ xe_comms_fini( void )
     minios_clear_evtchn( g_state.local_event_port );
 
     minios_unbind_evtchn(g_state.local_event_port);
-    
+
     xenevent_semaphore_destroy( &g_state.messages_available );
 
-    
     if (g_state.event_channel_mem)
     {
         bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
     }
-
-//    if (g_state.self_event_channel_mem)
-//    {
-//        bmk_memfree(g_state.self_event_channel_mem, BMK_MEMWHO_WIREDBMK);
-//    }
 
     gntmap_fini( &g_state.gntmap_map );
 
