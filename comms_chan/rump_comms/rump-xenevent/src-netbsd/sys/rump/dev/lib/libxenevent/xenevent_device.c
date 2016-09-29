@@ -121,7 +121,6 @@ xe_dev_init( void )
 */
     
     cmaj = cdevsw_lookup_major(&xe_cdevsw);
-//    DEBUG_BREAK();
 
     rc = devsw_attach( DEVICE_NAME,
                        NULL, // block device info
@@ -242,8 +241,6 @@ xe_dev_read( dev_t Dev,
     // Only one reader at a time
     xenevent_mutex_wait( g_state.read_lock );
 
-    DEBUG_BREAK();
-    
     for ( int i = 0; i < Uio->uio_iovcnt; i++ )
     {
         DEBUG_PRINT( "Read request: %d bytes at %p\n",

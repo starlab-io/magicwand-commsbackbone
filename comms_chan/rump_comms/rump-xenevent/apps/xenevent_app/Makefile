@@ -18,6 +18,8 @@ BAKE_FLAGS=-c ../xenevents.conf xen_events
 # For testing without /dev/xe
 #BAKE_FLAGS=xen_pv
 
+# For testing outside of Rump, use Makefile.util
+
 APPNAME=xenevent
 
 ARCHIVES=

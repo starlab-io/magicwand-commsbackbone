@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "threadpool.h"
+#include "message_types.h"
 
 typedef uint8_t byte_t;
 
@@ -34,7 +35,11 @@ typedef struct _buffer_item {
     //
     // Pointer into the buffer where this item resides. Equivalent to &buf[offset]
     //
-    byte_t * region;
+    union
+    {
+        byte_t * region;
+        mt_request_generic_t * request;
+    };
     
     //
     // This item's index in array of these items.
