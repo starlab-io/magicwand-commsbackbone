@@ -70,15 +70,6 @@ xe_cdevsw = {
 typedef struct _xen_dev_state
 {
     //
-    // mini-os/semaphore.h
-    //
-    // This is used to signal between the xen event channel callback
-    // the the thread that is waiting on a read() to complete.
-    //
-//    xenevent_semaphore_t messages_available;
-
-    // XCXXXXXXXXXXXXXX move to xenevent_comms.c ????????
-    //
     // Only one thread can read from the device 
     //
     xenevent_mutex_t read_lock;
@@ -173,13 +164,7 @@ xe_dev_open( dev_t Dev,
         MYASSERT( !"device is already open" );
         goto ErrorExit;
     }
-/*    
-    rc = xenevent_semaphore_init( &g_state.messages_available );
-    if ( 0 != rc )
-    {
-        goto ErrorExit;
-    }
-*/
+
     rc = xenevent_mutex_init( &g_state.read_lock );
     if ( 0 != rc )
     {
@@ -215,8 +200,6 @@ xe_dev_close( dev_t Dev,
         
     xe_comms_fini();
     
-//    xenevent_semaphore_destroy( &g_state.messages_available );
-
     xenevent_mutex_destroy( &g_state.read_lock );
     xenevent_mutex_destroy( &g_state.write_lock );
 
@@ -236,21 +219,41 @@ xe_dev_read( dev_t Dev,
              int Flag )
 {
     int rc = 0;
-    size_t bytes_read = 0;
     
     // Only one reader at a time
     xenevent_mutex_wait( g_state.read_lock );
 
+    // Only process one request (?)
+    MYASSERT( 1 == Uio->uio_iovcnt );
+
     for ( int i = 0; i < Uio->uio_iovcnt; i++ )
     {
+        struct iovec * iov = &(Uio->uio_iov[i]);
+        size_t bytes_read = 0;
+        
+        rc = xe_comms_read_item( iov->iov_base,
+                                 iov->iov_len,
+                                 &bytes_read );
+        if ( rc )
+        {
+            goto ErrorExit;
+        }
+        
         DEBUG_PRINT( "Read request: %d bytes at %p\n",
                      (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
+
+        hex_dump( "Write request", 
+                  iov->iov_base, (int) iov->iov_len );
+
+        // Inform system of data transfer
+        iov->iov_len -= bytes_read;
+        iov->iov_base = (uint8_t *)iov->iov_base + bytes_read;
+        
+        Uio->uio_offset += bytes_read;
+        Uio->uio_resid  -= bytes_read;
     }
 
-    rc = xe_comms_read_item( Uio->uio_iov[0].iov_base,
-                             Uio->uio_iov[0].iov_len,
-                             &bytes_read );
-
+ErrorExit:
     xenevent_mutex_release( g_state.read_lock );
     return rc;
 }
@@ -268,20 +271,35 @@ xe_dev_write( dev_t Dev,
 
     // Only one writer at a time
     xenevent_mutex_wait( g_state.write_lock );
-
-    // Wait for a command to arrive
-    rc = xe_comms_write_item( Uio->uio_iov[0].iov_base,
-                              Uio->uio_iov[0].iov_len );
     
     for ( int i = 0; i < Uio->uio_iovcnt; i++ )
     {
+        struct iovec * iov = &(Uio->uio_iov[i]);
+        size_t bytes_written = 0;
+        
+        // Wait for a command to arrive
+        rc = xe_comms_write_item( iov->iov_base,
+                                  iov->iov_len,
+                                  &bytes_written);
+        if ( rc )
+        {
+            goto ErrorExit;
+        }
+        
         DEBUG_PRINT( "Write request: %d bytes at %p\n",
-                     (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
-        hex_dump( "Write request",
-                  Uio->uio_iov[i].iov_base, (int)Uio->uio_iov[i].iov_len );
+                     (int)iov->iov_len, iov->iov_base );
+        hex_dump( "Write request", 
+                  iov->iov_base, (int) iov->iov_len );
+
+        // Inform system of data transfer
+        iov->iov_len -= bytes_written;
+        iov->iov_base = (uint8_t *)iov->iov_base + bytes_written;
+        
+        Uio->uio_offset += bytes_written;
+        Uio->uio_resid  -= bytes_written;
     }
 
+ErrorExit:
     xenevent_mutex_release( g_state.write_lock );
-    
     return rc;
 }

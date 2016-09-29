@@ -34,8 +34,6 @@ typedef uint16_t mt_size_t;
 
 #define MT_REQUEST(x)     (x)
 #define MT_RESPONSE(x)    (MT_RESPONSE_MASK | (x))
-#define MT_IS_REQUEST(x)  0 == (MT_RESPONSE_MASK & (x))
-#define MT_IS_RESPONSE(x) MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x))
 
 #define MT_REQUEST_NAME( __name ) __name##_request
 #define MT_RESPONSE_NAME( __name ) __name##_response
@@ -84,6 +82,11 @@ typedef uint32_t mt_status_t;
 #define CRITICAL_ERROR(x) (0xc0000000 | (x))
 
 
+typedef uint16_t mt_sig_t;
+#define MT_SIGNATURE_REQUEST  0xff11
+#define MT_SIGNATURE_RESPONSE 0xff33
+
+
 #define MT_STATUS_INTERNAL_ERROR CRITICAL_ERROR(1)
 
 
@@ -115,6 +118,9 @@ typedef enum
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_base 
 {
+    // Must be MT_SIGNATURE_REQUEST
+    mt_sig_t          sig;
+    
     // MtRequest*
     mt_request_id_t   type;
     
@@ -133,6 +139,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_response_base 
 {
+    // Must be MT_SIGNATURE_RESPONSE
+    mt_sig_t          sig;
+
     // MtResponse*
     mt_response_id_t   type;
 
@@ -260,6 +269,10 @@ typedef union _mt_request_generic
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
 #define MT_REQUEST_GET_TYPE(rq) ((rq)->base.type)
+#define MT_IS_REQUEST(x)                                                \
+    ((MT_SIGNATURE_REQUEST == (x)->base.sig) &&                         \
+     (0 == (MT_RESPONSE_MASK & (x)->base.type)))
+
 
 typedef union _mt_response_generic
 {
@@ -273,6 +286,10 @@ typedef union _mt_response_generic
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)
 #define MT_RESPONSE_GET_TYPE(rq) ((rq)->base.type)
+
+#define MT_IS_RESPONSE(x)                                               \
+    ((MT_SIGNATURE_RESPONSE == (x)->base.sig) &&                        \
+     (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)))
 
 
 #endif // message_types_h

@@ -279,7 +279,6 @@ send_event(evtchn_port_t port)
 {
 
     int                err;
-//    struct evtchn_send send;
 
     DEBUG_PRINT( "Sending event to (local) port %d\n", port );
     err = minios_notify_remote_via_evtchn( port );
@@ -287,32 +286,7 @@ send_event(evtchn_port_t port)
     {
         MYASSERT( !"Failed to send event" );
     }
-#if 0
-    
-    send.port = port;
 
-    err = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
-
-    if (err)
-    {
-        DEBUG_PRINT("Error: Failed to send event\n");
-        DEBUG_PRINT("Port Number: %u\n", send.port);
-        MYASSERT(!"Could not send event over event channel\n");
-        goto ErrorExit;
-    }
-
-    /*
-    if (err) {
-        DEBUG_PRINT("\tError: Failed to send event\n");
-        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
-    } else {
-        DEBUG_PRINT("\tSent Event\n");
-        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
-    }
-    */
-
-ErrorExit:
-#endif
     return err;
 }
 
@@ -345,6 +319,8 @@ xe_comms_read_item( void * Memory,
     int                         rc = 0;
     bool                 available = false;
     mt_request_generic_t * request = NULL;
+
+    *BytesRead = 0;
     
     DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
     send_event( g_state.local_event_port );
@@ -366,17 +342,22 @@ xe_comms_read_item( void * Memory,
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    if ( request->base.size > Size )
+    if ( !MT_IS_REQUEST( request ) ||
+        request->base.size > Size    )
     {
         rc = BMK_EINVAL;
-        MYASSERT( !"Command buffer is too big for destination buffer" );
+        MYASSERT( !"Programming error: there's a problem with the request" );
         goto ErrorExit;
     }
 
-    // Total size: header + payload sizes
+    // Total size: header + payload sizes. Do a direct memory copy,
+    // since Rump has no division between user and kernel memory.
     *BytesRead = sizeof(request->base) + request->base.size;
     bmk_memcpy( Memory, request, *BytesRead );
 
+    // We lie to the caller and report that we have read the complete request
+    *BytesRead = sizeof(*request);
+    
 ErrorExit:
 
     // Advance the counter for the next request
@@ -394,10 +375,12 @@ ErrorExit:
  */
 int
 xe_comms_write_item( void * Memory,
-                     size_t Size )
+                     size_t Size,
+                     size_t * BytesWritten )
 {
     int rc = 0;
-    bool send_event = false;
+    bool do_event = false;
+    mt_response_generic_t * response = (mt_response_generic_t *) Memory;
 
     // A response can only be placed in a slot that was used by a
     // request that has been consumed. An overflow here is
@@ -407,18 +390,31 @@ xe_comms_write_item( void * Memory,
     void * dest = RING_GET_RESPONSE( &g_state.back_ring,
                                      g_state.back_ring.rsp_prod_pvt );
 
-    bmk_memcpy( dest, Memory, Size );
+    if ( !MT_IS_RESPONSE( response ) ||
+         sizeof(*response) != Size     )
+    {
+        rc = BMK_EINVAL;
+        MYASSERT( !"Programming error: there's a problem with the response" );
+        // Bad state - we're not sending the response !!!!!!!!!!!!
+        goto ErrorExit;
+    }
+
+    *BytesWritten = Size;
+
+    // Only copy what's needed
     
-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, send_event );
+    bmk_memcpy( dest, response, response->base.size );
+    
+    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
 
     ++g_state.back_ring.rsp_prod_pvt;
 
-    if ( send_event )
+    if ( do_event )
     {
-        // send event to remote side
+        (void) send_event( g_state.local_event_port );
     }
 
-//ErrorExit:
+ErrorExit:
     return rc;
 }
 

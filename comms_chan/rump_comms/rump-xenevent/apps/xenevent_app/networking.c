@@ -17,6 +17,20 @@
 
 // XXXXXXXX verify that errno values match between Linux and NetBSD
 
+static void
+xe_net_set_base_response( IN mt_request_generic_t   * Request,
+                          IN size_t                   PayloadLen,
+                          OUT mt_response_generic_t * Response )
+{
+    Response->base.sig    = MT_SIGNATURE_RESPONSE;
+    Response->base.sockfd = Request->base.sockfd;
+
+    Response->base.id   = Request->base.id;
+    Response->base.type = MT_RESPONSE( Response->base.type );
+    Response->base.size = PayloadLen;
+}
+
+
 static int
 xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
 {
@@ -90,13 +104,14 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     {
         Response->base.status = errno;
     }
-
+    
     // Set up Response
-    Response->base.sockfd = sockfd;
-    Response->base.type = MtResponseSocketCreate;
-    Response->base.size = sizeof( *Response ) - sizeof(Response->base);
-    Response->base.id   = Request->base.id;
+//    xe_net_set_base_response( Request, 0, Response );
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              0,
+                              (mt_response_generic_t *)Response );
 
+    Response->base.sockfd = sockfd;
 
     // Set up BufferItem->assigned_thread for future reference during this session
     WorkerThread->sock_fd       = sockfd;
@@ -181,10 +196,10 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     }
 
 ErrorExit:
-    Response->base.type = MtResponseSocketConnect;
-    Response->base.size = sizeof( *Response ) - sizeof(Response->base);
-    Response->base.id   = Request->base.id;
-    Response->base.sockfd = Request->base.sockfd;
+//    xe_net_set_base_response( Request, 0, Response );
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              0,
+                              (mt_response_generic_t *)Response );
     
     return Response->base.status;
 }
@@ -213,10 +228,11 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
         Response->base.status = errno;
     }
 
-    Response->base.type = MtResponseSocketClose;
-    Response->base.size = sizeof( *Response ) - sizeof(Response->base);
-    Response->base.id   = Request->base.id;
-    Response->base.sockfd = Request->base.sockfd;
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              0,
+                              (mt_response_generic_t *)Response );
+
+//    xe_net_set_base_response( Request, 0, Response );
 
     return Response->base.status;
 }
@@ -253,10 +269,11 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
 
         Response->base.size += rcv;
     }
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              Response->base.size,
+                              (mt_response_generic_t *)Response );
 
-    Response->base.type   = MtResponseSocketWrite;
-    Response->base.id     = Request->base.id;
-    Response->base.sockfd = Request->base.sockfd;
+//    xe_net_set_base_response( Request, Response->base.size, Response );`
 
     return Response->base.status;
 }
@@ -296,10 +313,9 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
         totSent += sent;
     }
 
-    Response->base.type = MtResponseSocketWrite;
-    Response->base.id   = Request->base.id;
-    Response->base.sockfd = Request->base.sockfd;
-    Response->base.size   = sizeof( *Response ) - sizeof(Response->base);
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              0,
+                              (mt_response_generic_t *)Response );
 
     return Response->base.status;
 }

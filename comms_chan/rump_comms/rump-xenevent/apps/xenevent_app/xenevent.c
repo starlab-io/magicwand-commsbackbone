@@ -368,7 +368,8 @@ set_response_to_internal_error( IN  mt_request_generic_t * Request,
 {
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
-    
+
+    Response->base.sig    = MT_SIGNATURE_RESPONSE;
     Response->base.type   = MT_RESPONSE( Request->base.type );
     Response->base.id     = Request->base.id;
     Response->base.sockfd = Request->base.sockfd;
@@ -412,16 +413,14 @@ process_buffer_item( buffer_item_t * BufferItem )
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
     thread_item_t * worker = BufferItem->assigned_thread;
 
+    mt_request_id_t reqtype = MT_REQUEST_GET_TYPE( request );
+    
     MYASSERT( NULL != worker );
     
-    mt_request_id_t reqtype = request->base.type;
-
-    
     DEBUG_PRINT( "Processing buffer item %d\n", BufferItem->idx );
-    int req = MT_RESPONSE_MASK & reqtype;
-    MYASSERT( MT_IS_REQUEST( reqtype ) );
+    MYASSERT( MT_IS_REQUEST( request ) );
     
-    switch( reqtype )
+    switch( request->base.type )
     {
     case MtRequestSocketCreate:
         rc = xe_net_create_socket( (mt_request_socket_create_t *) request,
