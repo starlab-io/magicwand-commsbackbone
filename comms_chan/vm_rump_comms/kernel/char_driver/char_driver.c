@@ -196,11 +196,31 @@ static void send_evt(int evtchn_prt)
    } else {
       printk(KERN_INFO "Sent Event. Port: %u\n", send.port);
    }
-
 }
 
-/*
-static void free_unbound_evt_chn(void)
+static int 
+is_evt_chn_closed(void)
+{
+   
+   struct evtchn_status status;
+   int                  rc;
+
+   status.dom = DOMID_SELF;
+   status.port = self_event_channel;
+
+   rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
+
+   if (rc < 0)
+     return 1;
+
+   if (status.status != EVTCHNSTAT_closed)
+      return 0;
+
+   return 1;
+}
+
+static void 
+free_unbound_evt_chn(void)
 {
 
    struct evtchn_close close;
@@ -218,11 +238,10 @@ static void free_unbound_evt_chn(void)
    } else {
       printk(KERN_INFO "Closed Event Channel Port: %d\n", close.port);
    }
-
 }
-*/
 
-static grant_ref_t offer_grant(domid_t domu_client_id) 
+static grant_ref_t 
+offer_grant(domid_t domu_client_id) 
 {
 
    int ret;
@@ -261,9 +280,10 @@ static grant_ref_t offer_grant(domid_t domu_client_id)
    return ret;
 }
 
-static void msg_len_state_changed(struct xenbus_watch *w,
-                                  const char **v,
-                                  unsigned int l)
+static void 
+msg_len_state_changed(struct xenbus_watch *w,
+                      const char **v,
+                      unsigned int l)
 {
    char *msg_len_str;
 
@@ -520,18 +540,18 @@ static void __exit mwchar_exit(void){
 
    unregister_xenbus_watch(&evtchn_bound_watch);
 
-   //free_unbound_evt_chn();
-
    initialize_keys();
 
    if (is_client) {
-
       unregister_xenbus_watch(&msg_len_watch);
    }
 
    if (irq) {
-      //xen_destroy_irq(irq);
       unbind_from_irqhandler(irq, NULL);
+   }
+
+   if (!is_evt_chn_closed()) {
+      free_unbound_evt_chn();
    }
 
    printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");
