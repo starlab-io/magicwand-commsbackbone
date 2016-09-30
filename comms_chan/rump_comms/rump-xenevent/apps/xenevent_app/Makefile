@@ -35,6 +35,7 @@ all: $(APPNAME).run
 #@echo " rumprun -S xen -dip -D 1234 $@"
 
 $(APPNAME).run: $(APPNAME).bin
+	#bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)	
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 	@echo "Run   ./run.sh"
 	@echo "Debug with:"

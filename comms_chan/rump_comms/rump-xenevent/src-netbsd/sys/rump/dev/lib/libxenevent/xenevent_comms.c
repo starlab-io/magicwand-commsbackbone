@@ -79,7 +79,7 @@ typedef struct _xen_comm_state
     struct gntmap gntmap_map;
 
     // One grant ref is required per page
-    grant_ref_t    grant_refs[ XENEVENT_GRANT_REF_COUNT];
+    grant_ref_t    grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 
     // Ring buffer types. This side implements the "back end" of the
     // ring: requests are taken off the ring and responses are put on
@@ -292,7 +292,6 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
-    DEBUG_BREAK();
 
     send_event(port);
 
@@ -426,13 +425,13 @@ ErrorExit:
  * is XENEVENT_GRANT_REF_COUNT.
  */
 static int
-receive_grant_references( void )
+receive_grant_references( domid_t RemoteId )
 {
     struct xenbus_event_queue events;
     int rc = 0;
     char * err = NULL;
     char * msg = NULL;
-    //char * msgptr = NULL;
+    char * msgptr = NULL;
     char * refstr = NULL;
     
     xenbus_event_queue_init(&events);
@@ -454,28 +453,42 @@ receive_grant_references( void )
     {
         goto ErrorExit;
     }
-
-    g_state.grant_refs[0] = bmk_strtoul( refstr, NULL, 10 );
-/*
     
-    // Extract the grant references from XenStore
+    // Extract the grant references from XenStore - they are space-delimited hex values
     msgptr = msg;
     for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
     {
         char * next = NULL;
-        g_state.grant_refs[i] = bmk_strtoul( msgptr, &next, 10 );
-        if ( ULONG_MAX == g_state.grant_refs[i] )
+        g_state.grant_refs[i] = bmk_strtoul( msgptr, &next, 16 );
+        if ( *next != XENEVENT_GRANT_REF_DELIM [0] )
         {
             rc = BMK_EINVAL;
             MYASSERT( !("Invalid data in " GRANT_REF_PATH ) );
             goto ErrorExit;
         }
 
-        DEBUG_PRINT( "Found grant reference %d\n", g_state.grant_refs[i] );
-        // Advance msgptr to next token
-        msgptr = next;
+        DEBUG_PRINT( "Found grant reference 0x%x\n", g_state.grant_refs[i] );
+        msgptr = next;         // Advance msgptr to next token
     }
-*/
+
+    gntmap_init( &g_state.gntmap_map );
+
+    // Map in the memory described by the grant ref(s) into a contiguous region
+    g_state.shared_ring = (mwevent_sring_t *)
+        gntmap_map_grant_refs( &g_state.gntmap_map,
+                               XENEVENT_GRANT_REF_COUNT,  // number of grant refs
+                               (uint32_t *) &RemoteId,    // dom ID (only 1 so stride=0)
+                               0,      
+                               (grant_ref_t *) g_state.grant_refs,
+                               1 ); // region is writable
+    if (NULL == g_state.shared_ring)
+    {
+        MYASSERT( !"gntmap_map_grant_refs failed" );
+        return BMK_ENOMEM;
+    }
+
+    g_state.shared_ring_size = XENEVENT_GRANT_REF_COUNT * PAGE_SIZE;
+    
 ErrorExit:
     if ( refstr )
     {
@@ -483,55 +496,6 @@ ErrorExit:
     }
 
     return rc;
-}
-
-
-/*
- * Client-side function that maps in a page of memory 
- *  granted by the server. 
- *
- *  domu_server_id   - Domain Id of the server 
- *  client_grant_ref - Client grant reference to 
- *                     shared memory
- *  msg_len          - Length of data the server writes
- *                     to shared memory
- *
- *  return - 0 if successful, 1 if not 
- */
-
-static int
-xe_comms_accept_grant(domid_t      domu_server_id, 
-                      grant_ref_t  client_grant_ref)
-{
-    // All pages are shared with one dom ID
-    uint32_t       domids[1];
-
-    gntmap_init( &g_state.gntmap_map );
-
-    // All the pages are being shared with one dom ID
-    domids[ 0 ]    = domu_server_id;
-
-    // Map in the memory described by the grant ref(s), in a contiguous region
-    g_state.shared_ring = (mwevent_sring_t *)
-        gntmap_map_grant_refs( &g_state.gntmap_map,
-                               1, //XENEVENT_GRANT_REF_COUNT, // number of grant refs
-                               domids,   // dom ID (only 1)
-                               0,        // dom ID stride - only 1 remote dom
-                               g_state.grant_refs,
-                               1 ); // region is writable
-    if (NULL == g_state.shared_ring)
-    {
-        MYASSERT( !"Mapping in the Memory bombed out!\n");
-        return BMK_ENOMEM;
-    }
-
-    //g_state.shared_ring_size = XENEVENT_GRANT_REF_COUNT * PAGE_SIZE;
-    g_state.shared_ring_size = 1 * PAGE_SIZE;
-    
-    DEBUG_PRINT( "Shared ring buffer: %p size 0x%lx\n",
-                 g_state.shared_ring, g_state.shared_ring_size );
-
-    return 0;
 }
 
 
@@ -604,7 +568,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     domid_t         localId = 0;
     domid_t         remoteId = 0;
 
-    grant_ref_t	    client_grant_ref = 0;
+//    grant_ref_t	    client_grant_ref = 0;
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
@@ -643,20 +607,20 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     DEBUG_PRINT( "Discovered remote server ID: %u\n", remoteId );
 
     //
-    // Wait for the grant reference
+    // Wait for the grant references and map them in
     //
-    rc = receive_grant_references();
+    rc = receive_grant_references( remoteId );
     if ( rc )
     {
         goto ErrorExit;
     }
 
     // Map in the page offered by the remote side
-    rc = xe_comms_accept_grant( remoteId, client_grant_ref );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
+    //rc = xe_comms_accept_grant( remoteId, client_grant_ref );
+    //if ( rc )
+    //{
+    //goto ErrorExit;
+    //}
 
     // Get the event port and bind to it
     rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PRT_PATH,
@@ -710,6 +674,17 @@ xe_comms_fini( void )
 
     gntmap_fini( &g_state.gntmap_map );
 
+    // XXXX g_state.shared_ring was allocated with allocate_ondemand()
+    // in gntmap_map_grant_refs(). Is this the right way to free it?
+
+    // XXXX currently the build system doesn't let us link to the
+    //symbol unmap_frames. Investigate this.
+
+    // This is the case even if the Makefile includes this line:
+    // RUMP_SYM_NORENAME = xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text|unmap_frames
+    //rc = unmap_frames( (unsigned long) g_state.shared_ring,
+    //                     XENEVENT_GRANT_REF_COUNT );
+    
     // bmk_memset( &g_state, 0, sizeof(g_state) );
 
     return rc;

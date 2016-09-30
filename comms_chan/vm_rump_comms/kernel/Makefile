@@ -1,4 +1,5 @@
 CONFIG_MODULE_SIG=n
+EXTRA_CFLAGS := -std=gnu99
 
 obj-m+=gnt_srvr.o
 

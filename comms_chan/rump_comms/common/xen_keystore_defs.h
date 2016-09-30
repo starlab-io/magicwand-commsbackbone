@@ -47,24 +47,16 @@
 //
 
 //
-// Default Nmbr of Grant Refs
+// Number of grant refs (1/page). This determines how much space we
+// have for our ring buffer. For instance, if the order is 6, we share
+// 2^6 = 64 (0x40) pages, or 0x40000 bytes.
 //
 
-#define XENEVENT_GRANT_REF_COUNT 64
+#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+#define XENEVENT_GRANT_REF_COUNT  (1 << XENEVENT_GRANT_REF_ORDER)
 
-#define XENEVET_GRANT_REF_DELIM " "
-
-/*
-#define DEFAULT_NMBR_GNT_REF      1
-// Default Stride
-#define DEFAULT_STRIDE            1
-// Write access to shared mem 
-#define WRITE_ACCESS_ON           1
-// First Domain Slot
-#define FIRST_DOM_SLOT            0 
-// First Grant Ref 
-#define FIRST_GNT_REF             0 
-*/
+// Split the grant refs apart by this in XenStore
+#define XENEVENT_GRANT_REF_DELIM " "
 
 
 #endif // xenevent_config_h

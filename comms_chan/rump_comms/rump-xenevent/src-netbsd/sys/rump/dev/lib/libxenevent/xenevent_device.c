@@ -144,6 +144,8 @@ xe_dev_fini( void )
 {
     int rc = 0;
 
+    rc = xe_comms_fini();
+
     return rc;
 }
     
@@ -198,11 +200,11 @@ xe_dev_close( dev_t Dev,
         goto ErrorExit;
     }
         
-    xe_comms_fini();
-    
     xenevent_mutex_destroy( &g_state.read_lock );
     xenevent_mutex_destroy( &g_state.write_lock );
 
+    rc = xe_dev_fini();
+    
 ErrorExit:
     return rc;
 }
