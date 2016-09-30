@@ -38,6 +38,7 @@ xe_comms_read_item( void * Memory,
 
 int
 xe_comms_write_item( void * Memory,
-                     size_t Size );
+                     size_t Size,
+                     size_t * BytesRead );
 
 #endif //xenevent_comms_h

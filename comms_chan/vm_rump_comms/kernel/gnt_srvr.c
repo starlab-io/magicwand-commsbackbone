@@ -18,6 +18,8 @@
 #include <linux/tcp.h>
 #include <linux/ip.h>
 
+#include <linux/vmalloc.h>
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -29,11 +31,9 @@
 #define SERVER_ID_KEY         "server_id" 
 #define CLIENT_ID_KEY         "client_id" 
 #define GNT_REF_KEY           "gnt_ref" 
-
 #define EVT_CHN_PRT_KEY       "vm_evt_chn_prt"
 #define VM_EVT_CHN_IS_BOUND   "vm_evt_chn_is_bound"
 #define CLIENT_LOCAL_PRT_KEY  "client_local_prt"
-
 #define MAX_GNT_REF_WIDTH     15
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
@@ -46,6 +46,11 @@
 
 #define SSH_DST_PORT        22
 
+#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
+#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
+
+#define XENEVET_GRANT_REF_DELIM " "
+
 MODULE_LICENSE("GPL");              
 MODULE_AUTHOR("Mark Mason");      
 MODULE_DESCRIPTION("A Linux driver interfacing with Xen to execute grants.");
@@ -55,8 +60,12 @@ static char *name = "gnt_srvr";
 module_param(name, charp, S_IRUGO);
 MODULE_PARM_DESC(name, "Name for tracking in sys log");
 
-static void          *server_page;
-static grant_ref_t   foreign_grant_ref;
+// For allocating, tracking, and sharing XENEVENT_GRANT_REF_COUNT
+// pages.
+static uint8_t     * server_region;
+static size_t        server_region_size;
+static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
+
 static unsigned int  msg_counter;
 static unsigned int  is_client;
 static domid_t       client_dom_id;
@@ -280,59 +289,91 @@ static void free_unbound_evt_chn(void)
 
    struct evtchn_close close;
    int err;
+   int irq = 0;
 
    if (!event_channel_port)
       return;
       
+   irq = irq_from_evtchn(event_channel_port );
+
+   // Do this prior to closing channel (otherwise SIGSEGV)
+   unbind_from_irqhandler( irq, NULL );
+   
    close.port = event_channel_port;
-
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
-
    if (err) {
-      pr_err("Failed to close event channel\n");
+       pr_err("Failed to close event channel: err=%d\n", err);
    } else {
       printk(KERN_INFO "Closed Event Channel Port: %d\n", close.port);
    }
 
 }
 
-static grant_ref_t offer_grant(domid_t domu_client_id) 
+static int offer_grant(domid_t domu_client_id) 
 {
+   int ret = 0;
 
-   int ret;
-   unsigned int mfn;
+   server_region_size = PAGE_SIZE * XENEVENT_GRANT_REF_COUNT;
 
-   ret = 0;
-   mfn = 0;
-
-   server_page = (void *)__get_free_page(GFP_KERNEL);
-
-   if (!server_page) {
-
-      printk(KERN_INFO "GNT_SRVR: Error allocating memory\n");
+   // Do not use vmalloc() -- the pages can't be accessed on the other DomU
+   server_region = (uint8_t *) __get_free_pages( GFP_KERNEL, XENEVENT_GRANT_REF_ORDER );
+   if (!server_region)
+   {
+       printk(KERN_INFO "GNT_SRVR: Error allocating memory (0x%x pages)\n",
+              XENEVENT_GRANT_REF_COUNT);
       return 1;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
-   memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
+   // Zero out the entire shared region. This validates each page.
+   memset(server_region, 0, server_region_size );
 
-   mfn = virt_to_mfn(server_page);
+   for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+   {
+       // Calc the VA, then find the backing pseudo-physical address
+       // (Xen book pg 61)
+       void * va = (void *) (server_region + i * PAGE_SIZE);
+       unsigned long mfn = virt_to_mfn( va );
 
-   printk(KERN_INFO "GNT_SRVR: MFN: %u\n", mfn);
+       ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
+       if (ret < 0) {
+           printk(KERN_INFO "GNT_SRVR: Error obtaining Grant\n");
+           return 1;
+       }
 
-   ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
-
-   if (ret < 0) {
-
-      printk(KERN_INFO "GNT_SRVR: Error obtaining Grant\n");
-      return 0;
+       grant_refs[ i ] = ret;
+       printk(KERN_INFO "GNT_SRVR: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
    }
 
-   printk(KERN_INFO "Grant Ref: %u \n", ret);
+   return 0;
+}
 
-   foreign_grant_ref = ret;
+static int write_grant_refs_to_key( void )
+{
+    // Must be large enough for one grant ref, in hex, plus '\0'
+    char one_ref[5];
+    char gnt_refs[ XENEVENT_GRANT_REF_COUNT * sizeof(one_ref) ] = {0};
+    int rc = 0;
 
-   return ret;
+    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    {
+        if ( snprintf( one_ref, sizeof(one_ref), "%x ", grant_refs[i] ) >= sizeof(one_ref))
+        {
+            printk(KERN_INFO "GNT_SRVR: Insufficient space to write grant ref.\n");
+            rc = 1;
+            goto ErrorExit;
+        }
+        if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >= gnt_refs + sizeof(gnt_refs) )
+        {
+            printk(KERN_INFO "GNT_SRVR: Insufficient space to write all grant refs.\n");
+            rc = 2;
+            goto ErrorExit;
+        }
+    }
+
+    write_to_key( GNT_REF_KEY, gnt_refs );
+
+ErrorExit:
+    return rc;
 }
 
 static void msg_len_state_changed(struct xenbus_watch *w,
@@ -362,14 +403,14 @@ static void msg_len_state_changed(struct xenbus_watch *w,
    printk(KERN_INFO "Message length changed value:\n");
    printk(KERN_INFO "\tRead Message Length Key: %s\n", msg_len_str);
 
-   if (!server_page) {
+   if (!server_region) {
       kfree(msg_len_str);
       printk(KERN_INFO "GNT_SRVR: Error allocating memory\n");
       return;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
-   memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
+   memset(server_region, 0, PAGE_SIZE);
+   memcpy(server_region, TEST_MSG, TEST_MSG_SZ);
 
    // Write Msg Len to key
    write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
@@ -390,7 +431,7 @@ static void client_id_state_changed(struct xenbus_watch *w,
                                     unsigned int l)
 {
    char     *client_id_str;
-   char      gnt_ref_str[MAX_GNT_REF_WIDTH]; 
+//   char      gnt_ref_str[MAX_GNT_REF_WIDTH]; 
    int       err;
 
 
@@ -433,10 +474,11 @@ static void client_id_state_changed(struct xenbus_watch *w,
    write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
 
    // Write Grant Ref to key 
-   memset(gnt_ref_str, 0, MAX_GNT_REF_WIDTH);
-   snprintf(gnt_ref_str, MAX_GNT_REF_WIDTH, "%u", foreign_grant_ref);
+   write_grant_refs_to_key();
+   //memset(gnt_ref_str, 0, MAX_GNT_REF_WIDTH);
+   //snprintf(gnt_ref_str, MAX_GNT_REF_WIDTH, "%u", foreign_grant_ref);
 
-   write_to_key(GNT_REF_KEY, gnt_ref_str);
+   //write_to_key(GNT_REF_KEY, gnt_ref_str);
 
    err = register_xenbus_watch(&msg_len_watch);
    if (err) {
@@ -605,8 +647,8 @@ static int __init gnt_srvr_init(void) {
 
    int   err;
 
-   foreign_grant_ref = 0;
-   server_page = NULL;
+//   foreign_grant_ref = 0;
+   server_region = NULL;
    msg_counter = 0;
    is_client = 0;
    client_dom_id = 0;
@@ -647,10 +689,22 @@ static int __init gnt_srvr_init(void) {
  *  Similar to the initialization function, it is static. The __exit macro notifies that if this
  *  code is used for a built-in driver (not a LKM) that this function is not required.
  */
-static void __exit gnt_srvr_exit(void){
+static void __exit gnt_srvr_exit(void)
+{
 
-   gnttab_end_foreign_access(foreign_grant_ref, 0, (unsigned long)server_page); 
-
+   for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+   {
+       if ( 0 != grant_refs[ i ] )
+       {
+           printk(KERN_INFO "GNT_SRVR: Ending access to grant ref 0x%x\n", grant_refs[i]);
+           gnttab_end_foreign_access_ref( grant_refs[i], 0 );
+       }
+   }
+   if ( NULL != server_region )
+   {
+       free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
+   }
+   
    unregister_xenbus_watch(&client_id_watch);
 
    unregister_xenbus_watch(&remote_port_watch);
@@ -663,9 +717,9 @@ static void __exit gnt_srvr_exit(void){
 
    if (is_client) {
 
-      unregister_xenbus_watch(&msg_len_watch);
+       unregister_xenbus_watch(&msg_len_watch);
 
-      finalize_net_fltr_hook();
+       finalize_net_fltr_hook();
    }
 
    printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");

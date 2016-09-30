@@ -15,7 +15,7 @@ echo "gdb -ex 'target remote:1234' xenevent.run"
 #         -W if,inet,static,10.0.120.101/24 \
 #         client.run
 
-rumprun -S xen -dip -D 1234 -M 128 -N xenevent-rump \
+rumprun -S xen -dip -D 1234 -M 256 -N xenevent-rump \
         -I xen0,xenif \
         -W xen0,inet,static,10.190.2.110/24 \
         xenevent.run

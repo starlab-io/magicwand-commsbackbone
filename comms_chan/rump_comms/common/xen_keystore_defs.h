@@ -40,27 +40,23 @@
 #define MSG_LENGTH_PATH           XENEVENT_XENSTORE_ROOT "/msg_len"
 
 #define VM_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_prt"
-#define UK_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/uk_evt_chn_prt"
-
 #define VM_EVT_CHN_IS_BOUND       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_is_bound"
-
 
 //
 //  Grant Mapping Variables 
 //
 
 //
-// Default Nmbr of Grant Refs
+// Number of grant refs (1/page). This determines how much space we
+// have for our ring buffer. For instance, if the order is 6, we share
+// 2^6 = 64 (0x40) pages, or 0x40000 bytes.
 //
 
-#define DEFAULT_NMBR_GNT_REF      1
-// Default Stride
-#define DEFAULT_STRIDE            1
-// Write access to shared mem 
-#define WRITE_ACCESS_ON           1
-// First Domain Slot
-#define FIRST_DOM_SLOT            0 
-// First Grant Ref 
-#define FIRST_GNT_REF             0 
+#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+#define XENEVENT_GRANT_REF_COUNT  (1 << XENEVENT_GRANT_REF_ORDER)
+
+// Split the grant refs apart by this in XenStore
+#define XENEVENT_GRANT_REF_DELIM " "
+
 
 #endif // xenevent_config_h

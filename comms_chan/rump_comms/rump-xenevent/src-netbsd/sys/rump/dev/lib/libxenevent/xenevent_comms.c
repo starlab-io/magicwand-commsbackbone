@@ -23,7 +23,6 @@
 // include/bmk-core
 //
 
-
 #include <sys/stdint.h>
 
 #include <mini-os/types.h>
@@ -76,40 +75,27 @@ typedef struct _xen_comm_state
 {
     bool comms_established;
 
-    //
-    // Main shared memory - prepended with shared ring info, followed
-    // by slots for request/response structures
-    //
-    uint8_t * shared_mem;
-    size_t    shared_mem_size;
-
     // Grant map 
     struct gntmap gntmap_map;
 
     // One grant ref is required per page
-    grant_ref_t    grant_refs[DEFAULT_NMBR_GNT_REF];
+    grant_ref_t    grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 
     // Ring buffer types. This side implements the "back end" of the
     // ring: requests are taken off the ring and responses are put on
     // it. The "sring" is the shared ring - it points to a contiguous
-    // block of shared pages.
+    // block of shared pages. The shared ring resides in shared memory.
     mwevent_sring_t     * shared_ring;
-    mwevent_back_ring_t back_ring;
-
+    mwevent_back_ring_t   back_ring;
+    size_t                shared_ring_size;
+    
     // Event channel memory
-    void * event_channel_mem;
+    void    * event_channel_mem;
     size_t    event_channel_mem_size;
     
     // Event channel local port
     evtchn_port_t local_event_port;
     
-    // Self event channel memory - for creating an unbound event channel.
-    // XXXXX remove this
-    uint8_t * self_event_channel_mem;
-
-    // Self event channel local port
-    evtchn_port_t self_event_port;
-
     // Semaphore that is signalled once for each message that has arrived
     xenevent_semaphore_t messages_available;
 
@@ -175,20 +161,17 @@ ErrorExit:
 }
 
 static int
-xe_comms_read_int_from_key( IN const char *Path,
-                            OUT int * OutVal)
+xe_comms_read_str_from_key( IN const char *Path,
+                            OUT char ** OutVal)
 {
     xenbus_transaction_t txn;
-    char                *val;
     int                retry;
     char                *err;
     int                  res = 0;
     bool             started = false;
     
-    *OutVal = 0;
+    *OutVal = NULL;
         
-    val = NULL;
-
     err = xenbus_transaction_start(&txn);
     if (err)
     {
@@ -198,16 +181,14 @@ xe_comms_read_int_from_key( IN const char *Path,
 
     started = true;
     
-    err = xenbus_read(txn, Path, &val);
+    err = xenbus_read(txn, Path, OutVal);
     if (err)
     {
         MYASSERT( !"xenbus_read" );
         goto ErrorExit;
     }
 
-    *OutVal = bmk_strtoul( val, NULL, 10 );
-
-    DEBUG_PRINT( "Read from xenstore: %s => %s\n", Path, val );
+    DEBUG_PRINT( "Read from xenstore: %s => %s\n", Path, *OutVal );
     
 ErrorExit:
     if ( err )
@@ -221,7 +202,29 @@ ErrorExit:
     {
         (void) xenbus_transaction_end(txn, 0, &retry);
     }
+    
+    return res;
 
+}
+
+static int
+xe_comms_read_int_from_key( IN const char *Path,
+                            OUT int * OutVal)
+{
+    char                *val;
+    int                  res = 0;
+
+    *OutVal = 0;
+    
+    res = xe_comms_read_str_from_key( Path, &val );
+    if ( res )
+    {
+        goto ErrorExit;
+    }
+
+    *OutVal = bmk_strtoul( val, NULL, 10 );
+
+ErrorExit:
     if ( val )
     {
         bmk_memfree( val, BMK_MEMWHO_WIREDBMK );
@@ -270,8 +273,7 @@ static int
 send_event(evtchn_port_t port)
 {
 
-    int                err;
-//    struct evtchn_send send;
+    int  err;
 
     DEBUG_PRINT( "Sending event to (local) port %d\n", port );
     err = minios_notify_remote_via_evtchn( port );
@@ -279,32 +281,7 @@ send_event(evtchn_port_t port)
     {
         MYASSERT( !"Failed to send event" );
     }
-#if 0
-    
-    send.port = port;
 
-    err = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
-
-    if (err)
-    {
-        DEBUG_PRINT("Error: Failed to send event\n");
-        DEBUG_PRINT("Port Number: %u\n", send.port);
-        MYASSERT(!"Could not send event over event channel\n");
-        goto ErrorExit;
-    }
-
-    /*
-    if (err) {
-        DEBUG_PRINT("\tError: Failed to send event\n");
-        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
-    } else {
-        DEBUG_PRINT("\tSent Event\n");
-        DEBUG_PRINT("\t\tPort Number: %u\n", send.port);
-    }
-    */
-
-ErrorExit:
-#endif
     return err;
 }
 
@@ -315,6 +292,8 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
+
+    send_event(port);
 
     //
     // Release xe_comms_read_item() to check for another item
@@ -334,8 +313,12 @@ xe_comms_read_item( void * Memory,
                     size_t Size,
                     size_t * BytesRead )
 {
-    int rc = 0;
+    int                         rc = 0;
+    bool                 available = false;
+    mt_request_generic_t * request = NULL;
 
+    *BytesRead = 0;
+    
     DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
     send_event( g_state.local_event_port );
 
@@ -356,17 +339,22 @@ xe_comms_read_item( void * Memory,
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    if ( request->base.size > Size )
+    if ( !MT_IS_REQUEST( request ) ||
+        request->base.size > Size    )
     {
         rc = BMK_EINVAL;
-        MYASSERT( !"Command buffer is too big for destination buffer" );
+        MYASSERT( !"Programming error: there's a problem with the request" );
         goto ErrorExit;
     }
 
-    // Total size: header + payload sizes
+    // Total size: header + payload sizes. Do a direct memory copy,
+    // since Rump has no division between user and kernel memory.
     *BytesRead = sizeof(request->base) + request->base.size;
     bmk_memcpy( Memory, request, *BytesRead );
 
+    // We lie to the caller and report that we have read the complete request
+    *BytesRead = sizeof(*request);
+    
 ErrorExit:
 
     // Advance the counter for the next request
@@ -384,10 +372,12 @@ ErrorExit:
  */
 int
 xe_comms_write_item( void * Memory,
-                     size_t Size )
+                     size_t Size,
+                     size_t * BytesWritten )
 {
     int rc = 0;
-    bool send_event = false;
+    bool do_event = false;
+    mt_response_generic_t * response = (mt_response_generic_t *) Memory;
 
     // A response can only be placed in a slot that was used by a
     // request that has been consumed. An overflow here is
@@ -397,110 +387,115 @@ xe_comms_write_item( void * Memory,
     void * dest = RING_GET_RESPONSE( &g_state.back_ring,
                                      g_state.back_ring.rsp_prod_pvt );
 
-    bmk_memcpy( dest, Memory, Size );
+    if ( !MT_IS_RESPONSE( response ) ||
+         sizeof(*response) != Size     )
+    {
+        rc = BMK_EINVAL;
+        MYASSERT( !"Programming error: there's a problem with the response" );
+        // Bad state - we're not sending the response !!!!!!!!!!!!
+        goto ErrorExit;
+    }
+
+    *BytesWritten = Size;
+
+    // Only copy what's needed
     
-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, send_event );
+    bmk_memcpy( dest, response, response->base.size );
+    
+    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
 
     ++g_state.back_ring.rsp_prod_pvt;
 
-    if ( send_event )
+    if ( do_event )
     {
-        // send event to remote side
+        (void) send_event( g_state.local_event_port );
     }
 
-//ErrorExit:
-    return rc;
-}
-
-
-/*
- * Receive a set of grant references from the PVM. For now, this is
- * just one via XenStore. How to handle multiple? Specially-formatted
- * string in XenStore, or an array of refs in shared memory.
- */
-static int
-receive_grant_references( void )
-{
-    struct xenbus_event_queue events;
-    int rc = 0;
-    char * err = NULL;
-    char * msg = NULL;
-
-    // One grant ref per shared page
-    for ( int i = 0; i < DEFAULT_NMBR_GNT_REF; i++ )
-    {
-        xenbus_event_queue_init(&events);
-
-        xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
-        while ( (err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL
-                ||  msg[0] == '0') {
-            bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
-            bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
-            xenbus_wait_for_watch(&events);
-        }
-
-        xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
-
-        DEBUG_PRINT("Action on Grant State Key\n");
-
-        // Read in the grant reference
-        rc = xe_comms_read_int_from_key( GRANT_REF_PATH, &g_state.grant_refs[i] );
-        if ( rc )
-        {
-            goto ErrorExit;
-        }
-
-        // XXXXXXXXXX signal that we're ready for the next one
-
-        
-    }
 ErrorExit:
     return rc;
 }
 
 
 /*
- * Client-side function that maps in a page of memory 
- *  granted by the server. 
+ * Receive a set of grant references from the PVM. The set is written
+ * to GRANT_REF_PATH like this:
+ * "ref1 ref2 ... refN"
  *
- *  domu_server_id   - Domain Id of the server 
- *  client_grant_ref - Client grant reference to 
- *                     shared memory
- *  msg_len          - Length of data the server writes
- *                     to shared memory
- *
- *  return - 0 if successful, 1 if not 
+ * Where the delimiter is XENEVENT_GRANT_REF_DELIM (" " above) and N
+ * is XENEVENT_GRANT_REF_COUNT.
  */
-
 static int
-xe_comms_accept_grant(domid_t      domu_server_id, 
-                      grant_ref_t  client_grant_ref)
+receive_grant_references( domid_t RemoteId )
 {
-    // All pages are shared with one dom ID
-    uint32_t       domids[1];
+    struct xenbus_event_queue events;
+    int rc = 0;
+    char * err = NULL;
+    char * msg = NULL;
+    char * msgptr = NULL;
+    char * refstr = NULL;
+    
+    xenbus_event_queue_init(&events);
+
+    xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
+    while ( (err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL
+            ||  msg[0] == '0') {
+        bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        xenbus_wait_for_watch(&events);
+    }
+
+    xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
+
+    DEBUG_PRINT("Parsing grant references in %s\n", GRANT_REF_PATH);
+
+    rc = xe_comms_read_str_from_key( GRANT_REF_PATH, &refstr );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+    
+    // Extract the grant references from XenStore - they are space-delimited hex values
+    msgptr = msg;
+    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    {
+        char * next = NULL;
+        g_state.grant_refs[i] = bmk_strtoul( msgptr, &next, 16 );
+        if ( *next != XENEVENT_GRANT_REF_DELIM [0] )
+        {
+            rc = BMK_EINVAL;
+            MYASSERT( !("Invalid data in " GRANT_REF_PATH ) );
+            goto ErrorExit;
+        }
+
+        DEBUG_PRINT( "Found grant reference 0x%x\n", g_state.grant_refs[i] );
+        msgptr = next;         // Advance msgptr to next token
+    }
 
     gntmap_init( &g_state.gntmap_map );
 
-    // All the pages are being shared with one dom ID
-    domids[ 0 ]    = domu_server_id;
-
-    // Allocates a block of memory and shares
-    g_state.shared_mem = 
+    // Map in the memory described by the grant ref(s) into a contiguous region
+    g_state.shared_ring = (mwevent_sring_t *)
         gntmap_map_grant_refs( &g_state.gntmap_map,
-                               DEFAULT_NMBR_GNT_REF, // page count
-                               domids,   // dom ID (only 1)
-                               0,        // dom ID stride - use the same one
-                               g_state.grant_refs,
-                               WRITE_ACCESS_ON );
-    if (NULL == g_state.shared_mem)
+                               XENEVENT_GRANT_REF_COUNT,  // number of grant refs
+                               (uint32_t *) &RemoteId,    // dom ID (only 1 so stride=0)
+                               0,      
+                               (grant_ref_t *) g_state.grant_refs,
+                               1 ); // region is writable
+    if (NULL == g_state.shared_ring)
     {
-        MYASSERT( !"Mapping in the Memory bombed out!\n");
+        MYASSERT( !"gntmap_map_grant_refs failed" );
         return BMK_ENOMEM;
     }
 
-    DEBUG_PRINT("Shared Mem: %p\n", g_state.shared_mem);
+    g_state.shared_ring_size = XENEVENT_GRANT_REF_COUNT * PAGE_SIZE;
+    
+ErrorExit:
+    if ( refstr )
+    {
+        bmk_memfree( refstr, BMK_MEMWHO_WIREDBMK );
+    }
 
-    return 0;
+    return rc;
 }
 
 
@@ -558,51 +553,6 @@ ErrorExit:
     return err;
 }
 
-#if 0
-// Creates an unbound event channel
-static int
-xe_comms_create_interdom_chn ( domid_t srvr_id )
-{
-    int err = 0;
-
-    g_state.self_event_channel_mem = bmk_pgalloc_one();
-    if (NULL == g_state.self_event_channel_mem)
-    {
-        MYASSERT( !"Failed to alloc Self Event Channel page" );
-        err = BMK_ENOMEM;
-        goto ErrorExit;
-    }
-
-    DEBUG_PRINT("Self Event Channel page address: %p\n", g_state.self_event_channel_mem);
-    bmk_memset(g_state.self_event_channel_mem, 0, PAGE_SIZE);
-
-    err = minios_evtchn_alloc_unbound(srvr_id,
-                                      xe_comms_event_self_chn_callback,
-                                      g_state.self_event_channel_mem,
-                                      &g_state.self_event_port);
-    if (err)
-    {
-        MYASSERT(!"Could not create self event channel\n");
-        goto ErrorExit;
-    }
-
-    // Clear channel of events and unmask
-    minios_clear_evtchn( g_state.self_event_port );
-    minios_unmask_evtchn( g_state.self_event_port );
-
-    DEBUG_PRINT("Local port for self event channel: %u\n", g_state.self_event_port );
-
-    err = xe_comms_write_int_to_key( UK_EVT_CHN_PRT_PATH, g_state.self_event_port );
-    if (err)
-    {
-        goto ErrorExit;
-    }
-
-ErrorExit:
-    return err;
-}
-#endif
-
 
 ////////////////////////////////////////////////////
 //
@@ -618,7 +568,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     domid_t         localId = 0;
     domid_t         remoteId = 0;
 
-    grant_ref_t	    client_grant_ref = 0;
+//    grant_ref_t	    client_grant_ref = 0;
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
@@ -657,20 +607,20 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     DEBUG_PRINT( "Discovered remote server ID: %u\n", remoteId );
 
     //
-    // Wait for the grant reference
+    // Wait for the grant references and map them in
     //
-    rc = receive_grant_references();
+    rc = receive_grant_references( remoteId );
     if ( rc )
     {
         goto ErrorExit;
     }
 
     // Map in the page offered by the remote side
-    rc = xe_comms_accept_grant( remoteId, client_grant_ref );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
+    //rc = xe_comms_accept_grant( remoteId, client_grant_ref );
+    //if ( rc )
+    //{
+    //goto ErrorExit;
+    //}
 
     // Get the event port and bind to it
     rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PRT_PATH,
@@ -690,16 +640,8 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     // ring buffer now. We're the back end, so we only perform the back init.
     BACK_RING_INIT( &g_state.back_ring,
                     g_state.shared_ring,
-                    PAGE_SIZE * DEFAULT_NMBR_GNT_REF);
-#if 0
-    // We do not currently create an unbound channel.
-    rc = xe_comms_create_interdom_chn ( remoteId );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
-#endif
-    //send_event(g_state.self_event_port);
+                    g_state.shared_ring_size );
+
     for ( int i = 0; i < 3; i++ )
     {
         send_event(g_state.local_event_port);
@@ -723,22 +665,26 @@ xe_comms_fini( void )
 
     minios_unbind_evtchn(g_state.local_event_port);
 
-    
     xenevent_semaphore_destroy( &g_state.messages_available );
 
-    
     if (g_state.event_channel_mem)
     {
         bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
     }
 
-//    if (g_state.self_event_channel_mem)
-//    {
-//        bmk_memfree(g_state.self_event_channel_mem, BMK_MEMWHO_WIREDBMK);
-//    }
-
     gntmap_fini( &g_state.gntmap_map );
 
+    // XXXX g_state.shared_ring was allocated with allocate_ondemand()
+    // in gntmap_map_grant_refs(). Is this the right way to free it?
+
+    // XXXX currently the build system doesn't let us link to the
+    //symbol unmap_frames. Investigate this.
+
+    // This is the case even if the Makefile includes this line:
+    // RUMP_SYM_NORENAME = xenbus_|HYPERVISOR_|minios_|bmk_|gntmap|gnttab|_minios|_text|unmap_frames
+    //rc = unmap_frames( (unsigned long) g_state.shared_ring,
+    //                     XENEVENT_GRANT_REF_COUNT );
+    
     // bmk_memset( &g_state, 0, sizeof(g_state) );
 
     return rc;
