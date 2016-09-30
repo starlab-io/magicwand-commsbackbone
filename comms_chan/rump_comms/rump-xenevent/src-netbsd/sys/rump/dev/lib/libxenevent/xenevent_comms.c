@@ -293,7 +293,7 @@ xe_comms_event_callback( evtchn_port_t port,
 {
     DEBUG_PRINT("Event Channel %u\n", port );
 
-    send_event(port);
+    //send_event(port);
 
     //
     // Release xe_comms_read_item() to check for another item
@@ -320,7 +320,7 @@ xe_comms_read_item( void * Memory,
     *BytesRead = 0;
     
     DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
-    send_event( g_state.local_event_port );
+    //send_event( g_state.local_event_port );
 
     do
     {
@@ -406,10 +406,10 @@ xe_comms_write_item( void * Memory,
 
     ++g_state.back_ring.rsp_prod_pvt;
 
-    if ( do_event )
-    {
-        (void) send_event( g_state.local_event_port );
-    }
+    //if ( do_event )
+    //{
+    (void) send_event( g_state.local_event_port );
+    //}
 
 ErrorExit:
     return rc;
@@ -541,6 +541,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
         goto ErrorExit;
     }
 
+    /*
     bmk_printf( "Waiting." );
     for ( int i = 0; i < 10; i++ )
     {
@@ -548,6 +549,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     }
 
     send_event( g_state.local_event_port );
+    */
     
 ErrorExit:
     return err;
@@ -642,10 +644,12 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
                     g_state.shared_ring,
                     g_state.shared_ring_size );
 
+    /*
     for ( int i = 0; i < 3; i++ )
     {
         send_event(g_state.local_event_port);
     }
+    */
     
 ErrorExit:
     return rc;
