@@ -12,6 +12,25 @@
 #define BUF_SZ   1024
 
 static int fd;
+static int request_id;
+
+
+void
+build_create_socket( mt_request_generic_t * Request )
+{
+    mt_request_socket_create_t * create = &(Request->socket_create);
+    
+    bzero( Request, sizeof(*Request) );
+
+    create->base.type = MtRequestSocketCreate;
+    create->base.id = request_id++;
+    create->base.sockfd = 0;
+
+    create->sock_fam = MT_PF_INET;
+    create->sock_type = MT_ST_STREAM;
+    create->sock_protocol = 0;
+}
+
  
 int socket(int domain, int type, int protocol)
 {
@@ -34,6 +53,7 @@ int socket(int domain, int type, int protocol)
 
 void _init(void)
 {
+    request_id = 0;
 
     printf("Intercept module loaded\n");
 
