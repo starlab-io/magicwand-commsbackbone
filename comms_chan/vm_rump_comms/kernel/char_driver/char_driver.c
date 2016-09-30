@@ -36,6 +36,12 @@
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
 
+#define VM_EVT_CHN_PATH       "vm_evt_chn_prt"
+#define VM_EVT_CHN_BOUND      "vm_evt_chn_is_bound"
+
+//#define VM_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_prt"
+//#define VM_EVT_CHN_IS_BOUND       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_is_bound"
+
 #define KEY_RESET_VAL      "0"
 #define TEST_MSG_SZ         64
 #define TEST_MSG_SZ_STR    "64"
@@ -63,7 +69,11 @@ static struct device* mwcharDevice = NULL;  //  The device-driver device struct 
 
 static grant_ref_t   foreign_grant_ref;
 static unsigned int  msg_counter;
-static unsigned int  is_client;
+
+static unsigned int  is_msg_len_watch;
+static unsigned int  is_client_id_watch;
+static unsigned int  is_evtchn_bound_watch;
+
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
 static int           common_event_channel;
@@ -205,7 +215,7 @@ static void create_unbound_evt_chn(void)
    memset(common_event_channel_str, 0, MAX_GNT_REF_WIDTH);
    snprintf(common_event_channel_str, MAX_GNT_REF_WIDTH, "%u", common_event_channel);
 
-   write_to_key(VM_EVT_CHN_PRT_PATH,common_event_channel_str);
+   write_to_key(VM_EVT_CHN_PATH,common_event_channel_str);
 }
 
 static void send_evt(int evtchn_prt)
@@ -321,7 +331,7 @@ send_request(void *Request, size_t Size)
 
    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
 
-   if (notify) {
+   if (notify || !notify) {
       send_evt(common_event_channel);
    }
 
@@ -488,8 +498,6 @@ static void client_id_state_changed(struct xenbus_watch *w,
 
    kfree(client_id_str);
 
-   is_client = 1;
-
    // Create unbound event channel with client
    create_unbound_evt_chn();
 
@@ -509,6 +517,8 @@ static void client_id_state_changed(struct xenbus_watch *w,
    err = register_xenbus_watch(&msg_len_watch);
    if (err) {
       pr_err("Failed to set Message Length watcher\n");
+   } else {
+      is_msg_len_watch = 1;
    }
  
    init_shared_ring();
@@ -545,8 +555,8 @@ static void vm_port_is_bound(struct xenbus_watch *w,
    int       i;
 
    printk(KERN_INFO "Checking whether %s is asserted\n",
-          VM_EVT_CHN_IS_BOUND);
-   is_bound_str = (char *) read_from_key( VM_EVT_CHN_IS_BOUND );
+          VM_EVT_CHN_BOUND);
+   is_bound_str = (char *) read_from_key( VM_EVT_CHN_BOUND );
    if(XENBUS_IS_ERR_READ(is_bound_str)) {
       printk(KERN_INFO "Error reading evtchn bound key!!\n");
       return;
@@ -572,7 +582,7 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
 static struct xenbus_watch evtchn_bound_watch = {
 
-   .node = ROOT_NODE "/" VM_EVT_CHN_IS_BOUND,
+   .node = ROOT_NODE "/" VM_EVT_CHN_BOUND,
    .callback = vm_port_is_bound
 };
 
@@ -582,8 +592,8 @@ static void initialize_keys(void)
    write_to_key(SERVER_ID_KEY, KEY_RESET_VAL);
    write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
    write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
-   write_to_key(VM_EVT_CHN_PRT_PATH, KEY_RESET_VAL);
-   write_to_key(VM_EVT_CHN_IS_BOUND, KEY_RESET_VAL);
+   write_to_key(VM_EVT_CHN_PATH, KEY_RESET_VAL);
+   write_to_key(VM_EVT_CHN_BOUND, KEY_RESET_VAL);
 }
 
 /** @brief The LKM initialization function
@@ -596,10 +606,13 @@ static int __init mwchar_init(void) {
    foreign_grant_ref = 0;
    server_region = NULL;
    msg_counter = 0;
-   is_client = 0;
    client_dom_id = 0;
    common_event_channel = 0;
    
+   is_msg_len_watch = 0;
+   is_client_id_watch = 0;
+   is_evtchn_bound_watch = 0;
+
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
@@ -640,12 +653,16 @@ static int __init mwchar_init(void) {
    err = register_xenbus_watch(&client_id_watch);
    if (err) {
       pr_err("Failed to set client id watcher\n");
+   } else {
+      is_client_id_watch = 1;
    }
 
    // 3. Watch for our port being bound
    err = register_xenbus_watch(&evtchn_bound_watch);
    if (err) {
       pr_err("Failed to set client local port watcher\n");
+   } else {
+      is_evtchn_bound_watch = 1;
    }
 
    sema_init(&mw_sem,0);
@@ -676,13 +693,17 @@ static void __exit mwchar_exit(void){
        free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
    }
 
-   unregister_xenbus_watch(&client_id_watch);
+   if (is_client_id_watch) {
+      unregister_xenbus_watch(&client_id_watch);
+   }
 
-   unregister_xenbus_watch(&evtchn_bound_watch);
+   if (is_evtchn_bound_watch) {
+      unregister_xenbus_watch(&evtchn_bound_watch);
+   }
 
    initialize_keys();
 
-   if (is_client) {
+   if (is_msg_len_watch) {
       unregister_xenbus_watch(&msg_len_watch);
    }
 
