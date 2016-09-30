@@ -1,5 +1,8 @@
 obj-m+=char_driver.o
 
+EXTRA_CFLAGS := -I$(src)/../../../rump_comms/common
+EXTRA_CFLAGS += -std=gnu99
+
 all:
 	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules
 clean:

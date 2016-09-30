@@ -13,6 +13,8 @@
 #include <linux/kernel.h>         
 #include <linux/err.h>
 #include <linux/fs.h>             
+#include <linux/semaphore.h>
+#include <linux/moduleparam.h>
 #include <asm/uaccess.h>          
 
 #include <xen/grant_table.h>
@@ -20,6 +22,10 @@
 #include <xen/xenbus.h>
 #include <xen/events.h>
 #include <xen/interface/callback.h>
+#include <xen/interface/io/ring.h>
+
+#include <message_types.h>
+#include <xen_keystore_defs.h>
 
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
@@ -30,14 +36,15 @@
 #define MSG_LEN_KEY           "msg_len"
 #define PRIVATE_ID_PATH       "domid"
 
-#define VM_EVT_CHN_PRT_PATH  "vm_evt_chn_prt"
-#define VM_EVT_CHN_IS_BOUND  "vm_evt_chn_is_bound"
-
 #define KEY_RESET_VAL      "0"
 #define TEST_MSG_SZ         64
 #define TEST_MSG_SZ_STR    "64"
 #define TEST_MSG           "The abyssal plain is flat.\n"
 #define MAX_MSG             1
+
+#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
+#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
+#define XENEVENT_GRANT_REF_DELIM " "
 
 #define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
 #define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
@@ -54,16 +61,33 @@ static int    numberOpens = 0;              //  Counts the number of times the d
 static struct class*  mwcharClass  = NULL;  //  The device-driver class struct pointer
 static struct device* mwcharDevice = NULL;  //  The device-driver device struct pointer
 
-static void          *server_page;
 static grant_ref_t   foreign_grant_ref;
 static unsigned int  msg_counter;
 static unsigned int  is_client;
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
-static int           self_event_channel;
+static int           common_event_channel;
+
+// For allocating, tracking, and sharing XENEVENT_GRANT_REF_COUNT
+// pages.
+static uint8_t      *server_region;
+static size_t        server_region_size;
+static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 
 static int          irqs_handled = 0;
 static int          irq = 0;
+
+static struct semaphore mw_sem;
+
+// Defines:
+// mwevent_sring_t
+// mwevent_front_ring_t
+// mwevent_back_ring_t
+DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
+
+struct mwevent_sring *shared_ring = NULL;
+struct mwevent_front_ring front_ring;
+size_t shared_mem_size = PAGE_SIZE * XENEVENT_GRANT_REF_COUNT;
 
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
@@ -158,7 +182,7 @@ static void write_server_id_to_key(void)
 static void create_unbound_evt_chn(void) 
 {
    struct evtchn_alloc_unbound alloc_unbound; 
-   char                        self_event_channel_str[MAX_GNT_REF_WIDTH]; 
+   char                        common_event_channel_str[MAX_GNT_REF_WIDTH]; 
    int                         err;
 
    if (!client_dom_id)
@@ -175,13 +199,13 @@ static void create_unbound_evt_chn(void)
       printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", DOMID_SELF, client_dom_id, alloc_unbound.port);
    }
 
-   self_event_channel = alloc_unbound.port;
+   common_event_channel = alloc_unbound.port;
 
-   printk(KERN_INFO "Event channel's local port: %d\n", self_event_channel );
-   memset(self_event_channel_str, 0, MAX_GNT_REF_WIDTH);
-   snprintf(self_event_channel_str, MAX_GNT_REF_WIDTH, "%u", self_event_channel);
+   printk(KERN_INFO "Event channel's local port: %d\n", common_event_channel );
+   memset(common_event_channel_str, 0, MAX_GNT_REF_WIDTH);
+   snprintf(common_event_channel_str, MAX_GNT_REF_WIDTH, "%u", common_event_channel);
 
-   write_to_key(VM_EVT_CHN_PRT_PATH,self_event_channel_str);
+   write_to_key(VM_EVT_CHN_PRT_PATH,common_event_channel_str);
 }
 
 static void send_evt(int evtchn_prt)
@@ -206,7 +230,7 @@ is_evt_chn_closed(void)
    int                  rc;
 
    status.dom = DOMID_SELF;
-   status.port = self_event_channel;
+   status.port = common_event_channel;
 
    rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
 
@@ -226,10 +250,10 @@ free_unbound_evt_chn(void)
    struct evtchn_close close;
    int err;
 
-   if (!self_event_channel)
+   if (!common_event_channel)
       return;
       
-   close.port = self_event_channel;
+   close.port = common_event_channel;
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
 
@@ -240,44 +264,146 @@ free_unbound_evt_chn(void)
    }
 }
 
-static grant_ref_t 
-offer_grant(domid_t domu_client_id) 
+static int 
+receive_response(void *Response, size_t Size, size_t *BytesWritten)
+{
+   int rc = 0; 
+   bool available = false;
+   mt_response_generic_t * src = NULL;
+
+   do
+   {
+
+      available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+
+      if (!available) {
+         down(&mw_sem);
+      }
+   
+   } while (!available);
+
+   src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
+
+   // Compare size of Response to Size. 
+   // If larger, then set rc to EINVAL and go to ErrorExit
+
+   if (src->base.size > Size) {
+      rc = EINVAL;
+      goto ErrorExit;
+   }
+
+   memcpy(Response, src, src->base.size);
+
+   ++front_ring.rsp_cons;
+
+ErrorExit:
+   return rc;
+
+}
+
+static void
+send_request(void *Request, size_t Size)
 {
 
-   int ret;
-   unsigned int mfn;
+   bool notify = false;  
+   void * dest = NULL;
 
-   ret = 0;
-   mfn = 0;
+   if (RING_FULL(&front_ring)) {
 
-   server_page = (void *)__get_free_page(GFP_KERNEL);
+      // Do something drastic
+   }
 
-   if (!server_page) {
+   dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
 
-      printk(KERN_INFO "GNT_SRVR: Error allocating memory\n");
+   memcpy(dest, Request, Size);
+
+   ++front_ring.req_prod_pvt;
+
+   RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
+
+   if (notify) {
+      send_evt(common_event_channel);
+   }
+
+}
+
+static void
+init_shared_ring(void)
+{
+   if (!server_region)
+      return;
+
+   shared_ring = (struct mwevent_sring *)server_region;
+   SHARED_RING_INIT(shared_ring);
+   FRONT_RING_INIT(&front_ring, shared_ring, shared_mem_size);
+}
+
+static int 
+offer_grant(domid_t domu_client_id) 
+{
+   int ret = 0;
+
+   server_region_size = PAGE_SIZE * XENEVENT_GRANT_REF_COUNT;
+
+   // Do not use vmalloc() -- the pages can't be accessed on the other DomU
+   server_region = (uint8_t *) __get_free_pages( GFP_KERNEL, XENEVENT_GRANT_REF_ORDER );
+   if (!server_region)
+   {
+       printk(KERN_INFO "GNT_SRVR: Error allocating memory (0x%x pages)\n",
+              XENEVENT_GRANT_REF_COUNT);
       return 1;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
-   memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
+   // Zero out the entire shared region. This validates each page.
+   memset(server_region, 0, server_region_size );
 
-   mfn = virt_to_mfn(server_page);
+   for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+   {
+       // Calc the VA, then find the backing pseudo-physical address
+       // (Xen book pg 61)
+       void * va = (void *) (server_region + i * PAGE_SIZE);
+       unsigned long mfn = virt_to_mfn( va );
 
-   printk(KERN_INFO "GNT_SRVR: MFN: %u\n", mfn);
+       ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
+       if (ret < 0) {
+           printk(KERN_INFO "GNT_SRVR: Error obtaining Grant\n");
+           return 1;
+       }
 
-   ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
-
-   if (ret < 0) {
-
-      printk(KERN_INFO "GNT_SRVR: Error obtaining Grant\n");
-      return 0;
+       grant_refs[ i ] = ret;
+       printk(KERN_INFO "GNT_SRVR: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
    }
 
-   printk(KERN_INFO "Grant Ref: %u \n", ret);
+   return 0;
+}
 
-   foreign_grant_ref = ret;
+static int write_grant_refs_to_key( void )
+{
+    // Must be large enough for one grant ref, in hex, plus '\0'
+    char one_ref[5];
+    char gnt_refs[ XENEVENT_GRANT_REF_COUNT * sizeof(one_ref) ] = {0};
+    int rc = 0;
 
-   return ret;
+    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    {
+        if ( snprintf( one_ref, sizeof(one_ref), "%x ", grant_refs[i] ) >= sizeof(one_ref))
+        {
+            printk(KERN_INFO "GNT_SRVR: Insufficient space to write grant ref.\n");
+            rc = 1;
+            goto ErrorExit;
+        }
+        if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >= gnt_refs + sizeof(gnt_refs) )
+        {
+            printk(KERN_INFO "GNT_SRVR: Insufficient space to write all grant refs.\n");
+            rc = 2;
+            goto ErrorExit;
+        }
+    }
+
+    write_to_key( GNT_REF_KEY, gnt_refs );
+
+ErrorExit:
+    return rc;
 }
 
 static void 
@@ -308,14 +434,14 @@ msg_len_state_changed(struct xenbus_watch *w,
    printk(KERN_INFO "Message length changed value:\n");
    printk(KERN_INFO "\tRead Message Length Key: %s\n", msg_len_str);
 
-   if (!server_page) {
+   if (!server_region) {
       kfree(msg_len_str);
       printk(KERN_INFO "GNT_SRVR: Error allocating memory\n");
       return;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
-   memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
+   memset(server_region, 0, shared_mem_size);
+   memcpy(server_region, TEST_MSG, TEST_MSG_SZ);
 
    // Write Msg Len to key
    write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
@@ -336,7 +462,6 @@ static void client_id_state_changed(struct xenbus_watch *w,
                                     unsigned int l)
 {
    char     *client_id_str;
-   char      gnt_ref_str[MAX_GNT_REF_WIDTH]; 
    int       err;
 
    client_id_str = (char *)read_from_key(CLIENT_ID_KEY);
@@ -379,15 +504,14 @@ static void client_id_state_changed(struct xenbus_watch *w,
    write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
 
    // Write Grant Ref to key 
-   memset(gnt_ref_str, 0, MAX_GNT_REF_WIDTH);
-   snprintf(gnt_ref_str, MAX_GNT_REF_WIDTH, "%u", foreign_grant_ref);
-
-   write_to_key(GNT_REF_KEY, gnt_ref_str);
+   write_grant_refs_to_key();
 
    err = register_xenbus_watch(&msg_len_watch);
    if (err) {
       pr_err("Failed to set Message Length watcher\n");
    }
+ 
+   init_shared_ring();
 }
 
 static struct xenbus_watch client_id_watch = {
@@ -407,9 +531,11 @@ static irqreturn_t irq_event_handler( int port, void * data )
     ++irqs_handled;
 
     local_irq_restore( flags );
+
+    up(&mw_sem);
+
     return IRQ_HANDLED;
 }
-
 
 static void vm_port_is_bound(struct xenbus_watch *w,
                              const char **v,
@@ -432,11 +558,11 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
    printk(KERN_INFO "The remote event channel is bound\n");
 
-   irq = bind_evtchn_to_irqhandler( self_event_channel,
+   irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
    printk( KERN_INFO "Bound event channel %d to irq: %d\n",
-           self_event_channel, irq );
+           common_event_channel, irq );
 
    for ( i = 0; i < 1; i++ )
    {
@@ -468,11 +594,11 @@ static int __init mwchar_init(void) {
    int   err;
 
    foreign_grant_ref = 0;
-   server_page = NULL;
+   server_region = NULL;
    msg_counter = 0;
    is_client = 0;
    client_dom_id = 0;
-   self_event_channel = 0;
+   common_event_channel = 0;
    
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
@@ -521,6 +647,8 @@ static int __init mwchar_init(void) {
    if (err) {
       pr_err("Failed to set client local port watcher\n");
    }
+
+   sema_init(&mw_sem,0);
    
    return 0;
 }
@@ -534,7 +662,19 @@ static void __exit mwchar_exit(void){
    class_destroy(mwcharClass);                             // remove the device class
    unregister_chrdev(majorNumber, DEVICE_NAME);            // unregister the major number
 
-   gnttab_end_foreign_access(foreign_grant_ref, 0, (unsigned long)server_page); 
+   for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+   {
+       if ( 0 != grant_refs[ i ] )
+       {
+           printk(KERN_INFO "GNT_SRVR: Ending access to grant ref 0x%x\n", grant_refs[i]);
+           gnttab_end_foreign_access_ref( grant_refs[i], 0 );
+       }
+   }
+
+   if ( NULL != server_region )
+   {
+       free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
+   }
 
    unregister_xenbus_watch(&client_id_watch);
 
@@ -581,6 +721,8 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 
    int error_count = 0;
 
+   receive_response(message,  size_of_message, NULL);
+
    // copy_to_user has the format ( * to, *from, size) and returns 0 on success
    error_count = copy_to_user(buffer, message, size_of_message);
 
@@ -592,6 +734,8 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
       printk(KERN_INFO "MWChar: Failed to send %d characters to the user\n", error_count);
       return -EFAULT;
    }
+
+
 }
 
 /** @brief This function is called whenever the device is being written to from user space i.e.
@@ -602,13 +746,16 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  *  @param len The length of the array of data that is being passed in the const char buffer
  *  @param offset The offset if required
  */
-static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
+static ssize_t 
+dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
+{
+
    sprintf(message, "%s(%u letters)", buffer, (unsigned int)len);   // appending received string with its length
    size_of_message = strlen(message);                 // store the length of the stored message
    printk(KERN_INFO "MWChar: Received %u characters from the user\n", (unsigned int)len);
 
-   
-   send_evt(self_event_channel);
+   send_request(message, size_of_message); 
+   //send_evt(common_event_channel);
 
    return len;
 }
