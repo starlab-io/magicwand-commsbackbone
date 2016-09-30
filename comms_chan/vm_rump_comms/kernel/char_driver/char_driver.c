@@ -13,6 +13,10 @@
 #include <linux/kernel.h>         
 #include <linux/err.h>
 #include <linux/fs.h>             
+#include <linux/semaphore.h>
+
+#include <linux/moduleparam.h>
+
 #include <asm/uaccess.h>          
 
 #include <xen/grant_table.h>
@@ -20,6 +24,9 @@
 #include <xen/xenbus.h>
 #include <xen/events.h>
 #include <xen/interface/callback.h>
+#include <xen/interface/io/ring.h>
+
+#include <message_types.h>
 
 #define ROOT_NODE             "/unikernel/random"
 #define SERVER_ID_KEY         "server_id" 
@@ -60,10 +67,26 @@ static unsigned int  msg_counter;
 static unsigned int  is_client;
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
-static int           self_event_channel;
+static int           common_event_channel;
 
 static int          irqs_handled = 0;
 static int          irq = 0;
+
+
+static struct semaphore mw_sem;
+
+// Defines:
+// mwevent_sring_t
+// mwevent_front_ring_t
+// mwevent_back_ring_t
+DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
+
+struct mwevent_sring *shared_ring = NULL;
+
+struct mwevent_front_ring front_ring;
+
+size_t shared_mem_size = PAGE_SIZE;
+
 
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
@@ -158,7 +181,7 @@ static void write_server_id_to_key(void)
 static void create_unbound_evt_chn(void) 
 {
    struct evtchn_alloc_unbound alloc_unbound; 
-   char                        self_event_channel_str[MAX_GNT_REF_WIDTH]; 
+   char                        common_event_channel_str[MAX_GNT_REF_WIDTH]; 
    int                         err;
 
    if (!client_dom_id)
@@ -175,13 +198,13 @@ static void create_unbound_evt_chn(void)
       printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", DOMID_SELF, client_dom_id, alloc_unbound.port);
    }
 
-   self_event_channel = alloc_unbound.port;
+   common_event_channel = alloc_unbound.port;
 
-   printk(KERN_INFO "Event channel's local port: %d\n", self_event_channel );
-   memset(self_event_channel_str, 0, MAX_GNT_REF_WIDTH);
-   snprintf(self_event_channel_str, MAX_GNT_REF_WIDTH, "%u", self_event_channel);
+   printk(KERN_INFO "Event channel's local port: %d\n", common_event_channel );
+   memset(common_event_channel_str, 0, MAX_GNT_REF_WIDTH);
+   snprintf(common_event_channel_str, MAX_GNT_REF_WIDTH, "%u", common_event_channel);
 
-   write_to_key(VM_EVT_CHN_PRT_PATH,self_event_channel_str);
+   write_to_key(VM_EVT_CHN_PRT_PATH,common_event_channel_str);
 }
 
 static void send_evt(int evtchn_prt)
@@ -206,7 +229,7 @@ is_evt_chn_closed(void)
    int                  rc;
 
    status.dom = DOMID_SELF;
-   status.port = self_event_channel;
+   status.port = common_event_channel;
 
    rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
 
@@ -226,10 +249,10 @@ free_unbound_evt_chn(void)
    struct evtchn_close close;
    int err;
 
-   if (!self_event_channel)
+   if (!common_event_channel)
       return;
       
-   close.port = self_event_channel;
+   close.port = common_event_channel;
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
 
@@ -238,6 +261,81 @@ free_unbound_evt_chn(void)
    } else {
       printk(KERN_INFO "Closed Event Channel Port: %d\n", close.port);
    }
+}
+
+static int 
+receive_response(void *Response, size_t Size, size_t *BytesWritten)
+{
+   int rc = 0; 
+   bool available = false;
+   mt_response_generic_t * src = NULL;
+
+   do
+   {
+
+      available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+
+      if (!available) {
+         down(&mw_sem);
+      }
+   
+   } while (!available);
+
+   src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
+
+   // Compare size of Response to Size. 
+   // If larger, then set rc to EINVAL and go to ErrorExit
+
+   if (src->base.size > Size) {
+      rc = EINVAL;
+      goto ErrorExit;
+   }
+      
+
+   memcpy(Response, src, src->base.size);
+
+   ++front_ring.rsp_cons;
+
+ErrorExit:
+   return rc;
+
+}
+
+static void
+send_request(void *Request, size_t Size)
+{
+
+   bool notify = false;  
+   void * dest = NULL;
+
+   if (RING_FULL(&front_ring)) {
+
+      // Do something drastic
+   }
+
+   dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
+
+   memcpy(dest, Request, Size);
+
+   ++front_ring.req_prod_pvt;
+
+   RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
+
+   if (notify) {
+      send_evt(common_event_channel);
+   }
+
+}
+
+static void
+init_shared_ring(void)
+{
+   if (!server_page)
+      return;
+
+   shared_ring = (struct mwevent_sring *)server_page;
+   SHARED_RING_INIT(shared_ring);
+   FRONT_RING_INIT(&front_ring, shared_ring, shared_mem_size);
 }
 
 static grant_ref_t 
@@ -258,7 +356,7 @@ offer_grant(domid_t domu_client_id)
       return 1;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
+   memset(server_page, 0, shared_mem_size);
    memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
 
    mfn = virt_to_mfn(server_page);
@@ -276,6 +374,8 @@ offer_grant(domid_t domu_client_id)
    printk(KERN_INFO "Grant Ref: %u \n", ret);
 
    foreign_grant_ref = ret;
+
+   init_shared_ring();
 
    return ret;
 }
@@ -314,7 +414,7 @@ msg_len_state_changed(struct xenbus_watch *w,
       return;
    }
 
-   memset(server_page, 0, PAGE_SIZE);
+   memset(server_page, 0, shared_mem_size);
    memcpy(server_page, TEST_MSG, TEST_MSG_SZ);
 
    // Write Msg Len to key
@@ -407,9 +507,11 @@ static irqreturn_t irq_event_handler( int port, void * data )
     ++irqs_handled;
 
     local_irq_restore( flags );
+
+    up(&mw_sem);
+
     return IRQ_HANDLED;
 }
-
 
 static void vm_port_is_bound(struct xenbus_watch *w,
                              const char **v,
@@ -432,11 +534,11 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
    printk(KERN_INFO "The remote event channel is bound\n");
 
-   irq = bind_evtchn_to_irqhandler( self_event_channel,
+   irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
    printk( KERN_INFO "Bound event channel %d to irq: %d\n",
-           self_event_channel, irq );
+           common_event_channel, irq );
 
    for ( i = 0; i < 1; i++ )
    {
@@ -472,7 +574,7 @@ static int __init mwchar_init(void) {
    msg_counter = 0;
    is_client = 0;
    client_dom_id = 0;
-   self_event_channel = 0;
+   common_event_channel = 0;
    
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
@@ -521,6 +623,8 @@ static int __init mwchar_init(void) {
    if (err) {
       pr_err("Failed to set client local port watcher\n");
    }
+
+   sema_init(&mw_sem,0);
    
    return 0;
 }
@@ -554,6 +658,7 @@ static void __exit mwchar_exit(void){
       free_unbound_evt_chn();
    }
 
+
    printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");
    printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");
 }
@@ -581,6 +686,8 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 
    int error_count = 0;
 
+   receive_response(message,  size_of_message, NULL);
+
    // copy_to_user has the format ( * to, *from, size) and returns 0 on success
    error_count = copy_to_user(buffer, message, size_of_message);
 
@@ -592,6 +699,8 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
       printk(KERN_INFO "MWChar: Failed to send %d characters to the user\n", error_count);
       return -EFAULT;
    }
+
+
 }
 
 /** @brief This function is called whenever the device is being written to from user space i.e.
@@ -602,13 +711,16 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
  *  @param len The length of the array of data that is being passed in the const char buffer
  *  @param offset The offset if required
  */
-static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
+static ssize_t 
+dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
+{
+
    sprintf(message, "%s(%u letters)", buffer, (unsigned int)len);   // appending received string with its length
    size_of_message = strlen(message);                 // store the length of the stored message
    printk(KERN_INFO "MWChar: Received %u characters from the user\n", (unsigned int)len);
 
-   
-   send_evt(self_event_channel);
+   send_request(message, size_of_message); 
+   //send_evt(common_event_channel);
 
    return len;
 }
