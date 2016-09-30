@@ -15,6 +15,7 @@
 #include <linux/fs.h>             
 #include <linux/semaphore.h>
 #include <linux/moduleparam.h>
+#include <linux/slab.h>
 #include <asm/uaccess.h>          
 
 #include <xen/grant_table.h>
@@ -61,8 +62,8 @@ MODULE_DESCRIPTION("A Linux char driver to do comms and to read/write to user sp
 MODULE_VERSION("0.2");
 
 static int    majorNumber;                  //  Device number -- determined automatically
-static char   message[PAGE_SIZE] = {0};     //  Memory for the message sent from userspace
-static short  size_of_message;              //  Size of message sent from userspace 
+//static char   message[PAGE_SIZE] = {0};     //  Memory for the message sent from userspace
+//static short  size_of_message;              //  Size of message sent from userspace 
 static int    numberOpens = 0;              //  Counts the number of times the device is opened
 static struct class*  mwcharClass  = NULL;  //  The device-driver class struct pointer
 static struct device* mwcharDevice = NULL;  //  The device-driver device struct pointer
@@ -321,6 +322,8 @@ send_request(void *Request, size_t Size)
    if (RING_FULL(&front_ring)) {
 
       // Do something drastic
+       printk(KERN_INFO "GNT_SRVR: Front Ring is full\n");
+       return;
    }
 
    dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
@@ -334,7 +337,6 @@ send_request(void *Request, size_t Size)
    if (notify || !notify) {
       send_evt(common_event_channel);
    }
-
 }
 
 static void
@@ -741,22 +743,49 @@ static int dev_open(struct inode *inodep, struct file *filep){
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
 
    int error_count = 0;
+   int rc = 0; 
+   mt_response_generic_t *res = NULL;
 
-   receive_response(message,  size_of_message, NULL);
+   res = kmalloc(sizeof(mt_response_generic_t), GFP_KERNEL);
 
+   if (!res)
+   {
+      printk(KERN_INFO "MWChar: Could not alloc memory\n");
+      rc =  -EFAULT;
+      goto ErrorExit;
+   }
+
+   memset(res, 0, sizeof(mt_response_generic_t);
+
+   rc = receive_response(res,  sizeof(mt_response_generic_t), NULL);
+
+   if (rc) 
+   {
+      printk(KERN_INFO "MWChar: Error on call to receive_response(). Err Code: %d\n", rc);
+      goto ErrorExit;
+   }
+
+   error_count = copy_to_user(buffer, res, sizeof(mt_response_generic_t));
+
+   //receive_response(message,  size_of_message, NULL);
    // copy_to_user has the format ( * to, *from, size) and returns 0 on success
-   error_count = copy_to_user(buffer, message, size_of_message);
+   //error_count = copy_to_user(buffer, message, size_of_message);
+
 
    if (error_count==0){
-      printk(KERN_INFO "MWChar: Sent %d characters to the user\n", size_of_message);
-      return (size_of_message=0);
+      printk(KERN_INFO "MWChar: Sent %lu characters to the user\n", sizeof(mt_response_generic_t));
+      goto ErrorExit;
 
    } else {
       printk(KERN_INFO "MWChar: Failed to send %d characters to the user\n", error_count);
-      return -EFAULT;
+      rc = -EFAULT;
+      goto ErrorExit;
    }
 
+ErrorExit:
 
+   kfree(res);
+   return rc;
 }
 
 /** @brief This function is called whenever the device is being written to from user space i.e.
@@ -771,12 +800,19 @@ static ssize_t
 dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
 
+   /*
    sprintf(message, "%s(%u letters)", buffer, (unsigned int)len);   // appending received string with its length
    size_of_message = strlen(message);                 // store the length of the stored message
    printk(KERN_INFO "MWChar: Received %u characters from the user\n", (unsigned int)len);
 
    send_request(message, size_of_message); 
    //send_evt(common_event_channel);
+   */
+
+   mt_request_generic_t *req;
+
+   req = (mt_request_generic_t *)buffer;
+   send_request(req, sizeof(*req));
 
    return len;
 }
