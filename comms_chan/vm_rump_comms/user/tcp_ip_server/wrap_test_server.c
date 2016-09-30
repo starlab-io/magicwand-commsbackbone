@@ -4,6 +4,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+
+#include <message_types.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
@@ -12,15 +15,21 @@ static int fd;
  
 int socket(int domain, int type, int protocol)
 {
-   char msg[BUF_SZ];
 
-   memset(msg, 0, BUF_SZ); 
-
-   sprintf(msg, "%s\n", "Hello");
-
-   write(fd, msg, strlen(msg)); 
+   int sockfd;
  
-   return 1106; 
+   mt_request_generic_t request;
+   mt_response_generic_t response;
+
+   build_create_socket( &request );
+
+   write(fd, &request, sizeof(request)); 
+
+   read(fd, &response, sizeof(response));
+
+   sockfd = response.base.sockfd;
+
+   return sockfd;
 }
 
 void _init(void)
