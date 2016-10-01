@@ -35,18 +35,18 @@ build_create_socket( mt_request_generic_t * Request )
 int socket(int domain, int type, int protocol)
 {
 
-   int sockfd;
+   int sockfd = 0;
  
    mt_request_generic_t request;
-   mt_response_generic_t response;
+   //mt_response_generic_t response;
 
    build_create_socket( &request );
 
    write(fd, &request, sizeof(request)); 
 
-   read(fd, &response, sizeof(response));
+   //read(fd, &response, sizeof(response));
 
-   sockfd = response.base.sockfd;
+   //sockfd = response.base.sockfd;
 
    return sockfd;
 }
