@@ -38,15 +38,18 @@ int socket(int domain, int type, int protocol)
    int sockfd = 0;
  
    mt_request_generic_t request;
-   //mt_response_generic_t response;
+   mt_response_generic_t response;
 
    build_create_socket( &request );
 
+   request.base.size = 0;
+   request.base.sig =  MT_SIGNATURE_REQUEST;
+
    write(fd, &request, sizeof(request)); 
 
-   //read(fd, &response, sizeof(response));
+   read(fd, &response, sizeof(response));
 
-   //sockfd = response.base.sockfd;
+   sockfd = response.base.sockfd;
 
    return sockfd;
 }
