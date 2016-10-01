@@ -199,7 +199,8 @@ static void create_unbound_evt_chn(void)
    if (!client_dom_id)
       return;
 
-   alloc_unbound.dom = DOMID_SELF;
+   //alloc_unbound.dom = DOMID_SELF;
+   alloc_unbound.dom = srvr_dom_id;
    alloc_unbound.remote_dom = client_dom_id; 
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
@@ -207,7 +208,7 @@ static void create_unbound_evt_chn(void)
    if (err) {
       pr_err("Failed to set up event channel\n");
    } else {
-      printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", DOMID_SELF, client_dom_id, alloc_unbound.port);
+      printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", alloc_unbound.dom, client_dom_id, alloc_unbound.port);
    }
 
    common_event_channel = alloc_unbound.port;
@@ -322,20 +323,32 @@ send_request(void *Request, size_t Size)
    if (RING_FULL(&front_ring)) {
 
       // Do something drastic
-       printk(KERN_INFO "GNT_SRVR: Front Ring is full\n");
-       return;
+      printk(KERN_INFO "GNT_SRVR: Front Ring is full\n");
+      return;
    }
 
    dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
+   
+   if (!dest) 
+   {
+      printk(KERN_INFO "GNT_SRVR: send_request(). destination buffer is NULL\n");
+      return;
+   }
+      
 
    memcpy(dest, Request, Size);
 
+   printk(KERN_INFO "GNT_SRVR: send_request(). Copied %lu bytes to destination buffer\n", Size);
+   
    ++front_ring.req_prod_pvt;
 
    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
 
    if (notify || !notify) {
       send_evt(common_event_channel);
+      printk(KERN_INFO "GNT_SRVR: send_request(). Sent %lu bytes to UK\n", Size);
+      printk(KERN_INFO "GNT_SRVR: send_request(). notify = %u \n", notify);
+      
    }
 }
 
@@ -343,7 +356,10 @@ static void
 init_shared_ring(void)
 {
    if (!server_region)
+   {
+      printk(KERN_INFO "GNT_SRVR: init_shared_ring(). server_region is NULL\n");
       return;
+   }
 
    shared_ring = (struct mwevent_sring *)server_region;
    SHARED_RING_INIT(shared_ring);
@@ -755,7 +771,7 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
       goto ErrorExit;
    }
 
-   memset(res, 0, sizeof(mt_response_generic_t);
+   memset(res, 0, sizeof(mt_response_generic_t));
 
    rc = receive_response(res,  sizeof(mt_response_generic_t), NULL);
 
@@ -813,6 +829,8 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 
    req = (mt_request_generic_t *)buffer;
    send_request(req, sizeof(*req));
+
+   printk(KERN_INFO "MWChar: Sent %lu sized request to UK\n", sizeof(*req));
 
    return len;
 }
