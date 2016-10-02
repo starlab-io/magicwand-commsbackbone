@@ -319,7 +319,7 @@ xe_comms_read_item( void * Memory,
 
     *BytesRead = 0;
     
-    DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
+    //DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
     //send_event( g_state.local_event_port );
 
     do
@@ -350,11 +350,17 @@ xe_comms_read_item( void * Memory,
     // Total size: header + payload sizes. Do a direct memory copy,
     // since Rump has no division between user and kernel memory.
     *BytesRead = sizeof(request->base) + request->base.size;
-    bmk_memcpy( Memory, request, *BytesRead );
+
+    //bmk_memcpy( Memory, request, *BytesRead );
+    bmk_memcpy( Memory, request, sizeof(*request) );
+
+    DEBUG_PRINT("Bytes Read used for memcpy: %lu\n", *BytesRead);
 
     // We lie to the caller and report that we have read the complete request
     *BytesRead = sizeof(*request);
     
+    DEBUG_PRINT("Bytes Read after being reset: %lu\n", *BytesRead);
+
 ErrorExit:
 
     // Advance the counter for the next request
@@ -406,10 +412,10 @@ xe_comms_write_item( void * Memory,
 
     ++g_state.back_ring.rsp_prod_pvt;
 
-    //if ( do_event )
-    //{
-    (void) send_event( g_state.local_event_port );
-    //}
+    if ( do_event || !do_event )
+    {
+        (void) send_event( g_state.local_event_port );
+    }
 
 ErrorExit:
     return rc;
