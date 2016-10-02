@@ -25,6 +25,7 @@ build_create_socket( mt_request_generic_t * Request )
     create->base.type = MtRequestSocketCreate;
     create->base.id = request_id++;
     create->base.sockfd = 0;
+    create->base.sig = MT_SIGNATURE_REQUEST;
 
     create->sock_fam = MT_PF_INET;
     create->sock_type = MT_ST_STREAM;
@@ -42,14 +43,13 @@ int socket(int domain, int type, int protocol)
 
    build_create_socket( &request );
 
-   request.base.size = 0;
-   request.base.sig =  MT_SIGNATURE_REQUEST;
-
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
 
    sockfd = response.base.sockfd;
+
+   printf("Size of base: %lu\n", sizeof(mt_request_base_t));
 
    return sockfd;
 }

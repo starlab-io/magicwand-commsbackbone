@@ -283,12 +283,15 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    bool available = false;
    mt_response_generic_t * src = NULL;
 
+   printk(KERN_INFO "MWChar: receive_response() called\n");
+
    do
    {
 
       available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
 
       if (!available) {
+         printk(KERN_INFO "MWChar: down() called\n");
          down(&mw_sem);
       }
    
@@ -304,7 +307,10 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
       goto ErrorExit;
    }
 
-   memcpy(Response, src, src->base.size);
+   //memcpy(Response, src, src->base.size);
+   memcpy(Response, src, sizeof(*src));
+
+   print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
 
    ++front_ring.rsp_cons;
 
@@ -337,6 +343,8 @@ send_request(void *Request, size_t Size)
       
 
    memcpy(dest, Request, Size);
+
+   print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
 
    printk(KERN_INFO "GNT_SRVR: send_request(). Copied %lu bytes to destination buffer\n", Size);
    
@@ -761,6 +769,8 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
    int error_count = 0;
    int rc = 0; 
    mt_response_generic_t *res = NULL;
+
+   printk(KERN_INFO "MWChar: dev_read() called\n");
 
    res = kmalloc(sizeof(mt_response_generic_t), GFP_KERNEL);
 
