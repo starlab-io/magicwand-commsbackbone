@@ -35,12 +35,15 @@ build_create_socket( mt_request_generic_t * Request )
 int socket(int domain, int type, int protocol)
 {
 
-   int sockfd;
+   int sockfd = 0;
  
    mt_request_generic_t request;
    mt_response_generic_t response;
 
    build_create_socket( &request );
+
+   request.base.size = 0;
+   request.base.sig =  MT_SIGNATURE_REQUEST;
 
    write(fd, &request, sizeof(request)); 
 
