@@ -53,9 +53,8 @@ export -f dbgbuildrump
 echo "Command dbgbuildrump is available"
 
 dbgrebuildrump() {
-    rm -fr include/bmk-pcpu \
-        obj-amd64-xen       \
-        platform/xen/obj    \
+    rm -fr obj-amd64-xen             \
+        platform/xen/obj             \
         platform/xen/xen/include/xen \
         rumprun
 

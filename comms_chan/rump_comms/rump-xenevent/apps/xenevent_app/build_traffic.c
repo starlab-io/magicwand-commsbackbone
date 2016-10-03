@@ -47,12 +47,14 @@ build_create_socket( mt_request_generic_t * Request )
     
     bzero( Request, sizeof(*Request) );
 
-    create->base.type = MtRequestSocketCreate;
-    create->base.id = request_id++;
-    create->base.sockfd = 0;
+    create->base.sig      = MT_SIGNATURE_REQUEST;
+    
+    create->base.type     = MtRequestSocketCreate;
+    create->base.id       = request_id++;
+    create->base.sockfd   = 0;
 
-    create->sock_fam = MT_PF_INET;
-    create->sock_type = MT_ST_STREAM;
+    create->sock_fam      = MT_PF_INET;
+    create->sock_type     = MT_ST_STREAM;
     create->sock_protocol = 0;
 }
 
@@ -64,6 +66,8 @@ build_connect_socket( mt_request_generic_t * Request,
     
     bzero( Request, sizeof(*Request) );
 
+    connect->base.sig  = MT_SIGNATURE_REQUEST;
+    
     connect->base.type = MtRequestSocketConnect;
     connect->base.id = request_id++;
 
@@ -82,6 +86,7 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
+    wsock ->base.sig  = MT_SIGNATURE_REQUEST;
     wsock->base.type = MtRequestSocketWrite;
     wsock->base.id = request_id++;
 
@@ -101,6 +106,7 @@ build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     
     bzero( Request, sizeof(*Request) );
 
+    csock ->base.sig  = MT_SIGNATURE_REQUEST;
     csock->base.type = MtRequestSocketClose;
     csock->base.id = request_id++;
 

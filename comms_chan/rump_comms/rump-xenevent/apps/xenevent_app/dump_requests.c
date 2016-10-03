@@ -31,7 +31,7 @@ main( int argc, char * argv[] )
         if ( bytect <= 0 ) break;
 
         char * stype = "**** <unset> ****";
-        mt_request_id_t rtype = request.base.type;
+        mt_request_type_t rtype = request.base.type;
 
         switch( rtype )
         {
