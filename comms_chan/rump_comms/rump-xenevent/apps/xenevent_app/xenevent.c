@@ -390,8 +390,8 @@ send_dispatch_error_response( mt_request_generic_t * Request )
     
     set_response_to_internal_error( Request, &response );
     
-    size_t written = write( g_state.output_fd, &response, sizeof(response) );
-    if ( written != sizeof(response) )
+    size_t written = write( g_state.output_fd, &response, Request->base.size );
+    if ( written != Request->base.size )
     {
         rc = errno;
         MYASSERT( !"Failed to send response" );
@@ -461,12 +461,13 @@ process_buffer_item( buffer_item_t * BufferItem )
     // XXXXXXXXXX Optimize data written - we don't need to write all of it!
     
     MYASSERT( 0 == rc );
-
+    MYASSERT( MT_IS_RESPONSE( &response ) );
+    
     size_t written = write( g_state.output_fd,
                             &response,
                             sizeof(response) );
 
-    if ( written != sizeof(response) )
+    if ( written != response.base.size )
     {
         rc = errno;
         MYASSERT( !"write" );
@@ -810,10 +811,18 @@ message_dispatcher( void )
 
         DEBUG_PRINT( "Reading %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
-        if ( size != ONE_REQUEST_REGION_SIZE )
+        if ( size < sizeof(mt_request_base_t) ||
+             myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
         {
-            // rc == size == 0 means we hit an expected end of input
-            rc = errno;
+            // Handle underflow or overflow
+            if ( 0 == size )
+            {
+                // end of input - normal exit
+                goto ErrorExit;
+            }
+            
+            // Otherwise we have invalid input
+            rc = EINVAL;
             if ( 0 != size )
             {
                 MYASSERT( !"Received request with invalid size" );
@@ -833,7 +842,6 @@ message_dispatcher( void )
         if ( more_processing )
         {
             // Tell the thread to process the buffer
-        
             DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
             sem_post( &assigned_thread->awaiting_work_sem );
         }

@@ -244,7 +244,7 @@ xe_dev_read( dev_t Dev,
         DEBUG_PRINT( "Read request: %d bytes at %p\n",
                      (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
 
-        hex_dump( "Write request", 
+        hex_dump( "Read request", 
                   iov->iov_base, (int) iov->iov_len );
 
         // Inform system of data transfer
@@ -288,9 +288,9 @@ xe_dev_write( dev_t Dev,
             goto ErrorExit;
         }
         
-        DEBUG_PRINT( "Write request: %d bytes at %p\n",
+        DEBUG_PRINT( "Write response: %d bytes at %p\n",
                      (int)iov->iov_len, iov->iov_base );
-        hex_dump( "Write request", 
+        hex_dump( "Write resposne", 
                   iov->iov_base, (int) iov->iov_len );
 
         // Inform system of data transfer

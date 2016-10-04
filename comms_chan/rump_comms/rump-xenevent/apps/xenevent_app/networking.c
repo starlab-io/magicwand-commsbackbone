@@ -26,7 +26,7 @@ xe_net_set_base_response( IN mt_request_generic_t   * Request,
     Response->base.sockfd = Request->base.sockfd;
 
     Response->base.id   = Request->base.id;
-    Response->base.type = MT_RESPONSE( Response->base.type );
+    Response->base.type = MT_RESPONSE( Request->base.type );
     Response->base.size = PayloadLen;
 }
 
@@ -106,9 +106,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     }
     
     // Set up Response
-//    xe_net_set_base_response( Request, 0, Response );
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              0,
+                              MT_RESPONSE_SOCKET_CREATE_SIZE,
                               (mt_response_generic_t *)Response );
 
     Response->base.sockfd = sockfd;
@@ -198,7 +197,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
 ErrorExit:
 //    xe_net_set_base_response( Request, 0, Response );
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              0,
+                              MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
     
     return Response->base.status;
@@ -229,7 +228,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              0,
+                              MT_RESPONSE_SOCKET_CLOSE_SIZE,
                               (mt_response_generic_t *)Response );
 
 //    xe_net_set_base_response( Request, 0, Response );
@@ -246,7 +245,8 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    Response->base.size   = 0; // track total bytes received here
+    ssize_t totRead = 0;
+    //Response->base.size   = 0; // track total bytes received here
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
@@ -267,13 +267,11 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
             break;
         }
 
-        Response->base.size += rcv;
+        totRead += rcv;
     }
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              Response->base.size,
+                              MT_RESPONSE_SOCKET_READ_SIZE + totRead,
                               (mt_response_generic_t *)Response );
-
-//    xe_net_set_base_response( Request, Response->base.size, Response );`
 
     return Response->base.status;
 }
@@ -314,7 +312,7 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              0,
+                              MT_RESPONSE_SOCKET_WRITE_SIZE,
                               (mt_response_generic_t *)Response );
 
     return Response->base.status;

@@ -27,6 +27,7 @@ build_create_socket( mt_request_generic_t * Request )
     create->base.sockfd = 0;
     create->base.sig = MT_SIGNATURE_REQUEST;
 
+    create->base.size = MT_REQUEST_SOCKET_CREATE_SIZE;
     create->sock_fam = MT_PF_INET;
     create->sock_type = MT_ST_STREAM;
     create->sock_protocol = 0;

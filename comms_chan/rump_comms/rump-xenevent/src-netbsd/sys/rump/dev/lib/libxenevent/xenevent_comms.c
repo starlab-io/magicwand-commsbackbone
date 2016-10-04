@@ -340,7 +340,7 @@ xe_comms_read_item( void * Memory,
                           g_state.back_ring.req_cons );
 
     if ( !MT_IS_REQUEST( request ) ||
-        request->base.size > Size    )
+         request->base.size > Size    )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Programming error: there's a problem with the request" );
@@ -355,11 +355,6 @@ xe_comms_read_item( void * Memory,
     bmk_memcpy( Memory, request, sizeof(*request) );
 
     DEBUG_PRINT("Bytes Read used for memcpy: %lu\n", *BytesRead);
-
-    // We lie to the caller and report that we have read the complete request
-    *BytesRead = sizeof(*request);
-    
-    DEBUG_PRINT("Bytes Read after being reset: %lu\n", *BytesRead);
 
 ErrorExit:
 
@@ -393,31 +388,23 @@ xe_comms_write_item( void * Memory,
     void * dest = RING_GET_RESPONSE( &g_state.back_ring,
                                      g_state.back_ring.rsp_prod_pvt );
 
-    if ( !MT_IS_RESPONSE( response ) ||
-         sizeof(*response) != Size     )
-    {
-        rc = BMK_EINVAL;
-        MYASSERT( !"Programming error: there's a problem with the response" );
-        // Bad state - we're not sending the response !!!!!!!!!!!!
-        goto ErrorExit;
-    }
-
-    *BytesWritten = Size;
-
-    // Only copy what's needed
+    // Verify that we are clobbering a request with a response.
+    MYASSERT( MT_IS_REQUEST( (mt_response_generic_t *)dest ) );
+    MYASSERT( MT_IS_RESPONSE( response ) );
     
-    bmk_memcpy( dest, response, response->base.size );
-    
+    *BytesWritten = response->base.size;
+    MYASSERT( *BytesWritten <= Size );
+    bmk_memcpy( dest, response, *BytesWritten );
+
+    // We're producing a response
+    ++g_state.back_ring.rsp_prod_pvt;
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
 
-    ++g_state.back_ring.rsp_prod_pvt;
-
-    if ( do_event || !do_event )
+    if ( do_event )
     {
         (void) send_event( g_state.local_event_port );
     }
 
-ErrorExit:
     return rc;
 }
 

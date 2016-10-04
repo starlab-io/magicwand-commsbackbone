@@ -177,6 +177,10 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
     mt_response_base_t base;
 } mt_response_socket_create_t;
 
+#define MT_REQUEST_SOCKET_CREATE_SIZE  sizeof(mt_request_socket_create_t)
+#define MT_RESPONSE_SOCKET_CREATE_SIZE sizeof(mt_response_socket_create_t)
+
+
 
 //
 // Connect
@@ -197,6 +201,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_connect
     // nothing else
 } mt_response_socket_connect_t;
 
+#define MT_REQUEST_SOCKET_CONNECT_SIZE  sizeof(mt_request_socket_connect_t)
+#define MT_RESPONSE_SOCKET_CONNECT_SIZE sizeof(mt_response_socket_connect_t)
+
 
 //
 // Close
@@ -213,6 +220,10 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 
     // nothing else
 } mt_response_socket_close_t;
+
+#define MT_REQUEST_SOCKET_CLOSE_SIZE  sizeof(mt_request_socket_close_t)
+#define MT_RESPONSE_SOCKET_CLOSE_SIZE sizeof(mt_response_socket_close_t)
+
 
 
 //
@@ -233,6 +244,10 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
 } mt_response_socket_read_t;
 
 
+#define MT_REQUEST_SOCKET_READ_SIZE  sizeof(mt_request_socket_read_t)
+// User must add count of filled bytes to size
+#define MT_RESPONSE_SOCKET_READ_SIZE sizeof(mt_response_base_t)
+
 //
 // Write
 //
@@ -251,6 +266,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_write
     mt_size_t          written;
 } mt_response_socket_write_t;
 
+// User must add count of filled bytes to size
+#define MT_REQUEST_SOCKET_WRITE_SIZE  sizeof(mt_request_base_t)
+#define MT_RESPONSE_SOCKET_WRITE_SIZE sizeof(mt_response_socket_write_t)
 
 
 //
