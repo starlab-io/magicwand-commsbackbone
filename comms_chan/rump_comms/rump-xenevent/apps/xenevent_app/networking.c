@@ -195,7 +195,6 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     }
 
 ErrorExit:
-//    xe_net_set_base_response( Request, 0, Response );
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
@@ -294,8 +293,9 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %d bytes\n",
                   WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
 
-        
-    while ( totSent < Request->base.size )
+    // base.size is the total size of the request; account for the
+    // header.
+    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_WRITE_SIZE )
     {
         ssize_t sent = send( Request->base.sockfd,
                              &Request->bytes[ totSent ],
