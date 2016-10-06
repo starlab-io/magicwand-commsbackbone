@@ -1,3 +1,17 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+/**
+ * @file    wrap_test_server.c
+ * @author  Mark Mason 
+ * @date    10 September 2016
+ * @version 0.1
+ * @brief   A shared library pre-loaded by test TCP/IP apps that intercepts 
+ *          network calls.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -14,6 +28,11 @@
 static int fd;
 static int request_id;
 
+typedef struct _sinfo {
+    int sockfd;
+    char * desthost;
+    int    destport;
+} sinfo_t;
 
 void
 build_create_socket( mt_request_generic_t * Request )
@@ -33,8 +52,22 @@ build_create_socket( mt_request_generic_t * Request )
     create->sock_protocol = 0;
 }
 
+void
+build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
+{
+    mt_request_socket_close_t * csock = &(Request->socket_close);
+
+    bzero( Request, sizeof(*Request) );
+
+    csock->base.sig  = MT_SIGNATURE_REQUEST;
+    csock->base.type = MtRequestSocketClose;
+    csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE;
+    csock->base.id = request_id++;
+    csock->base.sockfd = SockInfo->sockfd;
+}
  
-int socket(int domain, int type, int protocol)
+int 
+socket(int domain, int type, int protocol)
 {
 
    int sockfd = 0;
@@ -44,15 +77,41 @@ int socket(int domain, int type, int protocol)
 
    build_create_socket( &request );
 
+   printf("\tSize of request base: %lu\n", sizeof(mt_request_base_t));
+
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
 
    sockfd = response.base.sockfd;
 
-   printf("Size of base: %lu\n", sizeof(mt_request_base_t));
+   printf("socket() returned\n");
+   printf("\tSize of response base: %lu\n", sizeof(mt_response_base_t));
 
    return sockfd;
+}
+
+int
+close(int sock_fd)
+{
+ 
+   mt_request_generic_t request;
+   mt_response_generic_t response;
+   sinfo_t sock_info;
+
+   memset(&sock_info,0,sizeof(sinfo_t));
+   sock_info.sockfd = sock_fd; 
+
+   build_close_socket( &request, &sock_info );
+
+   write(fd, &request, sizeof(request)); 
+
+   read(fd, &response, sizeof(response));
+
+   printf("close() returned\n");
+   printf("\tSize of base: %lu\n", sizeof(mt_request_base_t));
+
+   return 0;
 }
 
 void _init(void)
