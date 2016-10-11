@@ -340,7 +340,6 @@ send_request(void *Request, size_t Size)
       printk(KERN_INFO "MWChar: send_request(). destination buffer is NULL\n");
       return;
    }
-      
 
    memcpy(dest, Request, Size);
 
@@ -838,9 +837,10 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
    mt_request_generic_t *req;
 
    req = (mt_request_generic_t *)buffer;
-   send_request(req, sizeof(*req));
 
-   printk(KERN_INFO "MWChar: Sent %lu sized request to UK\n", sizeof(*req));
+   printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
+
+   send_request(req, sizeof(*req));
 
    return len;
 }

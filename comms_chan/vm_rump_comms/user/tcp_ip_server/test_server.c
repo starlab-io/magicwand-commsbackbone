@@ -34,7 +34,7 @@ int main(int argc , char *argv[])
     }
 
     // 2> Call close
-    //close(socket_desc);
+    close(socket_desc);
      
 ErrorExit:
     return err;
