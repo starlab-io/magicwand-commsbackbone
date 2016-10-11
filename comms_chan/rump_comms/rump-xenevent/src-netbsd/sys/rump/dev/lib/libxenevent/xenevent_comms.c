@@ -349,10 +349,12 @@ xe_comms_read_item( void * Memory,
 
     // Total size: header + payload sizes. Do a direct memory copy,
     // since Rump has no division between user and kernel memory.
-    *BytesRead = sizeof(request->base) + request->base.size;
 
-    //bmk_memcpy( Memory, request, *BytesRead );
-    bmk_memcpy( Memory, request, sizeof(*request) );
+    //*BytesRead = sizeof(request->base) + request->base.size;
+    *BytesRead = sizeof(*request) + request->base.size;
+
+    bmk_memcpy( Memory, request, *BytesRead );
+    //bmk_memcpy( Memory, request, sizeof(*request) );
 
     DEBUG_PRINT("Bytes Read used for memcpy: %lu\n", *BytesRead);
 

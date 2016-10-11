@@ -604,6 +604,7 @@ worker_thread_func( void * Arg )
     buffer_item_t * currbuf;
     bool empty = false;
     
+    DEBUG_BREAK();
     DEBUG_PRINT( "Thread %d is executing\n", myitem->idx );
     
     while ( true )
@@ -657,6 +658,8 @@ worker_thread_func( void * Arg )
             }
         }
     } // while
+
+    pthread_exit(Arg);
 }
 
 
@@ -698,8 +701,9 @@ init_state( void )
             goto ErrorExit;
         }
 
-        sem_init( &curr->awaiting_work_sem,
-                  BUFFER_ITEM_COUNT, 0 );
+        sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
+        //sem_init( &curr->awaiting_work_sem, 0, 1 );
+        //sem_init( &curr->awaiting_work_sem, 0, 0 );
     }
 
     //
@@ -723,6 +727,9 @@ init_state( void )
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
+        DEBUG_PRINT( "Starting thread %d\n", i );
+
+        //DEBUG_BREAK();
         rc = pthread_create( &g_state.worker_threads[ i ].self,
                              NULL,
                              worker_thread_func,
@@ -733,6 +740,14 @@ init_state( void )
             goto ErrorExit;
         }
     }
+
+    /*
+    for (int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {
+        pthread_join(g_state.worker_threads[i].self, NULL);
+    }
+    */
+
 
 ErrorExit:
     return rc;
@@ -785,6 +800,8 @@ message_dispatcher( void )
     int rc = 0;
     size_t size = 0;
     bool more_processing = false;
+
+    int pending;
 
     // Forever, read commands from device and dispatch them
     while( true )
@@ -843,7 +860,15 @@ message_dispatcher( void )
         {
             // Tell the thread to process the buffer
             DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
+
+            (void) sem_getvalue( &assigned_thread->awaiting_work_sem, &pending );
+            DEBUG_PRINT( "Semaphore value before post: %d\n", pending );
+
             sem_post( &assigned_thread->awaiting_work_sem );
+
+            (void) sem_getvalue( &assigned_thread->awaiting_work_sem, &pending );
+            DEBUG_PRINT( "Semaphore value after post: %d\n", pending );
+     
         }
     } // while
     

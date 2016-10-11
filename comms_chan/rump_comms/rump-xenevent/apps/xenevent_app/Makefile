@@ -11,6 +11,7 @@ CFLAGS += -I../../../common
 CFLAGS += -I../platform/xen/xen/include 
 
 CFLAGS+= -DMYDEBUG
+LDFLAGS = -lpthread
 
 BAKE=rumprun-bake
 BAKE_FLAGS=-c ../xenevents.conf xen_events
@@ -46,6 +47,7 @@ $(APPNAME).run: $(APPNAME).bin
 
 # threads.c
 $(APPNAME).bin: $(APPNAME).c networking.c workqueue.c
+	#$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
