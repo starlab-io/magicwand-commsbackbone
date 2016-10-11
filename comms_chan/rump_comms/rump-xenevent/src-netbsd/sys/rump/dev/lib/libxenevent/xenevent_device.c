@@ -290,7 +290,7 @@ xe_dev_write( dev_t Dev,
         
         DEBUG_PRINT( "Write response: %d bytes at %p\n",
                      (int)iov->iov_len, iov->iov_base );
-        hex_dump( "Write resposne", 
+        hex_dump( "Write response", 
                   iov->iov_base, (int) iov->iov_len );
 
         // Inform system of data transfer

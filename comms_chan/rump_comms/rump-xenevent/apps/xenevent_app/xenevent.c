@@ -70,7 +70,7 @@
 #include "networking.h"
 #include "app_common.h"
 
-#include "bitfield.h"
+//#include "bitfield.h"
 
 #include "threadpool.h"
 #include "bufferpool.h"
@@ -79,7 +79,7 @@
 #include "config.h"
 #include "message_types.h"
 
-#ifdef NORUMP
+#ifdef NODEVICE
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
 #  define DEBUG_INPUT_FILE  "incoming_requests.bin"
 #endif
@@ -167,7 +167,6 @@ static int
 open_device( void )
 {
     int rc = 0;
-    size_t size = 0;
 
     g_state.input_fd = open( XENEVENT_DEVICE, O_RDWR );
     
@@ -184,13 +183,12 @@ ErrorExit:
     return rc;
 }
 
-#ifdef NORUMP
+#ifdef NODEVICE
 // Works only outside of Rump until file mapping is understood
 static int
 DEBUG_open_device( void )
 {
     int rc = 0;
-    size_t size = 0;
 
     g_state.input_fd = open( DEBUG_INPUT_FILE, O_RDONLY );
     if ( g_state.input_fd < 0 )
@@ -354,10 +352,9 @@ release_worker_thread( thread_item_t * ThreadItem )
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
     
-    uint32_t prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
+    (void)atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     
-    // Verify that the thread was previously reserved
-    //MYASSERT( 1 == prev );
+    // N.B. The thread might have never been reserved
 }
 
 
@@ -390,7 +387,7 @@ send_dispatch_error_response( mt_request_generic_t * Request )
     
     set_response_to_internal_error( Request, &response );
     
-    size_t written = write( g_state.output_fd, &response, Request->base.size );
+    ssize_t written = write( g_state.output_fd, &response, Request->base.size );
     if ( written != Request->base.size )
     {
         rc = errno;
@@ -604,7 +601,6 @@ worker_thread_func( void * Arg )
     buffer_item_t * currbuf;
     bool empty = false;
     
-    DEBUG_BREAK();
     DEBUG_PRINT( "Thread %d is executing\n", myitem->idx );
     
     while ( true )
@@ -710,9 +706,13 @@ init_state( void )
     // Open the device
     //
 
-#ifdef NORUMP
-    // DEBUG DEBUG
+#ifdef NODEVICE
     rc = DEBUG_open_device();
+    if ( rc )
+    {
+        DEBUG_PRINT( "Can't open device in test mode. Ignoring.\n" );
+        rc = 0;
+    }
 #else
     rc = open_device();
 #endif
@@ -727,9 +727,6 @@ init_state( void )
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
-        DEBUG_PRINT( "Starting thread %d\n", i );
-
-        //DEBUG_BREAK();
         rc = pthread_create( &g_state.worker_threads[ i ].self,
                              NULL,
                              worker_thread_func,
@@ -741,14 +738,9 @@ init_state( void )
         }
     }
 
-    /*
-    for (int i = 0; i < MAX_THREAD_COUNT; i++ )
-    {
-        pthread_join(g_state.worker_threads[i].self, NULL);
-    }
-    */
-
-
+    DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
+    sched_yield();
+    
 ErrorExit:
     return rc;
 }
@@ -758,8 +750,8 @@ static int
 fini_state( void )
 {
     //
-    // Join the threads - assert a shutdown pending and signal all
-    // their semaphores
+    // Force all threads to exit: set shutdown pending and signal all their
+    // semaphores so they exit, then join them and clean up their resources.
     //
 
     DEBUG_PRINT( "Shutting down all threads\n" );
@@ -782,12 +774,14 @@ fini_state( void )
         close( g_state.input_fd );
     }
 
-#ifdef NORUMP
+#ifdef NODEVICE
     if ( g_state.output_fd > 0 )
     {
         close( g_state.output_fd );
     }
 #endif
+
+    return 0;
 }
 
 //
@@ -798,26 +792,26 @@ static int
 message_dispatcher( void )
 {
     int rc = 0;
-    size_t size = 0;
+    ssize_t size = 0;
     bool more_processing = false;
 
-    int pending;
-
-    // Forever, read commands from device and dispatch them
+    // Forever, read commands from device and dispatch them, allowing
+    // the other threads to execute.
     while( true )
     {
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
+
+        // Always allow other threads to run in case there's work.
+        sched_yield();
 
         DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
         rc = reserve_available_buffer_item( &myitem );
         if ( rc )
         {
-            // Failed to find an available buffer item.
-            // Yield this thread and try again.
-            DEBUG_PRINT( "Warning: No buffer items are available. Yielding execution." );
-            sched_yield();
+            // Failed to find an available buffer item. Yield and try again.
+            DEBUG_PRINT( "Warning: No buffer items are available. Yielding for now." );
             continue;
         }
 
@@ -826,9 +820,10 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        DEBUG_PRINT( "Reading %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
+        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
+
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
-        if ( size < sizeof(mt_request_base_t) ||
+        if ( size < (ssize_t) sizeof(mt_request_base_t) ||
              myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
         {
             // Handle underflow or overflow
@@ -861,22 +856,21 @@ message_dispatcher( void )
             // Tell the thread to process the buffer
             DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
 
-            (void) sem_getvalue( &assigned_thread->awaiting_work_sem, &pending );
-            DEBUG_PRINT( "Semaphore value before post: %d\n", pending );
-
             sem_post( &assigned_thread->awaiting_work_sem );
-
-            (void) sem_getvalue( &assigned_thread->awaiting_work_sem, &pending );
-            DEBUG_PRINT( "Semaphore value after post: %d\n", pending );
-     
         }
+        // Remember: we'll yield next...
+
     } // while
     
 ErrorExit:
+    sched_yield();
     return rc;
     
 
 } // message_dispatcher
+
+
+#if 0 // test code
 
 //
 // Simulates messages to the threads while we're testing this system
@@ -885,8 +879,6 @@ static int
 test_message_dispatcher( void )
 {
     int rc = 0;
-    int devfd = 0;
-    size_t size = 0;
     int ct = 0;
     bool more_processing = false;
     
@@ -939,26 +931,23 @@ static int
 test_message_dispatcher2( void )
 {
     int rc = 0;
-    int devfd = 0;
-    size_t size = 0;
     int ct = 0;
-    bool more_processing = false;
     char buf[100];
+
     while( ct++ < 10 )
     {
         // Read just sends an event -
-        size = read( g_state.input_fd, buf, sizeof(buf) );
+        ssize_t size = read( g_state.input_fd, buf, sizeof(buf) );
 
-        DEBUG_PRINT( "Read %d bytes from input_fd. Waiting a bit\n", 0 );
+        DEBUG_PRINT( "Read %ld bytes from input_fd. Waiting a bit\n", size );
         sleep(5);
         
     } // while
 
-ErrorExit:
     return rc;
 } // test_message_dispatcher2
 
-
+#endif // 0
 
 int main(void)
 {

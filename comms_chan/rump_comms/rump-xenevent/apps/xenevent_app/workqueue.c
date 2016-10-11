@@ -169,7 +169,8 @@ workqueue_get_contents( workqueue_t * wq,
 
 ErrorExit:
     pthread_mutex_unlock( &wq->lock );
-    
+
+    return rc;
 }
 
 

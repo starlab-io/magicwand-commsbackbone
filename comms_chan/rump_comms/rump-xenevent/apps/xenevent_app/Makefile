@@ -5,13 +5,14 @@
 ##
 
 CC = x86_64-rumprun-netbsd-gcc 
-CFLAGS = -ggdb -std=gnu99 
+CFLAGS = -ggdb -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -I..
 CFLAGS += -I../../../common
 CFLAGS += -I../platform/xen/xen/include 
 
 CFLAGS+= -DMYDEBUG
-LDFLAGS = -lpthread
+CFLAGS+= -DMYTRAP
+#CFLAGS+= -DNODEVICE
 
 BAKE=rumprun-bake
 BAKE_FLAGS=-c ../xenevents.conf xen_events
@@ -36,7 +37,7 @@ all: $(APPNAME).run
 #@echo " rumprun -S xen -dip -D 1234 $@"
 
 $(APPNAME).run: $(APPNAME).bin
-	#bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)	
+	#bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 	@echo "Run   ./run.sh"
 	@echo "Debug with:"
@@ -47,8 +48,7 @@ $(APPNAME).run: $(APPNAME).bin
 
 # threads.c
 $(APPNAME).bin: $(APPNAME).c networking.c workqueue.c
-	#$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 	$(CC) $(CFLAGS) -o $@ $^
 
 clean:
-	rm -f $(APPNAME).run $(APPNAME).bin
+	rm -f $(APPNAME).run $(APPNAME).bin *.o

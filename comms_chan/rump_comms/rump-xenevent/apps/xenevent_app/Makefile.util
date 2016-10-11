@@ -4,7 +4,7 @@
 
 # Builds dispatcher outside of Rump
 CC = gcc
-CFLAGS = -ggdb -std=gnu99 -DNORUMP
+CFLAGS = -ggdb -std=gnu99 -DNODEVICE
 CFLAGS += -I..
 CFLAGS += -I../../../common
 CFLAGS += -I../platform/xen/xen/include 

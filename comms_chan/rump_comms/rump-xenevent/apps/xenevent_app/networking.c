@@ -160,7 +160,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         goto ErrorExit;
     }
 
-    rc = getaddrinfo( Request->hostname, portBuf, &serverHints, &serverInfo );
+    rc = getaddrinfo( (const char *)Request->hostname, portBuf, &serverHints, &serverInfo );
     if ( 0 != rc )
     {
         DEBUG_PRINT( "getaddrinfo failed: %s\n", gai_strerror(rc) );
