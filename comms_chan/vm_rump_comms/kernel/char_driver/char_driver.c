@@ -1,3 +1,8 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
 
 /**
  * @file    char_driver.c
@@ -40,9 +45,6 @@
 #define VM_EVT_CHN_PATH       "vm_evt_chn_prt"
 #define VM_EVT_CHN_BOUND      "vm_evt_chn_is_bound"
 
-//#define VM_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_prt"
-//#define VM_EVT_CHN_IS_BOUND       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_is_bound"
-
 #define KEY_RESET_VAL      "0"
 #define TEST_MSG_SZ         64
 #define TEST_MSG_SZ_STR    "64"
@@ -62,8 +64,6 @@ MODULE_DESCRIPTION("A Linux char driver to do comms and to read/write to user sp
 MODULE_VERSION("0.2");
 
 static int    majorNumber;                  //  Device number -- determined automatically
-//static char   message[PAGE_SIZE] = {0};     //  Memory for the message sent from userspace
-//static short  size_of_message;              //  Size of message sent from userspace 
 static int    numberOpens = 0;              //  Counts the number of times the device is opened
 static struct class*  mwcharClass  = NULL;  //  The device-driver class struct pointer
 static struct device* mwcharDevice = NULL;  //  The device-driver device struct pointer
@@ -123,14 +123,14 @@ static int write_to_key(const char *path, const char *value)
 
    err = xenbus_transaction_start(&txn);
    if (err) {
-      printk(KERN_INFO "GNT_SRVR: Error starting xenbus transaction\n");
+      printk(KERN_INFO "MWChar: Error starting xenbus transaction\n");
       return 1;
    }
 
    err = xenbus_write(txn, ROOT_NODE, path, value);
 
    if (err) {
-      printk(KERN_INFO "GNT_SRVR: Could not write to XenStore Key\n");
+      printk(KERN_INFO "MWChar: Could not write to XenStore Key\n");
       xenbus_transaction_end(txn,1);
       return 1;
    }
@@ -148,7 +148,7 @@ static char *read_from_key(const char *path)
 
    err = xenbus_transaction_start(&txn);
    if (err) {
-      printk(KERN_INFO "GNT_SRVR: Error starting xenbus transaction\n");
+      printk(KERN_INFO "MWChar: Error starting xenbus transaction\n");
       return NULL;
    }
 
@@ -159,7 +159,7 @@ static char *read_from_key(const char *path)
    }
 
    if (XENBUS_IS_ERR_READ(str)) {
-      printk(KERN_INFO "GNT_SRVR: Could not read XenStore Key\n");
+      printk(KERN_INFO "MWChar: Could not read XenStore Key\n");
       xenbus_transaction_end(txn,1);
       return NULL;
    }
@@ -181,7 +181,7 @@ static void write_server_id_to_key(void)
       return;
    }
 
-   printk(KERN_INFO "GNT_SRVR: Read my Dom Id Key: %s\n", dom_id_str);
+   printk(KERN_INFO "MWChar: Read my Dom Id Key: %s\n", dom_id_str);
 
    write_to_key(SERVER_ID_KEY, dom_id_str);
 
@@ -329,7 +329,7 @@ send_request(void *Request, size_t Size)
    if (RING_FULL(&front_ring)) {
 
       // Do something drastic
-      printk(KERN_INFO "GNT_SRVR: Front Ring is full\n");
+      printk(KERN_INFO "MWChar: Front Ring is full\n");
       return;
    }
 
@@ -337,25 +337,24 @@ send_request(void *Request, size_t Size)
    
    if (!dest) 
    {
-      printk(KERN_INFO "GNT_SRVR: send_request(). destination buffer is NULL\n");
+      printk(KERN_INFO "MWChar: send_request(). destination buffer is NULL\n");
       return;
    }
-      
 
    memcpy(dest, Request, Size);
 
    print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
 
-   printk(KERN_INFO "GNT_SRVR: send_request(). Copied %lu bytes to destination buffer\n", Size);
-   
+   printk(KERN_INFO "MWChar: send_request(). Copied %lu bytes to destination buffer\n", Size);
+
    ++front_ring.req_prod_pvt;
 
    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
 
    if (notify || !notify) {
       send_evt(common_event_channel);
-      printk(KERN_INFO "GNT_SRVR: send_request(). Sent %lu bytes to UK\n", Size);
-      printk(KERN_INFO "GNT_SRVR: send_request(). notify = %u \n", notify);
+      printk(KERN_INFO "MWChar: send_request(). Sent %lu bytes to UK\n", Size);
+      printk(KERN_INFO "MWChar: send_request(). notify = %u \n", notify);
       
    }
 }
@@ -365,7 +364,7 @@ init_shared_ring(void)
 {
    if (!server_region)
    {
-      printk(KERN_INFO "GNT_SRVR: init_shared_ring(). server_region is NULL\n");
+      printk(KERN_INFO "MWChar: init_shared_ring(). server_region is NULL\n");
       return;
    }
 
@@ -385,7 +384,7 @@ offer_grant(domid_t domu_client_id)
    server_region = (uint8_t *) __get_free_pages( GFP_KERNEL, XENEVENT_GRANT_REF_ORDER );
    if (!server_region)
    {
-       printk(KERN_INFO "GNT_SRVR: Error allocating memory (0x%x pages)\n",
+       printk(KERN_INFO "MWChar: Error allocating memory (0x%x pages)\n",
               XENEVENT_GRANT_REF_COUNT);
       return 1;
    }
@@ -402,12 +401,12 @@ offer_grant(domid_t domu_client_id)
 
        ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
        if (ret < 0) {
-           printk(KERN_INFO "GNT_SRVR: Error obtaining Grant\n");
+           printk(KERN_INFO "MWChar: Error obtaining Grant\n");
            return 1;
        }
 
        grant_refs[ i ] = ret;
-       printk(KERN_INFO "GNT_SRVR: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
+       printk(KERN_INFO "MWChar: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
    }
 
    return 0;
@@ -424,13 +423,13 @@ static int write_grant_refs_to_key( void )
     {
         if ( snprintf( one_ref, sizeof(one_ref), "%x ", grant_refs[i] ) >= sizeof(one_ref))
         {
-            printk(KERN_INFO "GNT_SRVR: Insufficient space to write grant ref.\n");
+            printk(KERN_INFO "MWChar: Insufficient space to write grant ref.\n");
             rc = 1;
             goto ErrorExit;
         }
         if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >= gnt_refs + sizeof(gnt_refs) )
         {
-            printk(KERN_INFO "GNT_SRVR: Insufficient space to write all grant refs.\n");
+            printk(KERN_INFO "MWChar: Insufficient space to write all grant refs.\n");
             rc = 2;
             goto ErrorExit;
         }
@@ -472,7 +471,7 @@ msg_len_state_changed(struct xenbus_watch *w,
 
    if (!server_region) {
       kfree(msg_len_str);
-      printk(KERN_INFO "GNT_SRVR: Error allocating memory\n");
+      printk(KERN_INFO "MWChar: Error allocating memory\n");
       return;
    }
 
@@ -709,7 +708,7 @@ static void __exit mwchar_exit(void){
    {
        if ( 0 != grant_refs[ i ] )
        {
-           printk(KERN_INFO "GNT_SRVR: Ending access to grant ref 0x%x\n", grant_refs[i]);
+           printk(KERN_INFO "MWChar: Ending access to grant ref 0x%x\n", grant_refs[i]);
            gnttab_end_foreign_access_ref( grant_refs[i], 0 );
        }
    }
@@ -741,7 +740,7 @@ static void __exit mwchar_exit(void){
       free_unbound_evt_chn();
    }
 
-   printk(KERN_INFO "GNT_SRVR: Unloading gnt_srvr LKM\n");
+   printk(KERN_INFO "MWChar: Unloading gnt_srvr LKM\n");
    printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");
 }
 
@@ -838,9 +837,10 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
    mt_request_generic_t *req;
 
    req = (mt_request_generic_t *)buffer;
-   send_request(req, sizeof(*req));
 
-   printk(KERN_INFO "MWChar: Sent %lu sized request to UK\n", sizeof(*req));
+   printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
+
+   send_request(req, sizeof(*req));
 
    return len;
 }
