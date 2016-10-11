@@ -14,10 +14,15 @@
 //
 // This application processes incoming requests as follows:
 //
-// 1. The dispatcher function selects an available buffer from the
+// 1. The dispatcher function yields its own thread to allow worker
+//    threads to process and free up their buffers. We do this because
+//    Rump uses a non-preemptive scheduler.
+//
+// 2. The dispatcher function selects an available buffer from the
 //     buffer pool and reads an incoming request into it.
 //
-// 2. The dispatcher examines the request:
+// 3. The dispatcher examines the request:
+//
 //    (a) If the request is for a new socket request, it selects an
 //        available thread for the socket.
 //
@@ -29,15 +34,15 @@
 //    buffer index into the thread's work queue and signalling to the
 //    thread that work is available via a semaphore.
 //
-// 3. Worker threads are initialized on startup and block on a
+// 4. Worker threads are initialized on startup and block on a
 //    semaphore until work becomes available. When there's work to do,
-//    the thread unblocks and processes the oldest request in its
-//    queue against the socket file descriptor it was assigned. In
+//    the thread is given control and processes the oldest request in
+//    its queue against the socket file descriptor it was assigned. In
 //    case the request is for a new socket, it is processed
 //    immediately by the dispatcher thread so subsequent requests
 //    against that socket can find the thread that handled it.
 // 
-// The main functions to understand here are:
+// The primary functions for a developer to understand are:
 //
 // worker_thread_func:
 // One runs per worker thread. It waits for requests processes them
@@ -79,7 +84,7 @@
 #include "config.h"
 #include "message_types.h"
 
-#ifdef NODEVICE
+#ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
 #  define DEBUG_INPUT_FILE  "incoming_requests.bin"
 #endif
@@ -162,7 +167,6 @@ debug_print_state( void )
 }
 
 
-
 static int
 open_device( void )
 {
@@ -182,6 +186,7 @@ open_device( void )
 ErrorExit:
     return rc;
 }
+
 
 #ifdef NODEVICE
 // Works only outside of Rump until file mapping is understood
@@ -215,6 +220,7 @@ ErrorExit:
     return rc;
 }
 #endif
+
 
 static int
 reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
@@ -865,7 +871,6 @@ message_dispatcher( void )
 ErrorExit:
     sched_yield();
     return rc;
-    
 
 } // message_dispatcher
 

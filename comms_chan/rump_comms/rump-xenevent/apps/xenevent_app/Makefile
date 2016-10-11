@@ -35,6 +35,9 @@ all: $(APPNAME).run
 # Direct running instrutions:
 #@echo "Run    rumprun -S xen -i $@"
 #@echo " rumprun -S xen -dip -D 1234 $@"
+#
+# N.B. Calling rumprun with -d works here, but it doesn't work with
+# thread_app. Why?
 
 $(APPNAME).run: $(APPNAME).bin
 	#bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)

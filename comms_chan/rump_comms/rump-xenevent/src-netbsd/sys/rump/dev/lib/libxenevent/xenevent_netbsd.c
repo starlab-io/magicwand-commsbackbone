@@ -105,18 +105,17 @@ ErrorExit:
     return rc;
 }
 
+
 void
 xenevent_mutex_wait( xenevent_mutex_t Mutex )
 {
-    DEBUG_PRINT( "Waiting on mutex at %p\n", Mutex );
     mutex_enter( (kmutex_t *) Mutex );
-    DEBUG_PRINT( "Completed wait on mutex at %p\n", Mutex );
 }
+
 
 void
 xenevent_mutex_release( xenevent_mutex_t Mutex )
 {
-    DEBUG_PRINT( "Releasing mutex at %p\n", Mutex );
     mutex_exit( (kmutex_t *) Mutex );
 }
 
@@ -131,11 +130,13 @@ xenevent_mutex_destroy( xenevent_mutex_t * Mutex )
     }
 }
 
+
 uint32_t
 xenevent_atomic_inc( uint32_t * old )
 {
     return atomic_inc_32_nv( old );
 }
+
 
 uint32_t
 xenevent_atomic_dec( uint32_t * old )
