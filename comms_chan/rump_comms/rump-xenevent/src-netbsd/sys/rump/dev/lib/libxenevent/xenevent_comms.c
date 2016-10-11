@@ -402,7 +402,7 @@ xe_comms_write_item( void * Memory,
     ++g_state.back_ring.rsp_prod_pvt;
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
 
-    if ( do_event )
+    if ( do_event || !do_event )
     {
         (void) send_event( g_state.local_event_port );
     }
