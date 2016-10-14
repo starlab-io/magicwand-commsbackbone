@@ -20,10 +20,19 @@
 #include <unistd.h>
 #include <stdint.h>
 
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+
 #include <message_types.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
+
+#define SERVER_NAME "rumprun-echo_server-rumprun.bin"
+#define SERVER_IP   "10.190.2.101"
+//#define SERVER_PORT 8888 
+#define SERVER_PORT 21845 
 
 static int fd;
 static int request_id;
@@ -68,6 +77,45 @@ build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     csock->base.sockfd = SockInfo->sockfd;
 }
  
+void
+build_connect_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
+{
+    mt_request_socket_connect_t * connect = &(Request->socket_connect);
+
+    bzero( Request, sizeof(*Request) );
+
+    connect->base.sig  = MT_SIGNATURE_REQUEST;
+    connect->base.type = MtRequestSocketConnect;
+    connect->base.id = request_id++;
+    connect->base.sockfd = SockInfo->sockfd;
+
+    connect->port = SockInfo->destport;
+
+    strcpy( (char *) connect->hostname, SockInfo->desthost );
+    connect->base.size = sizeof( connect->port ) + strlen( SERVER_IP ) + 1; 
+    //connect->base.size = 0; 
+}
+
+void
+build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
+{
+    mt_request_socket_write_t * wsock = &(Request->socket_write);
+
+    static int msg_num = 1;
+    bzero( Request, sizeof(*Request) );
+
+    wsock ->base.sig  = MT_SIGNATURE_REQUEST;
+    wsock->base.type = MtRequestSocketWrite;
+    wsock->base.id = request_id++;
+    wsock->base.sockfd = SockInfo->sockfd;
+
+    snprintf( (char *) wsock->bytes, sizeof(wsock->bytes),
+              "Hello from build traffic file: message %d sock %d\n",
+              msg_num++, SockInfo->sockfd );
+
+    wsock->base.size = (mt_size_t)strlen( wsock->bytes ) + 1;
+}
+
 int 
 socket(int domain, int type, int protocol)
 {
@@ -132,10 +180,83 @@ close(int sock_fd)
    return 0;
 }
 
+int 
+connect(int sockfd, 
+        const struct sockaddr *addr,
+        socklen_t addrlen)
+{
+
+   mt_request_generic_t request;
+   mt_response_generic_t response;
+
+   if (sock_info.sockfd <= 0)
+   {
+      printf("Socket file descriptor value invalid\n");
+      return 1;
+   }
+
+   sock_info.desthost = SERVER_IP; 
+   //sock_info.desthost = SERVER_NAME; 
+   sock_info.destport = SERVER_PORT; 
+
+   build_connect_socket( &request, &sock_info );
+
+   printf("Sending connect-socket request on socket number: %d\n", sock_info.sockfd);
+   printf("\tSize of request base: %lu\n", sizeof(request));
+   printf("\t\tSize of payload: %d\n", request.base.size);
+
+   write(fd, &request, sizeof(request)); 
+
+   read(fd, &response, sizeof(response));
+
+   printf("Connect-socket response returned\n");
+   printf("\tSize of response base: %lu\n", sizeof(response));
+   printf("\t\tSize of payload: %d\n", response.base.size);
+
+   return 0;
+}
+
+ssize_t 
+send(int sockfd, 
+      const void *buf, 
+      size_t len,
+      int    flags)
+{
+
+   mt_request_generic_t request;
+   mt_response_generic_t response;
+
+   if (sock_info.sockfd <= 0)
+   {
+      printf("Socket file descriptor value invalid\n");
+      return 1;
+   }
+
+   build_write_socket( &request, &sock_info );
+
+   printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
+   printf("\tSize of request base: %lu\n", sizeof(request));
+   printf("\t\tSize of payload: %d\n", request.base.size);
+
+   write(fd, &request, sizeof(request)); 
+
+   read(fd, &response, sizeof(response));
+
+   printf("Write-socket response returned\n");
+   printf("\tSize of response base: %lu\n", sizeof(response));
+   printf("\t\tSize of payload: %d\n", response.base.size);
+
+   return 0;
+}
+
 void _init(void)
 {
     request_id = 0;
     memset(&sock_info, 0, sizeof(sinfo_t));
+
+    //sock_info.destport = 8888;
+    //sock_info.desthost = SERVER_NAME;
+    //sock_info.desthost = SERVER_IP;
 
     printf("Intercept module loaded\n");
 
