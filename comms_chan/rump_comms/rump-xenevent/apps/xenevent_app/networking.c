@@ -152,6 +152,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is connecting to %s:%d\n",
                   WorkerThread->idx, WorkerThread->sock_fd,
                   Request->hostname, Request->port );
+    DEBUG_BREAK();
 
     if ( snprintf( portBuf, sizeof(portBuf), "%d", Request->port ) <= 0 )
     {

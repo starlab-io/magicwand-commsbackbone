@@ -26,7 +26,7 @@
 //////////////////////////////////////////////////////////
 //               UPDATE THESE VALUES 
 //////////////////////////////////////////////////////////
-const char * g_remote_host = "10.190.2.104";
+const char * g_remote_host = "10.190.2.101";
 const char * g_remote_port = "21845";
 
 #define TEST_MESSAGE "Hello from multi-threaded Rump app!\n"

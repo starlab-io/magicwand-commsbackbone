@@ -516,13 +516,15 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // Typically the caller needs to do more work on this buffer
     *ProcessFurther = true;
     
+    DEBUG_BREAK();
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
-    if ( MtRequestSocketCreate == request_type )
+    if ( MtRequestSocketCreate == request_type ) 
+    
     {
         // Request is for a new socket, so we assign the task to an
         // unassigned thread. The thread and socket will be bound
@@ -546,10 +548,23 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         BufferItem->assigned_thread = *AssignedThread;
         rc = process_buffer_item( BufferItem );
     }
+    /*
+    else if ( MtRequestSocketConnect == request_type )
+    {
+        *ProcessFurther = false;
+
+        rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
+
+        BufferItem->assigned_thread = *AssignedThread;
+        rc = process_buffer_item( BufferItem );
+
+    }
+    */
     else
     {
         // This request is for an existing connection. Find the thread
         // that services the connection and assign it.
+        DEBUG_BREAK();
         rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
         if ( rc )
         {
@@ -619,6 +634,7 @@ worker_thread_func( void * Arg )
         sem_wait( &myitem->awaiting_work_sem );
         
         DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
+        DEBUG_BREAK();
 
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
