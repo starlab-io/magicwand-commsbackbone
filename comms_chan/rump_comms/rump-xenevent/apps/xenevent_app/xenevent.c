@@ -62,6 +62,8 @@
 
 #include "rumpdeps.h"
 
+#include <sys/time.h>
+
 #include <sys/fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -118,6 +120,20 @@ typedef struct _xenevent_globals
 } xenevent_globals_t;
 
 static xenevent_globals_t g_state;
+
+static inline void
+xe_yield( void )
+{
+    struct timespec ts = {0, 1}; // 0 seconds, N nanoseconds
+    //struct timespec rem = ts; // remaining time
+
+    // Call nanosleep() until the sleep has occured for the required duration
+    while ( ts.tv_nsec > 0 )
+    {
+        (void) nanosleep( &ts, &ts );
+    }
+}
+
 
 static void
 debug_print_state( void )
@@ -761,7 +777,7 @@ init_state( void )
     }
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
-    sched_yield();
+    xe_yield();
     
 ErrorExit:
     return rc;
@@ -825,7 +841,7 @@ message_dispatcher( void )
         buffer_item_t * myitem = NULL;
 
         // Always allow other threads to run in case there's work.
-        sched_yield();
+        xe_yield();
 
         DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
@@ -885,7 +901,7 @@ message_dispatcher( void )
     } // while
     
 ErrorExit:
-    sched_yield();
+    xe_yield();
     return rc;
 
 } // message_dispatcher
@@ -915,7 +931,7 @@ test_message_dispatcher( void )
             // Failed to find an available buffer item. We should
             // yield this thread and try again.
             MYASSERT( !"No buffer items are available" );
-            sched_yield();
+            xe_yield();
             continue;
         }
 
