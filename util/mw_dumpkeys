@@ -1,0 +1,5 @@
+#!/bin/sh
+
+KEYPATH=/unikernel/random
+
+sudo xenstore-ls -fp $KEYPATH
