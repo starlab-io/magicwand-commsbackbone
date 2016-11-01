@@ -19,27 +19,47 @@
 #include <sched.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <sys/time.h>
+
 
 #include "app_common.h"
 
+// Observe differing behaviors when this is or is not defined
+//#define SLEEP 1
 
 //////////////////////////////////////////////////////////
-//               UPDATE THESE VALUES 
+// UPDATE THESE VALUES
+//
+// There must be a listener on the IP/port pair given,
+// e.g. run "nc -l 21845" on the host.
 //////////////////////////////////////////////////////////
-const char * g_remote_host = "10.190.2.101";
+
+// Update run.sh so the unikernel and the listener are on the same
+// subnet.
+const char * g_remote_host = "192.168.0.12";
 const char * g_remote_port = "21845";
 
 #define TEST_MESSAGE "Hello from multi-threaded Rump app!\n"
 
-static void *
-worker_thread_nop( void * Arg )
-{
-    int rc = 0;
-    DEBUG_PRINT( "Worker thread doing nothing\n" );
-    sleep(10);
-    pthread_exit( &rc );
-}
+static int g_connect_returned = 0;
 
+static void
+local_yield( void )
+{
+#ifdef SLEEP
+    // Sleep for 1 ns
+    struct timespec ts = { 0, 1 };
+    
+    // Call nanosleep() until the sleep has occured for the required duration
+    while ( ts.tv_nsec > 0 )
+    {
+        (void) nanosleep( &ts, &ts );
+    }
+#else
+    // Yield the current thread
+    sched_yield();
+#endif // SLEEP
+}
 
 static void *
 worker_thread_connect( void * Arg )
@@ -66,13 +86,14 @@ worker_thread_connect( void * Arg )
     for (serverIter = serverInfo; serverIter != NULL; serverIter = serverIter->ai_next)
     {
         DEBUG_BREAK();
+        DEBUG_PRINT( "calling connect()\n" );
         rc = connect( sockfd, serverIter->ai_addr, serverIter->ai_addrlen);
+        g_connect_returned = 1;
         DEBUG_PRINT( "connect() ==> %d\n", rc );
         DEBUG_BREAK();
         if ( rc < 0 )
         {
-            // Silently continue
-            continue;
+            continue; // Silently continue
         }
 
         // If we get here, we must have connected successfully
@@ -117,16 +138,16 @@ int main(void)
     MYASSERT( 0 == rc );
     DEBUG_PRINT( "Worker thread spawned\n" );
 
-    // 2.b Create threads that do nothing
-    for ( int i = 1; i < NUMBER_OF(threads); i++ )
-    {
-        rc = pthread_create( &threads[i],
-                             NULL,
-                             worker_thread_nop,
-                             NULL );
-        MYASSERT( 0 == rc );
-    }
+    // Allow other thread(s) to run. They might not run, depending on
+    // how we implement this.
+    local_yield();
 
+    if ( g_connect_returned )
+    {
+        DEBUG_PRINT( "OK: Connect completed before join()\n" );
+    } else {
+        DEBUG_PRINT( "Bad: Connect has NOT completed before join()\n" );
+    }
     
     for ( int i = 0; i < NUMBER_OF(threads); i++ )
     {
@@ -134,7 +155,5 @@ int main(void)
         DEBUG_PRINT( "Worker thread joined\n" );
     }
 
-
-//ErrorExit:
     return rc;
 }

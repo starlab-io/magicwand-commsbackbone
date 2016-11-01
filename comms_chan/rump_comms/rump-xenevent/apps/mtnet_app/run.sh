@@ -5,14 +5,18 @@
 ##
 
 echo "If debugging, use:"
-echo "gdb -ex 'target remote:1234' xenevent.run"
+echo "gdb -ex 'target remote:1234' mt_connect.run"
 
-#rumprun -S xen -dip -D 1234 -M 256 -N mt_connect \
-#    -I xen0,xenif \
-#    -W xen0,inet,static,10.190.2.111/24 \
-#    mt_connect.run
+IP=192.168.0.120
 
-rumprun -S xen -di -D 1234 -M 256 -N mt_connect \
+# no debug
+rumprun -S xen -i -M 256 -N mt_connect \
     -I xen0,xenif \
-    -W xen0,inet,static,10.190.2.111/24 \
+    -W xen0,inet,static,$IP/24 \
     mt_connect.run
+
+#DEBUG
+#rumprun -S xen -di -D 1234 -M 256 -N mt_connect \
+#    -I xen0,xenif \
+#    -W xen0,inet,static,$IP/24 \
+#    mt_connect.run

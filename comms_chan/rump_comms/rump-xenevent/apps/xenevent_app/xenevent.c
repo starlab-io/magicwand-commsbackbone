@@ -125,8 +125,7 @@ static inline void
 xe_yield( void )
 {
     struct timespec ts = {0, 1}; // 0 seconds, N nanoseconds
-    //struct timespec rem = ts; // remaining time
-
+ 
     // Call nanosleep() until the sleep has occured for the required duration
     while ( ts.tv_nsec > 0 )
     {
