@@ -35,7 +35,7 @@ for d in `echo $PATH | sed -e "s/:/ /g"`; do
 done
 
 # Now, update the PATH to include the needed subdirectories here
-export PATH=$PWD/rumprun-fix_connect2/bin:$PWD/obj-amd64-xen-fix_connect2/rumptools/bin:$newpath
+export PATH=$PWD/rumprun/bin:$PWD/obj-amd64-xen/rumptools/bin:$newpath
 echo "New path: $PATH"
 
 export RUMPROOT=$PWD
