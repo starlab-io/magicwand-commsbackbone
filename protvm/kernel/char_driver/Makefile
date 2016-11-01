@@ -1,6 +1,6 @@
 obj-m+=char_driver.o
 
-EXTRA_CFLAGS := -I$(src)/../../../rump_comms/common
+EXTRA_CFLAGS := -I$(src)/../../../common
 EXTRA_CFLAGS += -std=gnu99
 
 all:
