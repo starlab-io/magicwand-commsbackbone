@@ -1,0 +1,17 @@
+#!/bin/sh
+
+KEYPATH=/unikernel/random
+
+sudo xenstore-write $KEYPATH ""
+# (b)oth - read + write
+sudo xenstore-chmod $KEYPATH b
+
+for subkey in \
+   server_id client_id gnt_ref msg_len \
+   vm_evt_chn_prt \
+   uk_evt_chn_prt \
+   vm_evt_chn_is_bound
+do
+    sudo xenstore-write $KEYPATH/$subkey 0
+done 
+
