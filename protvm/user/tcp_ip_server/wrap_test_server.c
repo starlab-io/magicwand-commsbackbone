@@ -30,7 +30,8 @@
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-#define SERVER_IP   "10.190.2.101"
+//#define SERVER_IP   "10.190.2.101"
+#define SERVER_IP   "192.168.0.12"
 //#define SERVER_PORT 8888 
 #define SERVER_PORT 21845 
 
@@ -54,7 +55,7 @@ build_create_socket( mt_request_generic_t * Request )
 
     create->base.sig = MT_SIGNATURE_REQUEST;
     create->base.type = MtRequestSocketCreate;
-    create->base.size = 0; 
+    create->base.size = MT_REQUEST_SOCKET_CREATE_SIZE;
     create->base.id = request_id++;
     create->base.sockfd = 0;
 
@@ -72,7 +73,7 @@ build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
 
     csock->base.sig  = MT_SIGNATURE_REQUEST;
     csock->base.type = MtRequestSocketClose;
-    csock->base.size = 0; 
+    csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
     csock->base.id = request_id++;
     csock->base.sockfd = SockInfo->sockfd;
 }
@@ -92,8 +93,7 @@ build_connect_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     connect->port = SockInfo->destport;
 
     strcpy( (char *) connect->hostname, SockInfo->desthost );
-    connect->base.size = sizeof( connect->port ) + strlen( SERVER_IP ) + 1; 
-    //connect->base.size = 0; 
+    connect->base.size = MT_REQUEST_SOCKET_CONNECT_SIZE + strlen( SERVER_IP ) + 1; 
 }
 
 void
@@ -113,7 +113,8 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
               "Hello from build traffic file: message %d sock %d\n",
               msg_num++, SockInfo->sockfd );
 
-    wsock->base.size = (mt_size_t)strlen( wsock->bytes ) + 1;
+    // Fix to handle non-ascii payload
+    wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
 }
 
 int 
@@ -222,7 +223,6 @@ send(int sockfd,
       size_t len,
       int    flags)
 {
-
    mt_request_generic_t request;
    mt_response_generic_t response;
 
@@ -232,6 +232,7 @@ send(int sockfd,
       return 1;
    }
 
+   // XXXX: pass the size
    build_write_socket( &request, &sock_info );
 
    printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
