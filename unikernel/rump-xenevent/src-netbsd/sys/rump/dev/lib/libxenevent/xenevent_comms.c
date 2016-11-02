@@ -340,7 +340,8 @@ xe_comms_read_item( void * Memory,
                           g_state.back_ring.req_cons );
 
     if ( !MT_IS_REQUEST( request ) ||
-         request->base.size > Size    )
+         request->base.size > Size ||
+         0 == request->base.size         )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Programming error: there's a problem with the request" );

@@ -45,7 +45,8 @@ int main(int argc , char *argv[])
 
     // 2> Call connect
 
-    server.sin_addr.s_addr = inet_addr("10.190.2.101");
+    server.sin_addr.s_addr = inet_addr("192.168.0.12");
+//    server.sin_addr.s_addr = inet_addr("10.190.2.101");
     server.sin_family = AF_INET;
     //server.sin_port = htons( 8888 );
     server.sin_port = htons( 21845);
