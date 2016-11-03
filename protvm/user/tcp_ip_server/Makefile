@@ -6,7 +6,7 @@
 
 CC = gcc
 CFLAGS = -Wall -fPIC -DPIC
-CFLAGS += -I../../../rump_comms/common/
+CFLAGS += -I../../../common
 
 LD = ld
 LDFLAGS = -shared

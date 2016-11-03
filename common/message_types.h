@@ -201,7 +201,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_connect
     // nothing else
 } mt_response_socket_connect_t;
 
-#define MT_REQUEST_SOCKET_CONNECT_SIZE  sizeof(mt_request_socket_connect_t)
+#define MT_REQUEST_SOCKET_CONNECT_SIZE  (sizeof(mt_request_base_t) + sizeof(mt_port_t))
 #define MT_RESPONSE_SOCKET_CONNECT_SIZE sizeof(mt_response_socket_connect_t)
 
 
