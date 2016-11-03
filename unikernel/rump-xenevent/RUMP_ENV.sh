@@ -34,8 +34,24 @@ for d in `echo $PATH | sed -e "s/:/ /g"`; do
     fi
 done
 
+GIT=git
+
+# are we on a git branch which is not master?
+if type ${GIT} >/dev/null; then
+    GITBRANCH=$(${GIT} rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [ ${GITBRANCH} = "master" -o ${GITBRANCH} = "HEAD" ]; then
+        GITBRANCH=
+    else
+         GITBRANCH=-${GITBRANCH}
+    fi
+else
+    GITBRANCH=
+fi
+
+
+
 # Now, update the PATH to include the needed subdirectories here
-export PATH=$PWD/rumprun/bin:$PWD/obj-amd64-xen/rumptools/bin:$newpath
+export PATH=$PWD/rumprun$GITBRANCH/bin:$PWD/obj-amd64-xen$GITBRANCH/rumptools/bin:$newpath
 echo "New path: $PATH"
 
 export RUMPROOT=$PWD
