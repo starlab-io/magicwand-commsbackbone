@@ -30,10 +30,9 @@
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-//#define SERVER_IP   "10.190.2.101"
-//#define SERVER_IP   "192.168.0.12"
+
+//Server IP address is the ip address that the final message will be sent to
 #define SERVER_IP   "192.168.0.8"
-//#define SERVER_PORT 8888 
 #define SERVER_PORT 21845 
 
 static int fd;
@@ -214,7 +213,7 @@ connect(int sockfd,
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   return 0;
+   return response.base.status;
 }
 
 ssize_t 
