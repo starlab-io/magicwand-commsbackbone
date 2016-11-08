@@ -27,6 +27,8 @@ int main(int argc , char *argv[])
     char               client_message[20];
     char              *hello = "Hello\n";
 
+    int i = 0;
+
     memset( client_message, 0, 20);
     strcpy(client_message, hello);
 
@@ -43,24 +45,29 @@ int main(int argc , char *argv[])
         printf("Socket Number: %d\n", socket_desc);
     }
 
+
     // 2> Call connect
 
-    server.sin_addr.s_addr = inet_addr("192.168.0.12");
+    server.sin_addr.s_addr = inet_addr("192.168.0.24");
 //    server.sin_addr.s_addr = inet_addr("10.190.2.101");
     server.sin_family = AF_INET;
     //server.sin_port = htons( 8888 );
-    server.sin_port = htons( 21845);
+    server.sin_port = htons(21845);
 
-    if (connect(socket_desc, (struct sockaddr *)&server , sizeof(server)) < 0)
+    if (connect(socket_desc, (struct sockaddr *)&server , sizeof(server)) != 0)
     {
-        printf("connect failed. Error");
+        printf("connect failed. Error/n");
         return 1;
     }
 
     printf("Connected\n");
 
-    // 3> Call write
-    send(socket_desc, client_message , strlen(client_message), 0);
+
+    for( i = 0; i < 200; i++ )
+    {
+        // 3> Call write
+        send(socket_desc, client_message , strlen(client_message), 0);
+    }
 
     // 4> Call close
     close(socket_desc);
