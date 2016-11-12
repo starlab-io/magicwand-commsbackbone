@@ -16,6 +16,7 @@ LIBS = -lpthread
 TCP_IP_APP_NAME=test_tcpip_app
 PRE_LOAD_LIB_NAME=wrap_test_server
 LIST_SRCS = list.c sock_info_list.c
+LIST_OBJ = list.o sock_info_list.o
 
 all: list $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so
 
@@ -43,5 +44,5 @@ $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o
 	@echo ""
 
 clean:
-	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so 
+	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ) $(PRE_LOAD_LIB_NAME).so 
 

@@ -1,4 +1,18 @@
 
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
+/**
+ * @file    list.h
+ * @author  Mark Mason 
+ * @date    4 November 2016
+ * @version 0.1
+ * @brief   List Abstraction 
+ */
+
 #ifndef __LIST_H__
 #define __LIST_H__
 
@@ -20,30 +34,43 @@ struct list_manager {
 	void (*remove)(void *member);
 };
 
-struct list * create_list(void);
+struct list * 
+create_list( void );
 
-void destroy_list(struct list **list);
+void 
+destroy_list( struct list **list );
 
-void set_list_manager(
-	struct list         *list,
-	struct list_manager *manager);
+void 
+set_list_manager( struct list         *list,
+                  struct list_manager *manager );
 
-int add_list_member(struct list *list, 
-                    void *member);
+int 
+add_list_member( struct list *list, 
+                 void *member );
 
-void remove_list_member(struct list *list, void *member);
+void 
+remove_list_member( struct list *list, 
+                    void *member );
 
-void remove_all_list_members(struct list *list);
+void 
+remove_all_list_members( struct list *list );
 
-void* find_list_member(struct list *list, void *member);
+void* 
+find_list_member( struct list *list, 
+                  void *member );
 
-int count_list_members(struct list *list);
+int 
+count_list_members( struct list *list );
 
-list_iterator get_list_iterator(struct list *list);
+list_iterator 
+get_list_iterator( struct list *list );
 
-void get_next_list_member(list_iterator *iterator, void **member);
+void 
+get_next_list_member( list_iterator *iterator, 
+                      void **member );
 
-bool is_another_list_member_available(list_iterator iterator);
+bool 
+is_another_list_member_available( list_iterator iterator );
 
 #endif
 

@@ -37,15 +37,19 @@ struct list {
 // A dummy voip implementation to enable the 
 // list manager to innocuously/safely do nothing
 //
-static void *create_voip( void );
+static void 
+*create_voip( void );
 
-static void  copy_voip( void *source_voip, 
-                        void *dest_voip );
+static void  
+copy_voip( void *source_voip, 
+           void *dest_voip );
 
-static bool  compare_voips( void *voip_1, 
-                            void *voip_2 );
+static bool  
+compare_voips( void *voip_1, 
+               void *voip_2 );
 
-static void  remove_voip( void *voip );
+static void  
+remove_voip( void *voip );
 
 static struct list_manager voip_manager = {
 
@@ -322,22 +326,22 @@ add_list_member( struct list *list,
 	else
 		error = add_new_list_member(list, new_member);
 
-	return 0;
+	return error;
 }
 
 void
 remove_list_member( struct list *list,
-	            void        *new_member )
+	            void        *old_member )
 {
 	struct list_member *member;
 
 	if (list == NULL)
 		return;
 
-	if (new_member == NULL)
+	if (old_member == NULL)
 		return;
 
-	member = find_member(list, new_member);
+	member = find_member(list, old_member);
 	if (member == NULL)
 		return;
 
