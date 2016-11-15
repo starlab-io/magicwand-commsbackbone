@@ -1,0 +1,173 @@
+
+
+How to install a pvm using OS X and VirtualBox
+
+
+	
+1.	Create new Ubuntu Virtual Box
+
+		1. Go to Network Settings and select bridged adapter
+
+			a. USE ETHERNET Xen does not like Wifi
+
+			b. set to promiscuous mode ALLOW ALL
+
+		2. Give the machine 80Gb of space
+
+		2. Go to http://releases.ubuntu.com/14.04/
+
+			a. download ubuntu-14.04.4-server-amd64.iso
+
+		3. Add this ISO to the VM’s optical drive
+
+		4. Start up the VM to begin the installation process
+
+			a.When partitioning option comes up, select USE ENTIRE DISK AND SET UP LVM
+
+			b. use 50 or so gb for LVM I think it is easy to make bigger
+			
+		
+3. Install Xen 4.4 on newly created VM
+
+	a.  Start up or ssh into your newly created VM and run these commands:
+
+		1.  $ sudo apt-get install xen-hypervisor-amd64
+		    $ sudo reboot
+
+		2. verify installation succeeded
+		   $sudo xl list
+		   Name                                        ID   Mem VCPUs      State   Time(s)
+		   Domain-0                                     0   945     1     r-----      11.3
+
+4. Network Setup
+
+	a. if network manager is active stop it
+	    $ sudo stop network-manager
+	    $ echo “manual” | sudo tee /etc/init/network-manager.override
+	
+	b. Install bridge-utils
+	   $ sudo apt-get install bridge-utils
+	
+	c. configure /etc/network/interfaces
+		COPY PASTE EXAMPLE FILE IN BOTTOM SECTION
+	
+	d. restart networking and enable xenbr0 bridge
+	    $ sudo sudo ifdown eth0 && sudo ifup xenbr0 && sudo ifup eth0
+
+
+5. Manually Create PV Guest VM
+	
+	a. List existing volume groups and choose where you’d like your new volume
+	    $ sudo vas
+	
+	b. create logical volume
+	    $ sudo lvcreate -L 10G -n -lv_vm_ubuntu /dev/<VGNAME>
+	
+	c. confirm logical volume was successfully created
+	    $ sudo las
+
+6. Get Netboot images
+
+    $ sudo mkdir -p /var/lib/xen/images/ubuntu-netboot/trusty14LTS
+    $ cd /var/lib/xen/images/ubuntu-netboot/trusty14LTS 
+    $ wget http://us.archive.ubuntu.com/ubuntu/dists/trusty/main/installer-amd64/current/images/netboot/xen/vmlinuz
+    $ wget http://us.archive.ubuntu.com/ubuntu/dists/trusty/main/installer-amd64/current/images/netboot/xen/initrd.gz
+	
+7. Set up Initial Guest Configuration
+	
+	a. Copy my BEFORE INSTALL file: ubud1.conf into /etc/xen/
+	
+	b. start VM and perform install
+	    $ sudo xl create -c /etc/xen/ubud1.cfg
+
+	c. if network config fails, make sure your virtual box machine is set to promiscuous mode ALLOW ALL
+
+	d. restart guest vm
+	    $ sudo xl shutdown ubud1
+
+8. boot into guest system
+	
+	a. copy my AFTER INSTALL file: ubud1.conf into /etc/xen overwriting the BEFORE INSTALL
+
+	b. boot up guest vm
+	    $ sudo xl create -c /etc/xen/ubud1.cfg
+
+DONE
+
+
+				
+REFERENCE
+
+my /etc/xen/ubud1.conf   BEFORE INSTALL
+
+*****************************begin file*******************************
+
+name = "ubud1"
+
+kernel = "/var/lib/xen/images/ubuntu-netboot/trusty14LTS/vmlinuz"
+ramdisk = "/var/lib/xen/images/ubuntu-netboot/trusty14LTS/initrd.gz"
+#bootloader = "/usr/lib/xen-4.4/bin/pygrub"
+
+memory = 1024
+
+vcpus = 1
+
+vif = [ 'bridge=xenbr0' ]
+
+disk = [ '/dev/dom0-vg/lv_vm_ubuntu,raw,xvda,rw' ]
+
+# You may also consider some other options
+# [[http://xenbits.xen.org/docs/4.4-testing/man/xl.cfg.5.html]]
+
+*************************end file***************************************
+
+
+
+
+
+
+my /etc/xen/ubud1.conf   AFTER INSTALL
+
+*****************************begin file*******************************
+
+name = "ubud1"
+
+#kernel = "/var/lib/xen/images/ubuntu-netboot/trusty14LTS/vmlinuz"
+#ramdisk = "/var/lib/xen/images/ubuntu-netboot/trusty14LTS/initrd.gz"
+bootloader = "/usr/lib/xen-4.4/bin/pygrub"
+
+memory = 1024
+
+vcpus = 1
+
+vif = [ 'bridge=xenbr0' ]
+
+disk = [ '/dev/dom0-vg/lv_vm_ubuntu,raw,xvda,rw' ]
+
+# You may also consider some other options
+# [[http://xenbits.xen.org/docs/4.4-testing/man/xl.cfg.5.html]]
+
+*************************end file***************************************
+
+
+
+
+
+
+
+
+my /etc/network/interfaces
+
+*****************************begin file*********************************
+
+auto lo eth0 xenbr0
+iface lo inet loopback
+
+iface xenbr0 inet dhcp
+    bridge_ports eth0
+
+
+iface eth0 inet manual
+
+
+***************************end file**************************************
