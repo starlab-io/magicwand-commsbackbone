@@ -49,13 +49,8 @@ else
 fi
 
 
-
 # Now, update the PATH to include the needed subdirectories here
-<<<<<<< HEAD
 export PATH=$PWD/rumprun$GITBRANCH/bin:$PWD/obj-amd64-xen$GITBRANCH/rumptools/bin:$newpath
-=======
-export PATH=$PWD/rumprun-performance_tests/bin:$PWD/obj-amd64-xen-performance_tests/rumptools/bin:$newpath
->>>>>>> 475c34b25a45733bcaba5796ece04b18b192e2c5
 echo "New path: $PATH"
 
 export RUMPROOT=$PWD
