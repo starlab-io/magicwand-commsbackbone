@@ -10,7 +10,7 @@ CFLAGS += -I..
 CFLAGS += -I../../../../common
 CFLAGS += -I../platform/xen/xen/include 
 
-CFLAGS+= -DMYDEBUG
+#CFLAGS+= -DMYDEBUG
 #CFLAGS+= -DMYTRAP
 #CFLAGS+= -DNODEVICE
 

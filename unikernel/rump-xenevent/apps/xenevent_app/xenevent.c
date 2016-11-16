@@ -563,6 +563,17 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         BufferItem->assigned_thread = *AssignedThread;
         rc = process_buffer_item( BufferItem );
     }
+    else if ( MtRequestSocketConnect == request_type ||
+              MtRequestSocketWrite   == request_type )
+    {
+        *ProcessFurther = false;
+
+        rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
+
+        BufferItem->assigned_thread = *AssignedThread;
+
+        rc = process_buffer_item( BufferItem );
+    }
     else
     {
         // This request is for an existing connection. Find the thread
