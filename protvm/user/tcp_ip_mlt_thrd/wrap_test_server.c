@@ -38,11 +38,13 @@
 static int fd;
 static int request_id;
 
+/*
 typedef struct _sinfo {
     int    sockfd;
     char * desthost;
     int    destport;
 } sinfo_t;
+*/
 
 sinfo_t sock_info;
 
