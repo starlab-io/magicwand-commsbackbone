@@ -8,6 +8,8 @@ CC = gcc
 CFLAGS = -Wall -fPIC -DPIC
 CFLAGS += -I../../../common
 
+CFLAGS += -DMYDEBUG
+
 LD = ld
 LDFLAGS = -shared
 

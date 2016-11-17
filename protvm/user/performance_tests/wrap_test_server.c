@@ -30,10 +30,10 @@
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-//#define SERVER_IP   "10.190.2.101"
+#define SERVER_IP   "192.168.0.8"
 
 //Server IP address is the ip address that the final message will be sent to
-#define SERVER_IP   "10.1.2.5"
+//#define SERVER_IP   "10.1.2.5"
 //#define SERVER_PORT 8888 
 #define SERVER_PORT 21845 
 
@@ -106,7 +106,7 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
-    wsock ->base.sig  = MT_SIGNATURE_REQUEST;
+    wsock->base.sig  = MT_SIGNATURE_REQUEST;
     wsock->base.type = MtRequestSocketWrite;
     wsock->base.id = request_id++;
     wsock->base.sockfd = SockInfo->sockfd;
@@ -130,9 +130,11 @@ socket(int domain, int type, int protocol)
 
    build_create_socket( &request );
 
+#ifdef MYDEBUG
    printf("Sending socket-create request\n");
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
+#endif
 
    write(fd, &request, sizeof(request)); 
 
@@ -141,9 +143,11 @@ socket(int domain, int type, int protocol)
    sock_info.sockfd = response.base.sockfd;
    //sockfd = response.base.sockfd;
 
+#ifdef MYDEBUG
    printf("Create-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
+#endif
 
    //return sockfd;
    return sock_info.sockfd;
@@ -168,18 +172,21 @@ close(int sock_fd)
       
    build_close_socket( &request, &sock_info );
 
+#ifdef MYDEBUG
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
+#endif
 
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
 
+#ifdef MYDEBUG
    printf("Close-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
-
+#endif
    return 0;
 }
 
@@ -204,17 +211,21 @@ connect(int sockfd,
 
    build_connect_socket( &request, &sock_info );
 
+#ifdef MYDEBUG
    printf("Sending connect-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
+#endif
 
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
 
+#ifdef MYDEBUG
    printf("Connect-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
+#endif
 
    return response.base.status;
 }

@@ -24,8 +24,10 @@ int		socket_desc;
 struct	sockaddr_in server;
 int		err = 0;
 
-char	client_message[20];
-char	*hello = "Hello\n";
+//char	client_message[20];
+//char	*hello = "Hello\n";
+char	client_message[60];
+char    *long_hello = "Hello from build traffic file: message 1 sock 8\n";
 
 
 void 	init();
@@ -36,7 +38,7 @@ void 	tear_down();
 int main(int argc , char *argv[])
 {
 	
-	int intervals = 10;
+	int intervals = 3;
 	double x = 0;
 	double time_val = 0.0;
 	
@@ -59,8 +61,9 @@ int main(int argc , char *argv[])
 void init(){
 	
 	
-    memset( client_message, 0, 20);
-    strcpy(client_message, hello);
+    //memset( client_message, 0, 20);
+    memset( client_message, 0, 60);
+    strcpy(client_message, long_hello);
 
     // 1> Call Socket
     socket_desc = socket(AF_INET , SOCK_STREAM , 0);
@@ -75,7 +78,7 @@ void init(){
     }
 
     // 2> Call connect
-    server.sin_addr.s_addr = inet_addr("10.1.2.5");
+    server.sin_addr.s_addr = inet_addr("192.168.0.8");
     server.sin_family = AF_INET;
     server.sin_port = htons(21845);
 
@@ -87,8 +90,6 @@ void init(){
 
     printf("Connected\n");
 }
-
-
 
 
 double iterate_send(int iterations)
