@@ -30,11 +30,9 @@
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-//#define SERVER_IP   "10.190.2.101"
 
 //Server IP address is the ip address that the final message will be sent to
-#define SERVER_IP   "192.168.0.24"
-//#define SERVER_PORT 8888 
+#define SERVER_IP   "192.168.0.8"
 #define SERVER_PORT 21845 
 
 static int fd;
@@ -122,7 +120,6 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
 int 
 socket(int domain, int type, int protocol)
 {
-
    //int sockfd = 0;
  
    mt_request_generic_t request;
