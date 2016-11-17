@@ -564,7 +564,8 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         rc = process_buffer_item( BufferItem );
     }
     else if ( MtRequestSocketConnect == request_type ||
-              MtRequestSocketWrite   == request_type )
+              MtRequestSocketWrite   == request_type || 
+              MtRequestSocketClose   == request_type )
     {
         *ProcessFurther = false;
 
@@ -839,7 +840,7 @@ message_dispatcher( void )
         buffer_item_t * myitem = NULL;
 
         // Always allow other threads to run in case there's work.
-        xe_yield();
+        //xe_yield();
 
         DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
@@ -899,7 +900,7 @@ message_dispatcher( void )
     } // while
     
 ErrorExit:
-    xe_yield();
+    //xe_yield();
     return rc;
 
 } // message_dispatcher
