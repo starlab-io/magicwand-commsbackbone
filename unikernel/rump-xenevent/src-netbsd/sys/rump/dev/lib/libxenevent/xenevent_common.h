@@ -53,8 +53,8 @@ extern char *strrchr(const char *, int);
 #ifdef MYDEBUG
 #  define DEBUG_BREAK()                                                 \
     DEBUG_PREAMBLE();                                                   \
-    bmk_printf ( "At breakpoint\n" );                              /*     \
-    asm("int $3\n\t") */
+    bmk_printf ( "At breakpoint\n" );                                   \
+    asm("int $3\n\t") 
 #else
 #  define DEBUG_BREAK() ((void)0)
 #endif

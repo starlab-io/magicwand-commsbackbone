@@ -52,7 +52,8 @@
 // 2^6 = 64 (0x40) pages, or 0x40000 bytes.
 //
 
-#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+//#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+#define XENEVENT_GRANT_REF_ORDER  1  // (2^order == page count)
 #define XENEVENT_GRANT_REF_COUNT  (1 << XENEVENT_GRANT_REF_ORDER)
 
 // Split the grant refs apart by this in XenStore
