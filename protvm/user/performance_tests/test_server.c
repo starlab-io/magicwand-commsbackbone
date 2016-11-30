@@ -20,9 +20,9 @@
 #include <stdlib.h>
 #include <math.h>
 
-int		socket_desc;
+int	socket_desc;
 struct	sockaddr_in server;
-int		err = 0;
+int	err = 0;
 
 //char	client_message[20];
 //char	*hello = "Hello\n";
@@ -38,7 +38,7 @@ void 	tear_down();
 int main(int argc , char *argv[])
 {
 	
-	int intervals = 3;
+	int intervals = 4;
 	double x = 0;
 	double time_val = 0.0;
 	
@@ -100,6 +100,8 @@ double iterate_send(int iterations)
 	struct timeval elapsed;
  	
 	gettimeofday(&start, NULL);
+
+        printf("Number of Iterations: %d\n", iterations);
 
 	for ( i = 0; i < iterations; i++)
 	{

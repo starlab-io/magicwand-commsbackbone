@@ -52,9 +52,10 @@
 #define TEST_MSG           "The abyssal plain is flat.\n"
 #define MAX_MSG             1
 
-#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
-#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
-#define XENEVENT_GRANT_REF_DELIM " "
+//#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
+//#define XENEVENT_GRANT_REF_ORDER  1 //(2^order == page count)
+//#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
+//#define XENEVENT_GRANT_REF_DELIM " "
 
 #define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
 #define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
@@ -231,6 +232,8 @@ static void send_evt(int evtchn_prt)
 
    send.port = evtchn_prt;
 
+   //xen_clear_irq_pending(irq);
+
    if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send)) {
       pr_err("Failed to send event\n");
    } /*else {
@@ -291,29 +294,52 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
 
    //start = ktime_get();
 
+   //printk(KERN_INFO "In receive_response(). Entering while loop ... \n");
+
    do
    {
 
       available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
 
-      if (!available) {
+      if ( !available ) {
          //printk(KERN_INFO "MWChar: down() called\n");
          down(&mw_sem);
       }
    
    } while (!available);
 
-   //end = ktime_get();
+   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
+   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
+   
 
-   //actual_time = ktime_to_ns(ktime_sub(end, start));
+   //printk(KERN_INFO "MWChar: down() called\n");
+   //down(&mw_sem);
+
+   end = ktime_get();
+
+   actual_time = ktime_to_ns(ktime_sub(end, start));
 
    //printk(KERN_INFO "Time taken for receive_response() execution (ns): %lld\n",
           //actual_time);
 
-   //actual_time = ktime_to_ms(ktime_sub(end, start));
+   printk(KERN_INFO "%d     %lld\n", irqs_handled, actual_time);
 
-   //printk(KERN_INFO "Time taken for receive_response() execution (ms): %lld\n",
-          //actual_time);
+   /*
+   actual_time = ktime_to_ms(ktime_sub(end, start));
+
+   printk(KERN_INFO "Time taken for receive_response() execution (ms): %lld\n",
+          actual_time);
+
+   available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+
+   if ( !available ) {
+      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned false\n");
+   }
+   else
+   {
+      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned true\n");
+   }
+   */
 
    src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
@@ -331,6 +357,9 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
 
    ++front_ring.rsp_cons;
+
+   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
+   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
 
 ErrorExit:
    return rc;
@@ -366,6 +395,7 @@ send_request(void *Request, size_t Size)
    //printk(KERN_INFO "MWChar: send_request(). Copied %lu bytes to destination buffer\n", Size);
 
    ++front_ring.req_prod_pvt;
+   //printk(KERN_INFO "front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
 
    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
 
@@ -575,15 +605,17 @@ static struct xenbus_watch client_id_watch = {
 
 static irqreturn_t irq_event_handler( int port, void * data )
 {
-    unsigned long flags;
+    //unsigned long flags;
 
-    local_irq_save( flags );
+    //local_irq_save( flags );
     //printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
            //port, data, irqs_handled);
    
     ++irqs_handled;
 
-    local_irq_restore( flags );
+    //xen_clear_irq_pending(irq);
+
+    //local_irq_restore( flags );
 
     up(&mw_sem);
 
@@ -599,11 +631,14 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
    printk(KERN_INFO "Checking whether %s is asserted\n",
           VM_EVT_CHN_BOUND);
+
    is_bound_str = (char *) read_from_key( VM_EVT_CHN_BOUND );
+
    if(XENBUS_IS_ERR_READ(is_bound_str)) {
       printk(KERN_INFO "Error reading evtchn bound key!!\n");
       return;
    }
+
    if (strcmp(is_bound_str,"0") == 0) {
       kfree(is_bound_str);
       return;
@@ -614,6 +649,7 @@ static void vm_port_is_bound(struct xenbus_watch *w,
    irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
+
    printk( KERN_INFO "Bound event channel %d to irq: %d\n",
            common_event_channel, irq );
 
@@ -861,16 +897,16 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 
    start = ktime_get();
    send_request(req, sizeof(*req));
-   end = ktime_get();
+   //end = ktime_get();
 
-   actual_time = ktime_to_ns(ktime_sub(end, start));
-   printk(KERN_INFO "Time taken for send_request() execution (ns): %lld\n",
-          actual_time);
+   //actual_time = ktime_to_ns(ktime_sub(end, start));
+   //printk(KERN_INFO "Time taken for send_request() execution (ns): %lld\n",
+          //actual_time);
 
-   actual_time = ktime_to_ms(ktime_sub(end, start));
+   //actual_time = ktime_to_ms(ktime_sub(end, start));
 
-   printk(KERN_INFO "Time taken for send_request() execution (ms): %lld\n",
-          actual_time);
+   //printk(KERN_INFO "Time taken for send_request() execution (ms): %lld\n",
+          //actual_time);
 
    return len;
 }
