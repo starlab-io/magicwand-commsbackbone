@@ -275,8 +275,13 @@ send_event(evtchn_port_t port)
 
     int  err;
 
+    //minios_mask_evtchn( port );
+    //minios_clear_evtchn( port );
+    //minios_unmask_evtchn( port );
+
     DEBUG_PRINT( "Sending event to (local) port %d\n", port );
     err = minios_notify_remote_via_evtchn( port );
+
     if ( err )
     {
         MYASSERT( !"Failed to send event" );
@@ -292,6 +297,7 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
+    //bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
 
     //send_event(port);
 
@@ -363,6 +369,8 @@ ErrorExit:
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
 
+    DEBUG_PRINT("g_state.back_ring.req_cons: %u\n", g_state.back_ring.req_cons);
+
     return rc;
 }
 
@@ -406,6 +414,8 @@ xe_comms_write_item( void * Memory,
     {
         (void) send_event( g_state.local_event_port );
     }
+
+    DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
 
     return rc;
 }
@@ -519,6 +529,9 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
                                           xe_comms_event_callback,
                                           g_state.event_channel_mem,
                                           &g_state.local_event_port );
+
+    //g_state.local_event_port = minios_bind_virq(28, xe_comms_event_callback, g_state.event_channel_mem);
+
     if (err)
     {
         MYASSERT(!"Could not bind to event channel\n");

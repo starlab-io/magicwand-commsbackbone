@@ -116,10 +116,30 @@ typedef struct _xenevent_globals
 
     int        input_fd;
     int        output_fd;
+
+    //pthread_attr_t attr;
+
+    //struct sched_param schedparam;
     
 } xenevent_globals_t;
 
 static xenevent_globals_t g_state;
+
+/*
+static struct timespec 
+diff(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+	if ((end.tv_nsec-start.tv_nsec)<0) {
+		temp.tv_sec = end.tv_sec-start.tv_sec-1;
+		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec-start.tv_sec;
+		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+	}
+	return temp;
+}
+*/
 
 static inline void
 xe_yield( void )
@@ -433,6 +453,8 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
     
+    //struct timespec t1,t2,t3;
+        
     MYASSERT( NULL != worker );
     
     DEBUG_PRINT( "Processing buffer item %d\n", BufferItem->idx );
@@ -481,9 +503,18 @@ process_buffer_item( buffer_item_t * BufferItem )
     MYASSERT( 0 == rc );
     MYASSERT( MT_IS_RESPONSE( &response ) );
     
+    //clock_gettime(CLOCK_REALTIME, &t1);
+
     size_t written = write( g_state.output_fd,
                             &response,
                             sizeof(response) );
+
+    //clock_gettime(CLOCK_REALTIME, &t2);
+
+    //t3 = diff(t1,t2);
+
+    //DEBUG_PRINT( "Time of Execution for write(). sec: %ld  nsec: %ld\n",
+	         //t3.tv_sec, t3.tv_nsec);
 
     if ( written != response.base.size )
     {
@@ -563,22 +594,26 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         BufferItem->assigned_thread = *AssignedThread;
         rc = process_buffer_item( BufferItem );
     }
+    /*
     else if ( MtRequestSocketConnect == request_type ||
-              MtRequestSocketWrite   == request_type )
+              MtRequestSocketWrite   == request_type || 
+              MtRequestSocketClose   == request_type )
     {
         *ProcessFurther = false;
 
+        // Assign thread 0 and comment out next two statements
         rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
 
         BufferItem->assigned_thread = *AssignedThread;
 
         rc = process_buffer_item( BufferItem );
     }
+    */
     else
     {
         // This request is for an existing connection. Find the thread
         // that services the connection and assign it.
-        DEBUG_BREAK();
+        //DEBUG_BREAK();
         rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
         if ( rc )
         {
@@ -718,7 +753,7 @@ init_state( void )
     // Init the threads' state, so that posting to the semaphores
     // works as soon as the threads start up.
     //
-
+    
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
         thread_item_t * curr = &g_state.worker_threads[i];
@@ -758,13 +793,38 @@ init_state( void )
         goto ErrorExit;
     }
 
+    /*
+    rc = pthread_attr_init(&g_state.attr);
+
+    if ( rc )
+    {
+        MYASSERT( !"pthread_attr_init" );
+        goto ErrorExit;
+    }
+
+    rc = pthread_attr_setdetachstate(&g_state.attr, PTHREAD_CREATE_DETACHED);
+
+    if ( rc )
+    {
+        MYASSERT( !"pthread_attr_setdetachstate" );
+        goto ErrorExit;
+    }
+
+    g_state.schedparam.sched_priority = 20;
+
+    //pthread_attr_setinheritsched(&g_state.attr, PTHREAD_EXPLICIT_SCHED);
+    pthread_attr_setinheritsched(&g_state.attr, PTHREAD_INHERIT_SCHED);
+    //pthread_attr_setschedpolicy(&g_state.attr, SCHED_RR);
+    pthread_attr_setschedpolicy(&g_state.attr, SCHED_FIFO);
+    pthread_attr_setschedparam(&g_state.attr, &g_state.schedparam);
+    */
     //
     // Start up the threads
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
         rc = pthread_create( &g_state.worker_threads[ i ].self,
-                             NULL,
+                             NULL,//&g_state.attr,
                              worker_thread_func,
                              &g_state.worker_threads[ i ] );
         if ( rc )
@@ -775,7 +835,8 @@ init_state( void )
     }
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
-    xe_yield();
+    //xe_yield();
+    sched_yield();
     
 ErrorExit:
     return rc;
@@ -801,6 +862,7 @@ fini_state( void )
         sem_post( &curr->awaiting_work_sem );
         
         pthread_join( curr->self, NULL );
+        //pthread_attr_destroy(&g_state.attr);
         workqueue_free( curr->work_queue );
         sem_destroy( &curr->awaiting_work_sem );
     }
@@ -831,15 +893,20 @@ message_dispatcher( void )
     ssize_t size = 0;
     bool more_processing = false;
 
+    //struct timespec t1,t2,t3;
+
     // Forever, read commands from device and dispatch them, allowing
     // the other threads to execute.
     while( true )
     {
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
+        mt_request_type_t request_type;
+
+        //clock_gettime(CLOCK_REALTIME, &t1);
 
         // Always allow other threads to run in case there's work.
-        xe_yield();
+        //xe_yield();
 
         DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
@@ -894,7 +961,24 @@ message_dispatcher( void )
 
             sem_post( &assigned_thread->awaiting_work_sem );
         }
+
         // Remember: we'll yield next...
+        request_type = MT_RESPONSE_GET_TYPE( myitem->request );
+        if ( request_type == MtRequestSocketConnect )
+        {
+            xe_yield();
+        } else 
+        {
+            sched_yield();
+        }
+
+        //clock_gettime(CLOCK_REALTIME, &t2);
+
+        //t3 = diff(t1,t2);
+
+        //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
+	             //t3.tv_sec, t3.tv_nsec);
+
 
     } // while
     
