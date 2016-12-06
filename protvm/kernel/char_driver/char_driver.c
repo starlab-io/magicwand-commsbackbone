@@ -90,6 +90,7 @@ static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 static int          irqs_handled = 0;
 static int          irq = 0;
 
+// Vars for performance tests
 ktime_t start, end;
 s64 actual_time;
 
@@ -315,14 +316,14 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    //printk(KERN_INFO "MWChar: down() called\n");
    //down(&mw_sem);
 
-   end = ktime_get();
+   //end = ktime_get();
 
-   actual_time = ktime_to_ns(ktime_sub(end, start));
+   //actual_time = ktime_to_ns(ktime_sub(end, start));
 
    //printk(KERN_INFO "Time taken for receive_response() execution (ns): %lld\n",
           //actual_time);
 
-   printk(KERN_INFO "%d     %lld\n", irqs_handled, actual_time);
+   //printk(KERN_INFO "%d     %lld\n", irqs_handled, actual_time);
 
    /*
    actual_time = ktime_to_ms(ktime_sub(end, start));
@@ -692,6 +693,9 @@ static int __init mwchar_init(void) {
    is_client_id_watch = 0;
    is_evtchn_bound_watch = 0;
 
+   start = ktime_set(0,0);;
+   end = ktime_set(0,0);;
+
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
    // Try to dynamically allocate a major number for the device -- more difficult but worth it
@@ -893,10 +897,24 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 
    req = (mt_request_generic_t *)buffer;
 
+   int effective_number; 
+
    //printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
 
-   start = ktime_get();
+   if (ktime_to_ns(start) == 0)
+   {
+      start = ktime_get();
+   }
+   else
+   {
+      end = ktime_get();
+      actual_time = ktime_to_ns(ktime_sub(end, start));
+      effective_number = (irqs_handled + 1)/2;
+      printk(KERN_INFO "%d     %lld\n", effective_number, actual_time);
+      start = ktime_set(0,0);
+   }
    send_request(req, sizeof(*req));
+
    //end = ktime_get();
 
    //actual_time = ktime_to_ns(ktime_sub(end, start));
