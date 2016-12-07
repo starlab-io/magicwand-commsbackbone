@@ -11,8 +11,9 @@ CFLAGS += -I../../../common
 LD = ld
 LDFLAGS = -shared
 
-TCP_IP_APP_NAME=test_server
-PRE_LOAD_LIB_NAME=wrap_test_server
+TCP_IP_APP_NAME=test_client
+PRE_LOAD_LIB_NAME=tcp_ip_wrapper
+PRE_LOAD_LIB_LOC=../../../common/
 
 all: $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so
 
@@ -20,7 +21,7 @@ $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
 	@echo ""
 	$(CC) $? -o $@ 
 
-$(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_NAME).c
+$(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_LOC)$(PRE_LOAD_LIB_NAME).c
 	$(CC) $(CFLAGS) -c $? -o $@
 
 $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o
