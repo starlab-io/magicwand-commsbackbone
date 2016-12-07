@@ -510,9 +510,7 @@ process_buffer_item( buffer_item_t * BufferItem )
                             sizeof(response) );
 
     //clock_gettime(CLOCK_REALTIME, &t2);
-
     //t3 = diff(t1,t2);
-
     //DEBUG_PRINT( "Time of Execution for write(). sec: %ld  nsec: %ld\n",
 	         //t3.tv_sec, t3.tv_nsec);
 
@@ -973,9 +971,7 @@ message_dispatcher( void )
         }
 
         //clock_gettime(CLOCK_REALTIME, &t2);
-
         //t3 = diff(t1,t2);
-
         //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
 	             //t3.tv_sec, t3.tv_nsec);
 
