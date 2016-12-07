@@ -78,7 +78,7 @@ void init(){
     }
 
     // 2> Call connect
-    server.sin_addr.s_addr = inet_addr("192.168.0.8");
+    server.sin_addr.s_addr = inet_addr("192.168.0.4");
     server.sin_family = AF_INET;
     server.sin_port = htons(21845);
 

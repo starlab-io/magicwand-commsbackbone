@@ -30,7 +30,7 @@
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-#define SERVER_IP   "192.168.0.8"
+#define SERVER_IP   "192.168.0.4"
 
 //Server IP address is the ip address that the final message will be sent to
 //#define SERVER_IP   "10.1.2.5"

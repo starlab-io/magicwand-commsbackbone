@@ -893,11 +893,11 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
    //send_evt(common_event_channel);
    */
 
+   int effective_number; 
    mt_request_generic_t *req;
 
    req = (mt_request_generic_t *)buffer;
 
-   int effective_number; 
 
    //printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
 
