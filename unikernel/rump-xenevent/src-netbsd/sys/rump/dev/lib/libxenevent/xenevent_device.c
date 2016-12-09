@@ -40,6 +40,8 @@
 
 #include "ioconf.h"
 
+#include <sys/time.h>
+
 // Function prototypes 
 
 // src-netbsd/sys/sys/conf.h
@@ -209,6 +211,22 @@ ErrorExit:
     return rc;
 }
 
+/*
+static struct timespec 
+diff_time(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+	if ( ( end.tv_nsec - start.tv_nsec ) < 0 ) {
+		temp.tv_sec = end.tv_sec - start.tv_sec - 1;
+		temp.tv_nsec = 1000000000 + end.tv_nsec - start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec - start.tv_sec;
+		temp.tv_nsec = end.tv_nsec - start.tv_nsec;
+	}
+	return temp;
+}
+*/
+
 //
 // The read function blocks until a message is read from the ring
 // buffer. It then writes that message to the memory specified and
@@ -221,6 +239,7 @@ xe_dev_read( dev_t Dev,
              int Flag )
 {
     int rc = 0;
+    //struct timespec t1,t2,t3;
     
     // Only one reader at a time
     xenevent_mutex_wait( g_state.read_lock );
@@ -232,10 +251,19 @@ xe_dev_read( dev_t Dev,
     {
         struct iovec * iov = &(Uio->uio_iov[i]);
         size_t bytes_read = 0;
+
+        //clock_gettime1(CLOCK_REALTIME, &t1);
         
         rc = xe_comms_read_item( iov->iov_base,
                                  iov->iov_len,
                                  &bytes_read );
+
+        //clock_gettime1(CLOCK_REALTIME, &t2);
+
+        //t3 = diff_time(t1,t2);
+
+        //DEBUG_PRINT( "Time of Execution for xe_comms_read_item. sec: %ld. nsec:%ld\n",
+                     //t3.tv_sec, t3.tv_nsec);
         if ( rc )
         {
             goto ErrorExit;
@@ -260,6 +288,7 @@ ErrorExit:
     return rc;
 }
 
+
 //
 // The write function writes the given message to the ring buffer.
 //
@@ -278,11 +307,22 @@ xe_dev_write( dev_t Dev,
     {
         struct iovec * iov = &(Uio->uio_iov[i]);
         size_t bytes_written = 0;
+        //struct timespec t1,t2,t3;
+
+        //clock_gettime1(CLOCK_REALTIME, &t1);
         
         // Wait for a command to arrive
         rc = xe_comms_write_item( iov->iov_base,
                                   iov->iov_len,
                                   &bytes_written);
+
+        //clock_gettime1(CLOCK_REALTIME, &t2);
+
+        //t3 = diff_time(t1,t2);
+
+        //DEBUG_PRINT( "Time of Execution for xe_comms_write_item. sec: %ld. nsec:%ld\n",
+                     //t3.tv_sec, t3.tv_nsec);
+
         if ( rc )
         {
             goto ErrorExit;

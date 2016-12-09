@@ -22,6 +22,7 @@
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>          
+#include <linux/time.h>
 
 #include <xen/grant_table.h>
 #include <xen/page.h>
@@ -51,9 +52,10 @@
 #define TEST_MSG           "The abyssal plain is flat.\n"
 #define MAX_MSG             1
 
-#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
-#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
-#define XENEVENT_GRANT_REF_DELIM " "
+//#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
+//#define XENEVENT_GRANT_REF_ORDER  1 //(2^order == page count)
+//#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
+//#define XENEVENT_GRANT_REF_DELIM " "
 
 #define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
 #define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
@@ -87,6 +89,10 @@ static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 
 static int          irqs_handled = 0;
 static int          irq = 0;
+
+// Vars for performance tests
+ktime_t start, end;
+s64 actual_time;
 
 static struct semaphore mw_sem;
 
@@ -227,11 +233,13 @@ static void send_evt(int evtchn_prt)
 
    send.port = evtchn_prt;
 
+   //xen_clear_irq_pending(irq);
+
    if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send)) {
       pr_err("Failed to send event\n");
-   } else {
+   } /*else {
       printk(KERN_INFO "Sent Event. Port: %u\n", send.port);
-   }
+   }*/
 }
 
 static int 
@@ -283,19 +291,56 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    bool available = false;
    mt_response_generic_t * src = NULL;
 
-   printk(KERN_INFO "MWChar: receive_response() called\n");
+   //printk(KERN_INFO "MWChar: receive_response() called\n");
+
+   //start = ktime_get();
+
+   //printk(KERN_INFO "In receive_response(). Entering while loop ... \n");
 
    do
    {
 
       available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
 
-      if (!available) {
-         printk(KERN_INFO "MWChar: down() called\n");
+      if ( !available ) {
+         //printk(KERN_INFO "MWChar: down() called\n");
          down(&mw_sem);
       }
    
    } while (!available);
+
+   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
+   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
+   
+
+   //printk(KERN_INFO "MWChar: down() called\n");
+   //down(&mw_sem);
+
+   //end = ktime_get();
+
+   //actual_time = ktime_to_ns(ktime_sub(end, start));
+
+   //printk(KERN_INFO "Time taken for receive_response() execution (ns): %lld\n",
+          //actual_time);
+
+   //printk(KERN_INFO "%d     %lld\n", irqs_handled, actual_time);
+
+   /*
+   actual_time = ktime_to_ms(ktime_sub(end, start));
+
+   printk(KERN_INFO "Time taken for receive_response() execution (ms): %lld\n",
+          actual_time);
+
+   available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+
+   if ( !available ) {
+      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned false\n");
+   }
+   else
+   {
+      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned true\n");
+   }
+   */
 
    src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
@@ -310,9 +355,12 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    //memcpy(Response, src, src->base.size);
    memcpy(Response, src, sizeof(*src));
 
-   print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
+   //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
 
    ++front_ring.rsp_cons;
+
+   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
+   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
 
 ErrorExit:
    return rc;
@@ -343,18 +391,19 @@ send_request(void *Request, size_t Size)
 
    memcpy(dest, Request, Size);
 
-   print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
+   //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
 
-   printk(KERN_INFO "MWChar: send_request(). Copied %lu bytes to destination buffer\n", Size);
+   //printk(KERN_INFO "MWChar: send_request(). Copied %lu bytes to destination buffer\n", Size);
 
    ++front_ring.req_prod_pvt;
+   //printk(KERN_INFO "front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
 
    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
 
    if (notify || !notify) {
       send_evt(common_event_channel);
-      printk(KERN_INFO "MWChar: send_request(). Sent %lu bytes to UK\n", Size);
-      printk(KERN_INFO "MWChar: send_request(). notify = %u \n", notify);
+      //printk(KERN_INFO "MWChar: send_request(). Sent %lu bytes to UK\n", Size);
+      //printk(KERN_INFO "MWChar: send_request(). notify = %u \n", notify);
       
    }
 }
@@ -406,7 +455,7 @@ offer_grant(domid_t domu_client_id)
        }
 
        grant_refs[ i ] = ret;
-       printk(KERN_INFO "MWChar: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
+       //printk(KERN_INFO "MWChar: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
    }
 
    return 0;
@@ -557,15 +606,17 @@ static struct xenbus_watch client_id_watch = {
 
 static irqreturn_t irq_event_handler( int port, void * data )
 {
-    unsigned long flags;
+    //unsigned long flags;
 
-    local_irq_save( flags );
-    printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
-           port, data, irqs_handled);
+    //local_irq_save( flags );
+    //printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
+           //port, data, irqs_handled);
    
     ++irqs_handled;
 
-    local_irq_restore( flags );
+    //xen_clear_irq_pending(irq);
+
+    //local_irq_restore( flags );
 
     up(&mw_sem);
 
@@ -581,11 +632,14 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
    printk(KERN_INFO "Checking whether %s is asserted\n",
           VM_EVT_CHN_BOUND);
+
    is_bound_str = (char *) read_from_key( VM_EVT_CHN_BOUND );
+
    if(XENBUS_IS_ERR_READ(is_bound_str)) {
       printk(KERN_INFO "Error reading evtchn bound key!!\n");
       return;
    }
+
    if (strcmp(is_bound_str,"0") == 0) {
       kfree(is_bound_str);
       return;
@@ -596,6 +650,7 @@ static void vm_port_is_bound(struct xenbus_watch *w,
    irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
+
    printk( KERN_INFO "Bound event channel %d to irq: %d\n",
            common_event_channel, irq );
 
@@ -637,6 +692,9 @@ static int __init mwchar_init(void) {
    is_msg_len_watch = 0;
    is_client_id_watch = 0;
    is_evtchn_bound_watch = 0;
+
+   start = ktime_set(0,0);;
+   end = ktime_set(0,0);;
 
    printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
 
@@ -769,7 +827,7 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
    int rc = 0; 
    mt_response_generic_t *res = NULL;
 
-   printk(KERN_INFO "MWChar: dev_read() called\n");
+   //printk(KERN_INFO "MWChar: dev_read() called\n");
 
    res = kmalloc(sizeof(mt_response_generic_t), GFP_KERNEL);
 
@@ -784,6 +842,7 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 
    rc = receive_response(res,  sizeof(mt_response_generic_t), NULL);
 
+
    if (rc) 
    {
       printk(KERN_INFO "MWChar: Error on call to receive_response(). Err Code: %d\n", rc);
@@ -793,12 +852,12 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
    error_count = copy_to_user(buffer, res, sizeof(mt_response_generic_t));
 
    //receive_response(message,  size_of_message, NULL);
-   // copy_to_user has the format ( * to, *from, size) and returns 0 on success
+   //copy_to_user has the format ( * to, *from, size) and returns 0 on success
    //error_count = copy_to_user(buffer, message, size_of_message);
 
 
    if (error_count==0){
-      printk(KERN_INFO "MWChar: Sent %lu characters to the user\n", sizeof(mt_response_generic_t));
+      //printk(KERN_INFO "MWChar: Sent %lu characters to the user\n", sizeof(mt_response_generic_t));
       goto ErrorExit;
 
    } else {
@@ -834,13 +893,38 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
    //send_evt(common_event_channel);
    */
 
+   int effective_number; 
    mt_request_generic_t *req;
 
    req = (mt_request_generic_t *)buffer;
 
-   printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
 
+   //printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
+
+   if (ktime_to_ns(start) == 0)
+   {
+      start = ktime_get();
+   }
+   else
+   {
+      end = ktime_get();
+      actual_time = ktime_to_ns(ktime_sub(end, start));
+      effective_number = (irqs_handled + 1)/2;
+      printk(KERN_INFO "%d     %lld\n", effective_number, actual_time);
+      start = ktime_set(0,0);
+   }
    send_request(req, sizeof(*req));
+
+   //end = ktime_get();
+
+   //actual_time = ktime_to_ns(ktime_sub(end, start));
+   //printk(KERN_INFO "Time taken for send_request() execution (ns): %lld\n",
+          //actual_time);
+
+   //actual_time = ktime_to_ms(ktime_sub(end, start));
+
+   //printk(KERN_INFO "Time taken for send_request() execution (ms): %lld\n",
+          //actual_time);
 
    return len;
 }

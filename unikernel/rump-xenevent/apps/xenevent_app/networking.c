@@ -121,6 +121,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     DEBUG_PRINT ( "**** Thread %d <== socket %d\n",
                   WorkerThread->idx, sockfd );
     
+    printf("Create Socket OK\n");
+
     return Response->base.status;
 }
 
@@ -182,6 +184,8 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
             continue;
         }
 
+        printf("Connect OK\n");
+
         // If we get here, we must have connected successfully
         break; 
     }
@@ -226,12 +230,17 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     {
         Response->base.status = errno;
     }
+    else
+    {
+        printf("Close OK\n");
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CLOSE_SIZE,
                               (mt_response_generic_t *)Response );
 
 //    xe_net_set_base_response( Request, 0, Response );
+
 
     return Response->base.status;
 }
@@ -310,6 +319,9 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
         }
 
         totSent += sent;
+
+
+        printf("Sent OK. %u bytes\n", (unsigned int)sent);
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
