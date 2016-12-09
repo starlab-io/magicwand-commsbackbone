@@ -110,13 +110,14 @@ is_empty( struct list *list )
 	assert(list != NULL);
 	empty = (list->head == NULL);
 
-	assert(!(empty && (list->length > 0)));
+        // List cannot be both empty and have non-zero length
+	assert( !(empty && (list->length > 0) ));
 
 	return empty;
 }
 
 static void
-prepend_member_to_non_empty_list( struct list       *list,
+prepend_member_to_non_empty_list( struct list        *list,
 	                          struct list_member *member )
 {
 	assert(list != NULL);

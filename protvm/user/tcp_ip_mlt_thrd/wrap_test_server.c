@@ -26,27 +26,21 @@
 #include <netinet/in.h>
 
 #include "sock_info_list.h"
+#include <assert.h>
 #include <message_types.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
 
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-#define SERVER_IP   "192.168.0.8"
+#define SERVER_IP   "192.168.0.4"
 #define SERVER_PORT 21845 
 
 static int fd;
 static int request_id;
 
-/*
-typedef struct _sinfo {
-    int    sockfd;
-    char * desthost;
-    int    destport;
-} sinfo_t;
-*/
-
-sinfo_t sock_info;
+sinfo_t      sock_info;
+struct list *list;
 
 void
 build_create_socket( mt_request_generic_t * Request )
@@ -196,7 +190,6 @@ connect( int sockfd,
    }
 
    sock_info.desthost = SERVER_IP; 
-   //sock_info.desthost = SERVER_NAME; 
    sock_info.destport = SERVER_PORT; 
 
    build_connect_socket( &request, &sock_info );
@@ -254,6 +247,7 @@ _init( void )
 {
     request_id = 0;
     memset( &sock_info, 0, sizeof(sinfo_t) );
+    
 
     printf("Intercept module loaded\n");
 
@@ -262,6 +256,10 @@ _init( void )
     if (fd < 0) {
         perror("Failed to open the device...");
    }
+
+   list = create_sock_info_list();
+   assert (list);
+   
 }
 
 void
