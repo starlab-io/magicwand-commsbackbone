@@ -46,11 +46,11 @@ set_list_manager( struct list         *list,
 
 int 
 add_list_member( struct list *list, 
-                 void *member );
+                 void        *member );
 
 void 
 remove_list_member( struct list *list, 
-                    void *member );
+                    void        *member );
 
 void 
 remove_all_list_members( struct list *list );

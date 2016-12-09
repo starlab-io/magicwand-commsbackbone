@@ -38,7 +38,7 @@ void 	tear_down();
 int main(int argc , char *argv[])
 {
 	
-	int intervals = 4;
+	int intervals = 1;
 	double x = 0;
 	double time_val = 0.0;
 	

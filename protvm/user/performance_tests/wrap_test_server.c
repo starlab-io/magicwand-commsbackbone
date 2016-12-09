@@ -123,8 +123,6 @@ int
 socket(int domain, int type, int protocol)
 {
 
-   //int sockfd = 0;
- 
    mt_request_generic_t request;
    mt_response_generic_t response;
 
@@ -141,7 +139,6 @@ socket(int domain, int type, int protocol)
    read(fd, &response, sizeof(response));
 
    sock_info.sockfd = response.base.sockfd;
-   //sockfd = response.base.sockfd;
 
 #ifdef MYDEBUG
    printf("Create-socket response returned\n");
