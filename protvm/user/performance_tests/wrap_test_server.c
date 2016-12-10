@@ -157,10 +157,6 @@ close(int sock_fd)
    mt_request_generic_t request;
    mt_response_generic_t response;
 
-   //sinfo_t sock_info;
-   //memset(&sock_info, 0, sizeof(sinfo_t));
-   //sock_info.sockfd = sock_fd; 
-
    if (sock_info.sockfd <= 0)
    {
       printf("Socket file descriptor value invalid\n");
@@ -203,7 +199,6 @@ connect(int sockfd,
    }
 
    sock_info.desthost = SERVER_IP; 
-   //sock_info.desthost = SERVER_NAME; 
    sock_info.destport = SERVER_PORT; 
 
    build_connect_socket( &request, &sock_info );
@@ -264,10 +259,6 @@ void _init(void)
 {
     request_id = 0;
     memset(&sock_info, 0, sizeof(sinfo_t));
-
-    //sock_info.destport = 8888;
-    //sock_info.desthost = SERVER_NAME;
-    //sock_info.desthost = SERVER_IP;
 
     printf("Intercept module loaded\n");
 

@@ -91,8 +91,12 @@ int main(int argc , char *argv[])
 
     printf("Connected\n");
 
-    // 3> Call write
-    send(socket_desc, client_message , strlen(client_message), 0);
+    // 3> Call send 
+    if (send(socket_desc, client_message , strlen(client_message), 0) < 0)
+    {
+        printf("send failed. Error");
+        return 1;
+    }
 
     // 4> Call close
     close(socket_desc);

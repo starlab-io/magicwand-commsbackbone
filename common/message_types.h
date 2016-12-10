@@ -132,6 +132,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
 
     // The socket. Used in most requests.
     mt_socket_fd_t sockfd;
+
 } mt_request_base_t;
 
 //

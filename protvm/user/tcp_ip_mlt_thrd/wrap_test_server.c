@@ -137,10 +137,21 @@ socket( int domain,
 
    sock_info.sockfd = response.base.sockfd;
 
+   // Add Connection to List
+   add_sock_info( list, &sock_info );
+
    printf("Create-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
+   if ( response.base.status )
+   {
+      printf( "\t\tError creating socket. Error Number: %u\n", response.base.status );
+      // Returns -1 on error
+      return -1;
+   }
+
+   // Returns socket number on success
    return sock_info.sockfd;
 }
 
@@ -171,7 +182,15 @@ close( int sock_fd )
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   return 0;
+   if ( response.base.status )
+   {
+      printf( "\t\tError closing socket. Error Number: %u\n", response.base.status );
+      // Returns -1 on error
+      return -1;
+   }
+
+   // Returns 0 on success
+   return response.base.status;
 }
 
 int 
@@ -182,6 +201,7 @@ connect( int sockfd,
 
    mt_request_generic_t request;
    mt_response_generic_t response;
+   sinfo_t   *sock_info_in_list;
 
    if (sock_info.sockfd <= 0)
    {
@@ -191,6 +211,10 @@ connect( int sockfd,
 
    sock_info.desthost = SERVER_IP; 
    sock_info.destport = SERVER_PORT; 
+
+   sock_info_in_list = find_sock_info(list, sockfd);
+   sock_info_in_list->desthost = SERVER_IP; 
+   sock_info_in_list->destport = SERVER_PORT; 
 
    build_connect_socket( &request, &sock_info );
 
@@ -206,7 +230,15 @@ connect( int sockfd,
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   return 0;
+   if ( response.base.status )
+   {
+      printf( "\t\tError connecting. Error Number: %u\n", response.base.status );
+      // Returns -1 on error
+      return -1;
+   }
+
+   // Returns 0 on success
+   return response.base.status;
 }
 
 ssize_t 
@@ -217,6 +249,7 @@ send( int sockfd,
 {
    mt_request_generic_t request;
    mt_response_generic_t response;
+   mt_size_t size_sent;
 
    if (sock_info.sockfd <= 0)
    {
@@ -239,7 +272,15 @@ send( int sockfd,
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   return 0;
+   if ( response.base.status == 0 )
+   {
+      size_sent = request.base.size - MT_REQUEST_SOCKET_WRITE_SIZE;
+      printf("\t\tSize sent: %u\n", size_sent);
+      return size_sent; 
+   }
+
+   // Returns -1 on error
+   return -1;
 }
 
 void 
@@ -265,6 +306,26 @@ _init( void )
 void
 _fini( void )
 {
+    
+   list_iterator iterator;
+   sinfo_t sock_info_in_list;
 
-    printf("Intercept module unloaded\n");
+   printf ( "\nNumber of sockets in list: %d\n", count_list_members( list ));
+
+   iterator = get_list_iterator(list);
+
+   while (is_another_list_member_available(iterator) ) 
+   {
+       get_next_sock_info( &iterator, &sock_info_in_list);
+
+       printf( "sock_info_in_list.sockfd: %d\n", sock_info_in_list.sockfd );
+       printf( "sock_info_in_list.desthost: %s\n", sock_info_in_list.desthost );
+       printf( "sock_info_in_list.destport: %d\n", sock_info_in_list.destport );
+
+   }
+
+   destroy_sock_info( list, sock_info.sockfd );
+   destroy_list( &list );
+
+   printf("Intercept module unloaded\n");
 }
