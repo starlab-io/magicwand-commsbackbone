@@ -84,9 +84,9 @@ create_sock_info_list_suite(void)
 	ADD_TEST(create_destroy_list, tcase, suite);
 	ADD_TEST(add_remove_sock_info, tcase, suite);
         /*
-	ADD_TEST(remove_all_pairs, tcase, suite);
-	ADD_TEST(find_key_value_pair, tcase, suite);
-	ADD_TEST(count_pairs, tcase, suite);
+	ADD_TEST(remove_all_sock_infos, tcase, suite);
+	ADD_TEST(find_sock_infos, tcase, suite);
+	ADD_TEST(count_sock_infos, tcase, suite);
 	ADD_TEST(list_iterator, tcase, suite);
         */
 	return suite;
