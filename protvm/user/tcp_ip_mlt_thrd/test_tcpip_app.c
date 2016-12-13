@@ -27,8 +27,8 @@
 void *
 thread_func( void *data )
 {
-    int                socket_desc;
-    int                err = 0;
+    int  socket_desc;
+    int  err = 0;
 
     // 1> Call Socket
     socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
@@ -52,13 +52,11 @@ ErrorExit:
 
 int main(int argc , char *argv[])
 {
-    int                socket_desc;
-    struct sockaddr_in server;
-    int                err = 0;
-
+    int                 socket_desc;
+    struct sockaddr_in  server;
+    int                 err = 0;
     char               client_message[20];
     char              *hello = "Hello\n";
-
     pthread_t          thr;
 
     memset( client_message, 0, 20 );

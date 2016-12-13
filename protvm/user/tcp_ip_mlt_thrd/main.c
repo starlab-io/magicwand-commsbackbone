@@ -16,7 +16,7 @@ main(void)
     SRunner *srunner;
     int     failed = 0;
 
-    /* Create general purpose suite */
+    // Create suite for testing list dynamics 
     SRUNNER_TEST(suite, create_sock_info_list_suite, srunner, failed);
 
     return (!failed) ? 0 : 1;

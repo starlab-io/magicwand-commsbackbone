@@ -242,10 +242,10 @@ connect( int sockfd,
 }
 
 ssize_t 
-send( int sockfd, 
+send( int         sockfd, 
       const void *buf, 
-      size_t len,
-      int    flags )
+      size_t      len,
+      int         flags )
 {
    mt_request_generic_t request;
    mt_response_generic_t response;
@@ -308,7 +308,7 @@ _fini( void )
 {
     
    list_iterator iterator;
-   sinfo_t sock_info_in_list;
+   sinfo_t       sock_info_in_list;
 
    printf ( "\nNumber of sockets in list: %d\n", count_list_members( list ));
 
