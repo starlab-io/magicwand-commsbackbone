@@ -208,6 +208,15 @@ ErrorExit:
 }
 
 int
+xe_net_bind_socket(){
+
+	printf("In bind socket\n");
+	return 1;
+
+}
+
+
+int
 xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread )
