@@ -117,6 +117,9 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
 }
 
+
+
+
 int 
 socket(int domain, int type, int protocol)
 {
@@ -180,6 +183,61 @@ close(int sock_fd)
    return 0;
 }
 
+	
+void
+build_bind_socket( 
+		mt_request_generic_t * Request, 
+		sinfo_t* SockInfo, 
+		const struct sockaddr * SockAddr, 
+		socklen_t Addrlen 
+		)
+{
+
+	mt_request_socket_bind_t * bind = &(Request->socket_bind);
+
+	bzero( Request, sizeof(*Request) );
+
+    bind->base.sig  = MT_SIGNATURE_REQUEST;
+    bind->base.type = MtRequestSocketBind;
+    bind->base.id = request_id++;
+    bind->base.sockfd = SockInfo->sockfd;
+
+	bind->sockaddr.sa_family = SockAddr->sa_family;
+	strncpy( bind->sockaddr.sa_data, SockAddr->sa_data, sizeof(bind->sockaddr.sa_data));
+	bind->addrlen = Addrlen;
+
+    bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
+
+}
+
+
+int
+bind( int sockfd,
+	  const struct sockaddr * sockaddr, 
+	  socklen_t addrlen )
+{
+
+	mt_request_generic_t request;
+	mt_response_generic_t response;
+
+	if ( sock_info.sockfd <= 0 )
+	{
+		printf("Socket file discriptor value invalid\n");
+		return 1;
+	}
+
+	
+
+	build_bind_socket( &request, &sock_info, sockaddr, addrlen);
+	
+	write( fd, &request, sizeof(request) );
+
+	read( fd, &response, sizeof(response) );
+
+	return response.base.status;
+}
+
+	
 int 
 connect(int sockfd, 
         const struct sockaddr *addr,
