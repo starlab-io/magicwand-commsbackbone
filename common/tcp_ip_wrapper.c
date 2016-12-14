@@ -117,6 +117,9 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
 }
 
+
+
+
 int 
 socket(int domain, int type, int protocol)
 {
@@ -180,6 +183,42 @@ close(int sock_fd)
    return 0;
 }
 
+	
+void
+build_bind_socket( mt_request_generic_t * Request, sinfo_t* SockInfo )
+{
+
+	mt_request_socket_bind_t * bsock = &(Request->socket_bind);
+}
+
+
+int
+bind( int sockfd,
+	  const struct sockaddr * sockaddr, 
+	  socklen_t addrlen )
+{
+
+	mt_request_generic_t request;
+	mt_response_generic_t response;
+
+	if ( sock_info.sockfd <= 0 )
+	{
+		printf("Socket file discriptor value invalid\n");
+		return 1;
+	}
+
+	
+
+	build_bind_socket( &request, &sock_info );
+
+	//REMOVE
+		response.base.status = 1;
+	//REMOVE
+
+	return response.base.status;
+}
+
+	
 int 
 connect(int sockfd, 
         const struct sockaddr *addr,
