@@ -202,10 +202,6 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
 	mt_request_base_t base;
-<<<<<<< HEAD
-=======
-	mt_socket_fd_t sockfd;
->>>>>>> origin/server_implementation
 	mt_sockaddr_t sockaddr;
 	mt_addrlen_t addrlen;
 
@@ -217,11 +213,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 
 } mt_response_socket_bind_t;
 
-<<<<<<< HEAD
 #define MT_REQUEST_SOCKET_BIND_SIZE sizeof(mt_request_socket_bind_t)
 #define MT_RESPONSE_SOCKET_BIND_SIZE sizeof(mt_response_socket_bind_t)
-=======
->>>>>>> origin/server_implementation
 
 //
 // Connect
