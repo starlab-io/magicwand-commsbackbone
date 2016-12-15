@@ -487,8 +487,9 @@ process_buffer_item( buffer_item_t * BufferItem )
                                   (mt_response_socket_write_t *) &response,
                                   worker );
 	case MtRequestSocketBind: 
-		rc = xe_net_bind_socket();
-
+		rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
+								 (mt_response_socket_bind_t *) &response,
+								 worker );
         break;
     case MtRequestInvalid:
     default:

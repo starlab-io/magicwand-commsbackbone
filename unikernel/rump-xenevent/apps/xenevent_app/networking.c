@@ -208,9 +208,12 @@ ErrorExit:
 }
 
 int
-xe_net_bind_socket(){
+xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
+					OUT mt_response_socket_bind_t 	* Response,
+					IN thread_item_t				* WorkerThread){
 
 	printf("In bind socket\n");
+	Response.base.status = 0;
 	return 1;
 
 }
