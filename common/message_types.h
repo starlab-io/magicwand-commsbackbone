@@ -56,6 +56,7 @@ typedef enum
     MtRequestSocketRead    = MT_REQUEST( 4 ),
     MtRequestSocketWrite   = MT_REQUEST( 5 ),
 	MtRequestSocketBind	   = MT_REQUEST( 6 ),
+	MtRequestSocketListen  = MT_REQUEST( 7 ),
 } mt_request_type_t;
 
 
@@ -68,6 +69,7 @@ typedef enum
     MtResponseSocketRead    = MT_RESPONSE( MtRequestSocketRead    ),
     MtResponseSocketWrite   = MT_RESPONSE( MtRequestSocketWrite   ),
 	MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
+	MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -216,6 +218,29 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 #define MT_REQUEST_SOCKET_BIND_SIZE sizeof(mt_request_socket_bind_t)
 #define MT_RESPONSE_SOCKET_BIND_SIZE sizeof(mt_response_socket_bind_t)
 
+
+//
+//Listen
+//
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_listen
+{
+	mt_request_base_t base;
+	int sockfd;
+	int backlog;
+
+} mt_request_socket_listen_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
+{
+	mt_response_base_t base;
+
+} mt_response_socket_listen_t;
+
+#define MT_REQUEST_SOCKET_LISTEN_SIZE sizeof(mt_request_socket_listen_t)
+#define MT_RESPONSE_SOCKET_LISTEN_SIZE sizeof(mt_response_socket_listen_t)
+
+
+
 //
 // Connect
 //
@@ -318,6 +343,7 @@ typedef union _mt_request_generic
     mt_request_socket_read_t    socket_read;
     mt_request_socket_write_t   socket_write;
 	mt_request_socket_bind_t	socket_bind;
+	mt_request_socket_listen_t  socket_listen;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -336,6 +362,7 @@ typedef union _mt_response_generic
     mt_response_socket_read_t    socket_read;
     mt_response_socket_write_t   socket_write;
 	mt_response_socket_bind_t	 socket_bind;
+	mt_response_socket_listen_t  socket_listen;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

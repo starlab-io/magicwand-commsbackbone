@@ -77,7 +77,35 @@ build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     csock->base.id = request_id++;
     csock->base.sockfd = SockInfo->sockfd;
 }
- 
+
+
+void
+build_bind_socket( 
+		mt_request_generic_t * Request, 
+		sinfo_t* SockInfo, 
+		const struct sockaddr * SockAddr, 
+		socklen_t Addrlen 
+		)
+{
+
+	mt_request_socket_bind_t * bind = &(Request->socket_bind);
+
+	bzero( Request, sizeof(*Request) );
+
+    bind->base.sig  = MT_SIGNATURE_REQUEST;
+    bind->base.type = MtRequestSocketBind;
+    bind->base.id = request_id++;
+    bind->base.sockfd = SockInfo->sockfd;
+
+	bind->sockaddr.sa_family = SockAddr->sa_family;
+	strncpy( bind->sockaddr.sa_data, SockAddr->sa_data, sizeof(bind->sockaddr.sa_data));
+	bind->addrlen = Addrlen;
+
+    bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
+
+}
+
+
 void
 build_connect_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
 {
@@ -116,8 +144,6 @@ build_write_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     // Fix to handle non-ascii payload
     wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
 }
-
-
 
 
 int 
@@ -183,33 +209,6 @@ close(int sock_fd)
    return 0;
 }
 
-	
-void
-build_bind_socket( 
-		mt_request_generic_t * Request, 
-		sinfo_t* SockInfo, 
-		const struct sockaddr * SockAddr, 
-		socklen_t Addrlen 
-		)
-{
-
-	mt_request_socket_bind_t * bind = &(Request->socket_bind);
-
-	bzero( Request, sizeof(*Request) );
-
-    bind->base.sig  = MT_SIGNATURE_REQUEST;
-    bind->base.type = MtRequestSocketBind;
-    bind->base.id = request_id++;
-    bind->base.sockfd = SockInfo->sockfd;
-
-	bind->sockaddr.sa_family = SockAddr->sa_family;
-	strncpy( bind->sockaddr.sa_data, SockAddr->sa_data, sizeof(bind->sockaddr.sa_data));
-	bind->addrlen = Addrlen;
-
-    bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
-
-}
-
 
 int
 bind( int sockfd,
@@ -225,9 +224,7 @@ bind( int sockfd,
 		printf("Socket file discriptor value invalid\n");
 		return 1;
 	}
-
 	
-
 	build_bind_socket( &request, &sock_info, sockaddr, addrlen);
 	
 	write( fd, &request, sizeof(request) );
