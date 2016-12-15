@@ -210,12 +210,31 @@ ErrorExit:
 int
 xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
 					OUT mt_response_socket_bind_t 	* Response,
-					IN thread_item_t				* WorkerThread){
+					IN thread_item_t				* WorkerThread)
+{
 
 	printf("In bind socket\n");
-	Response.base.status = 0;
-	return 1;
+	
+	int sockfd = Request->base.sockfd;
+	struct sockaddr* server_sockaddr = (struct sockaddr*)&Request->sockaddr;
+	size_t addrlen = Request->addrlen;
 
+	Response->base.status =  bind(sockfd, server_sockaddr, addrlen);
+
+	if ( Response->base.status < 0 )
+	{
+		printf("Bind failed\n");
+	}
+	else
+	{
+		printf("Bind success\n");
+	}
+
+	xe_net_set_base_response( (mt_request_generic_t *) Request,
+							  MT_RESPONSE_SOCKET_BIND_SIZE,
+							  (mt_response_generic_t *) Response);
+
+	return Response->base.status;;
 }
 
 
