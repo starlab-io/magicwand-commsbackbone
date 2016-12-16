@@ -16,5 +16,5 @@ IP=10.1.2.18
 
 rumprun -S xen -di -M 256 -N xenevent-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$IP/24 \
+        -W xen0,inet,$IP/24 \
         xenevent.run
