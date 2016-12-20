@@ -221,7 +221,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
 
 	Response->base.status =  bind(sockfd, server_sockaddr, addrlen);
 
-	if ( Response->base.status < 0 )
+	if ( Response->base.status != 0 )
 	{
 		printf("Bind failed\n");
 	}
@@ -235,6 +235,22 @@ xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
 							  (mt_response_generic_t *) Response);
 
 	return Response->base.status;;
+}
+
+
+int
+xe_net_listen_socket( IN	mt_request_socket_listen_t	*Request,
+					  OUT	mt_response_socket_listen_t	*Response,
+					  IN	thread_item_t 				*WorkerThread)
+{
+	Response->base.status = listen( Request->base.sockfd,
+									Request->backlog);
+
+	xe_net_set_base_response( (mt_request_generic_t *)	Request,
+							  MT_RESPONSE_SOCKET_LISTEN_SIZE,
+							  (mt_response_generic_t *)	Response);
+
+	return Response->base.status;
 }
 
 
@@ -263,15 +279,12 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     }
     else
     {
-        printf("Close OK\n");
+        printf("Socket: %d Closed\n", Request->base.sockfd);
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CLOSE_SIZE,
                               (mt_response_generic_t *)Response );
-
-//    xe_net_set_base_response( Request, 0, Response );
-
 
     return Response->base.status;
 }

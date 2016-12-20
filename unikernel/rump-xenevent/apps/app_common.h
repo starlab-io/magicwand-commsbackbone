@@ -6,8 +6,9 @@
 
 #include <pthread.h>
 
+#ifdef MYDEBUG
 static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
-
+#endif
 
 //
 // Decorators for function parameters
