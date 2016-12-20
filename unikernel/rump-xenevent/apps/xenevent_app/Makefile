@@ -5,8 +5,8 @@
 ##
 
 CC = x86_64-rumprun-netbsd-gcc 
-#CFLAGS = -ggdb -std=gnu99 -Wall -Wno-missing-braces
-CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
+CFLAGS = -ggdb -std=gnu99 -Wall -Wno-missing-braces
+#CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -I..
 CFLAGS += -I../../../../common
 CFLAGS += -I../platform/xen/xen/include 
