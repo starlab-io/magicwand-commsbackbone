@@ -1,4 +1,15 @@
 .vagrant
 .idea
+*.swp
 test-harness/log/
 tracing/output/
+cscope.out
+tags
+unikernel/rump-xenevent/.prevbuild
+unikernel/rump-xenevent/apps/xenevent_app/xenevent.bin
+unikernel/rump-xenevent/apps/xenevent_app/xenevent.run
+unikernel/rump-xenevent/build.log
+unikernel/rump-xenevent/obj-amd64-xen-server_implementation/
+unikernel/rump-xenevent/platform/xen/obj/
+unikernel/rump-xenevent/platform/xen/xen/include/xen
+unikernel/rump-xenevent/rumprun-server_implementation/
