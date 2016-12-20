@@ -65,7 +65,7 @@ build_create_socket( mt_request_generic_t * Request )
 }
 
 void
-build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
+build_close_socket( mt_request_generic_t * Request, int sockfd )
 {
     mt_request_socket_close_t * csock = &(Request->socket_close);
 
@@ -75,14 +75,14 @@ build_close_socket( mt_request_generic_t * Request, sinfo_t * SockInfo )
     csock->base.type = MtRequestSocketClose;
     csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
     csock->base.id = request_id++;
-    csock->base.sockfd = SockInfo->sockfd;
+    csock->base.sockfd = sockfd;
 }
 
 
 void
 build_bind_socket( 
 		mt_request_generic_t * Request, 
-		sinfo_t* SockInfo, 
+		int sockfd, 
 		const struct sockaddr * SockAddr, 
 		socklen_t Addrlen 
 		)
@@ -95,13 +95,35 @@ build_bind_socket(
     bind->base.sig  = MT_SIGNATURE_REQUEST;
     bind->base.type = MtRequestSocketBind;
     bind->base.id = request_id++;
-    bind->base.sockfd = SockInfo->sockfd;
+    bind->base.sockfd = sockfd;
 
 	bind->sockaddr.sa_family = SockAddr->sa_family;
 	strncpy( bind->sockaddr.sa_data, SockAddr->sa_data, sizeof(bind->sockaddr.sa_data));
 	bind->addrlen = Addrlen;
 
     bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
+
+}
+
+
+void
+build_listen_socket( 
+					mt_request_generic_t * Request,
+					int sockfd,
+					int * backlog)
+{
+	mt_request_socket_listen_t * listen = &(Request->socket_listen);
+	
+	bzero( Request, sizeof(*Request) );
+
+	listen->base.sig = MT_SIGNATURE_REQUEST;
+	listen->base.type = MtRequestSocketListen;
+	listen->base.id = request_id++;
+	listen->base.sockfd = sockfd;
+
+	listen->backlog = *backlog;
+
+	listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
 
 }
 
@@ -186,13 +208,13 @@ close(int sock_fd)
    //memset(&sock_info, 0, sizeof(sinfo_t));
    //sock_info.sockfd = sock_fd; 
 
-   if (sock_info.sockfd <= 0)
+   if (sock_fd <= 0)
    {
       printf("Socket file descriptor value invalid\n");
       return 1;
    }
       
-   build_close_socket( &request, &sock_info );
+   build_close_socket( &request, sock_fd );
 
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
@@ -225,7 +247,7 @@ bind( int sockfd,
 		return 1;
 	}
 	
-	build_bind_socket( &request, &sock_info, sockaddr, addrlen);
+	build_bind_socket( &request, sockfd, sockaddr, addrlen);
 	
 	write( fd, &request, sizeof(request) );
 
@@ -234,7 +256,32 @@ bind( int sockfd,
 	return response.base.status;
 }
 
-	
+
+
+
+int
+listen( int sockfd, int backlog )
+{
+	mt_request_generic_t request;
+	mt_response_generic_t response;
+
+	if ( sock_info.sockfd <= 0 )
+	{
+		printf("Socket file discriptor value invalid\n");
+		return 1;
+	}
+
+	build_listen_socket( &request, sockfd, &backlog);
+
+	write( fd, &request, sizeof(request) );
+
+	read( fd, &response, sizeof(response) );
+
+	return response.base.status;
+
+}
+
+
 int 
 connect(int sockfd, 
         const struct sockaddr *addr,
