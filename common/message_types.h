@@ -225,7 +225,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_listen
 {
 	mt_request_base_t base;
-	int sockfd;
 	int backlog;
 
 } mt_request_socket_listen_t;
