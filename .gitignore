@@ -13,3 +13,15 @@ unikernel/rump-xenevent/obj-amd64-xen-server_implementation/
 unikernel/rump-xenevent/platform/xen/obj/
 unikernel/rump-xenevent/platform/xen/xen/include/xen
 unikernel/rump-xenevent/rumprun-server_implementation/
+protvm/kernel/char_driver/.char_driver.ko.cmd
+protvm/kernel/char_driver/.char_driver.mod.o.cmd
+protvm/kernel/char_driver/.char_driver.o.cmd
+protvm/kernel/char_driver/.tmp_versions/
+protvm/kernel/char_driver/Module.symvers
+protvm/kernel/char_driver/char_driver.ko
+protvm/kernel/char_driver/char_driver.mod.c
+protvm/kernel/char_driver/char_driver.mod.o
+protvm/kernel/char_driver/char_driver.o
+protvm/kernel/char_driver/modules.order
+protvm/user/tcp_ip_client/tcp_ip_wrapper.o
+protvm/user/tcp_ip_client/tcp_ip_wrapper.so
