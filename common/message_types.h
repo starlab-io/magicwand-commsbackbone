@@ -57,6 +57,7 @@ typedef enum
     MtRequestSocketWrite   = MT_REQUEST( 5 ),
 	MtRequestSocketBind	   = MT_REQUEST( 6 ),
 	MtRequestSocketListen  = MT_REQUEST( 7 ),
+	MtRequestSocketAccept  = MT_REQUEST( 8 ),
 } mt_request_type_t;
 
 
@@ -70,6 +71,7 @@ typedef enum
     MtResponseSocketWrite   = MT_RESPONSE( MtRequestSocketWrite   ),
 	MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
 	MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
+	MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -118,13 +120,36 @@ typedef enum
     MT_ST_STREAM = 2,
 } mt_sock_type_t;
 
+//
+//Struct for generic socket type
+//
 #define MT_SA_DATA_LEN 14
 
 typedef struct _mt_sockaddr
 {
 	uint16_t sa_family;
-	char sa_data[MT_SA_DATA_LEN];
+	uint8_t sa_data[MT_SA_DATA_LEN];
 } mt_sockaddr_t;
+
+
+//
+// IPv4 AF_INET sockets:
+//
+typedef struct _mt_in_addr
+{
+	uint64_t 	s_addr;
+
+} mt_in_addr_t;
+
+
+typedef struct _mt_sockaddr_in
+{
+	int16_t 			sin_family;
+	uint16_t			sin_port;
+	mt_in_addr_t 		sin_addr;
+	uint8_t 			sin_zero[8];
+
+} mt_sockaddr_in_t;
 
 //Inet address type
 #define MT_INADDR_ANY ((unsigned long int) 0x00000000)
@@ -204,8 +229,7 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
 	mt_request_base_t base;
-	mt_sockaddr_t sockaddr;
-	mt_addrlen_t addrlen;
+	mt_sockaddr_in_t sockaddr;  //Hard coded for now, but should be a union of all sockaddr types.
 
 } mt_request_socket_bind_t;
 
@@ -239,6 +263,28 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 #define MT_RESPONSE_SOCKET_LISTEN_SIZE sizeof(mt_response_socket_listen_t)
 
 
+//
+//Accept
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
+{
+	mt_request_base_t base;
+	mt_sockaddr_t sockaddr;
+
+} mt_request_socket_accept_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
+{
+	mt_response_base_t base;
+	mt_socket_fd_t client_sockfd;
+
+} mt_response_socket_accept_t;
+
+#define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t);
+#define MT_RESPONSE_SOCKET_ACCEPT_SIZE sizeof(mt_response_socket_accept_t);
+
+
 
 //
 // Connect
@@ -250,6 +296,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_connect
 
     mt_port_t port;    
     uint8_t hostname[ MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN ];
+
 } mt_request_socket_connect_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_connect
@@ -343,6 +390,7 @@ typedef union _mt_request_generic
     mt_request_socket_write_t   socket_write;
 	mt_request_socket_bind_t	socket_bind;
 	mt_request_socket_listen_t  socket_listen;
+	mt_request_socket_accept_t  socket_accept;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -362,6 +410,7 @@ typedef union _mt_response_generic
     mt_response_socket_write_t   socket_write;
 	mt_response_socket_bind_t	 socket_bind;
 	mt_response_socket_listen_t  socket_listen;
+	mt_response_socket_accept_t  socket_accept;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)
