@@ -57,6 +57,7 @@ typedef enum
     MtRequestSocketWrite   = MT_REQUEST( 5 ),
 	MtRequestSocketBind	   = MT_REQUEST( 6 ),
 	MtRequestSocketListen  = MT_REQUEST( 7 ),
+	MtRequestSocketAccept  = MT_REQUEST( 8 ),
 } mt_request_type_t;
 
 
@@ -70,6 +71,7 @@ typedef enum
     MtResponseSocketWrite   = MT_RESPONSE( MtRequestSocketWrite   ),
 	MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
 	MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
+	MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -239,6 +241,28 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 #define MT_RESPONSE_SOCKET_LISTEN_SIZE sizeof(mt_response_socket_listen_t)
 
 
+//
+//Accept
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
+{
+	mt_request_base_t base;
+	mt_sockaddr_t sockaddr;
+
+} mt_request_socket_accept_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
+{
+	mt_response_base_t base;
+	mt_socket_fd_t client_sockfd;
+
+} mt_response_socket_accept_t;
+
+#define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t);
+#define MT_RESPONSE_SOCKET_ACCEPT_SIZE sizeof(mt_response_socket_accept_t);
+
+
 
 //
 // Connect
@@ -343,6 +367,7 @@ typedef union _mt_request_generic
     mt_request_socket_write_t   socket_write;
 	mt_request_socket_bind_t	socket_bind;
 	mt_request_socket_listen_t  socket_listen;
+	mt_request_socket_accept_t  socket_accept;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -362,6 +387,7 @@ typedef union _mt_response_generic
     mt_response_socket_write_t   socket_write;
 	mt_response_socket_bind_t	 socket_bind;
 	mt_response_socket_listen_t  socket_listen;
+	mt_response_socket_accept_t  socket_accept;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)
