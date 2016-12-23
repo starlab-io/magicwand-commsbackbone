@@ -25,3 +25,6 @@ protvm/kernel/char_driver/char_driver.o
 protvm/kernel/char_driver/modules.order
 protvm/user/tcp_ip_client/tcp_ip_wrapper.o
 protvm/user/tcp_ip_client/tcp_ip_wrapper.so
+protvm/user/tcp_ip_server/tcp_ip_wrapper.o
+protvm/user/tcp_ip_server/tcp_ip_wrapper.so
+protvm/user/tcp_ip_server/test_server

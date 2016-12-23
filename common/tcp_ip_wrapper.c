@@ -46,6 +46,7 @@ typedef struct _sinfo {
 
 sinfo_t sock_info;
 
+
 void
 build_create_socket( mt_request_generic_t * Request )
 {
@@ -90,6 +91,8 @@ build_bind_socket(
 
 	mt_request_socket_bind_t * bind = &(Request->socket_bind);
 
+	struct sockaddr_in * sockaddr;
+
 	bzero( Request, sizeof(*Request) );
 
     bind->base.sig  = MT_SIGNATURE_REQUEST;
@@ -97,20 +100,36 @@ build_bind_socket(
     bind->base.id = request_id++;
     bind->base.sockfd = sockfd;
 
-	bind->sockaddr.sa_family = SockAddr->sa_family;
-	strncpy( bind->sockaddr.sa_data, SockAddr->sa_data, sizeof(bind->sockaddr.sa_data));
-	bind->addrlen = Addrlen;
+	//We need to confirm that this is a sockaddr_in by checking if sa_family = AF_INET
+	//Then cast it to it's correct type
+	if( SockAddr->sa_family == AF_INET 
+		&& sizeof(*SockAddr) == sizeof(struct sockaddr_in) )
+	{
+		//Perform the cast
+		//Struct sockaddr points to an area in memory the same size as sockaddr_in
+		sockaddr = (struct sockaddr_in *)SockAddr;
+
+	}else
+	{
+		//ERROR
+		printf("Error casting sockaddr into sockaddr_t");
+	}
+
+	//Now convert it into our message type
+	bind->sockaddr.sin_family         = sockaddr->sin_family;
+	bind->sockaddr.sin_port           = sockaddr->sin_port;
+	bind->sockaddr.sin_addr.s_addr    = sockaddr->sin_addr.s_addr;
+
+	memcpy( bind->sockaddr.sin_zero, sockaddr->sin_zero, sizeof(bind->sockaddr.sin_zero) );
 
     bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
-
 }
 
 
 void
-build_listen_socket( 
-					mt_request_generic_t * Request,
-					int sockfd,
-					int * backlog)
+build_listen_socket( mt_request_generic_t * Request,
+					 int sockfd,
+					 int * backlog)
 {
 	mt_request_socket_listen_t * listen = &(Request->socket_listen);
 	
@@ -124,6 +143,25 @@ build_listen_socket(
 	listen->backlog = *backlog;
 
 	listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
+
+}
+
+void build_accept_socket( mt_request_generic_t * Request,
+						  int sockfd,
+						  struct sockaddr * sockaddr )
+{
+	mt_request_socket_accept_t * accept = &(Request->socket_accept);
+
+	bzero( Request, sizeof(*Request) );
+
+	accept->base.sig = MT_SIGNATURE_REQUEST;
+	accept->base.type = MtRequestSocketAccept;
+	accept->base.id = request_id++;
+	accept->base.sockfd = sockfd;
+
+//	accept->sockaddr = (mt_sockaddr_t) sockaddr;
+
+
 
 }
 
@@ -182,10 +220,11 @@ socket(int domain, int type, int protocol)
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
+#ifndef NODEVICE
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
-
+#endif
    sock_info.sockfd = response.base.sockfd;
    //sockfd = response.base.sockfd;
 
@@ -204,6 +243,7 @@ close(int sock_fd)
    mt_request_generic_t request;
    mt_response_generic_t response;
 
+
    //sinfo_t sock_info;
    //memset(&sock_info, 0, sizeof(sinfo_t));
    //sock_info.sockfd = sock_fd; 
@@ -220,9 +260,11 @@ close(int sock_fd)
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
+#ifndef NODEVICE
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
+#endif
 
    printf("Close-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
@@ -245,7 +287,7 @@ bind( int sockfd,
 	{
 		printf("Socket file discriptor value invalid\n");
 		return 1;
-	}
+	}	
 	
 	build_bind_socket( &request, sockfd, sockaddr, addrlen);
 	
@@ -270,6 +312,7 @@ listen( int sockfd, int backlog )
 		printf("Socket file discriptor value invalid\n");
 		return 1;
 	}
+	
 
 	build_listen_socket( &request, sockfd, &backlog);
 
@@ -277,6 +320,32 @@ listen( int sockfd, int backlog )
 
 	read( fd, &response, sizeof(response) );
 
+	return response.base.status;
+
+}
+
+
+int
+accept( int sockfd, 
+		struct sockaddr * sockaddr, 
+		socklen_t * socklen)
+{
+
+	mt_request_generic_t request;
+	mt_response_generic_t response;
+
+	if ( sockfd <= 0 )
+	{
+		printf("Socket file discriptor value invalid");
+		return 1;
+	}
+
+	build_accept_socket(&request, sockfd, sockaddr);
+
+	write( fd, &request, sizeof(request) );
+
+	read( fd, &response, sizeof(response) );
+	
 	return response.base.status;
 
 }
@@ -362,7 +431,11 @@ void _init(void)
 
     printf("Intercept module loaded\n");
 
+#ifdef NODEVICE
+	fd = open("/dev/null", O_RDWR);
+#else
     fd = open("/dev/mwchar", O_RDWR);
+#endif
 
     if (fd < 0) {
         perror("Failed to open the device...");

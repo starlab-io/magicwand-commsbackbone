@@ -5,10 +5,12 @@
 # 
 
 CC = gcc
-CFLAGS = -ggdb -Wall -fPIC -DPIC
+CFLAGS = -Wall -fPIC -DPIC
 CFLAGS += -I../../../common
 
 DEBUG = -ggdb
+
+#CFLAGS += -DNODEVICE
 
 LD = ld
 LDFLAGS = -shared
@@ -24,7 +26,7 @@ $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
 	$(CC) $(DEBUG) $(CFLAGS) $? -o $@ 
 
 $(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_LOC)$(PRE_LOAD_LIB_NAME).c
-	$(CC) $(CFLAGS) -c $? -o $@
+	$(CC) $(DEBUG)  $(CFLAGS) -c $? -o $@
 
 $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o
 	$(LD) $(LDFLAGS) $? -o $@ 

@@ -27,6 +27,7 @@ int 				client_sockfd = -1;
 
 int main(int argc , char *argv[])
 {
+
 	int					client_addrlen;
 	int					read_size;
     struct sockaddr_in 	server_sockaddr, client_sockaddr;
@@ -54,7 +55,7 @@ int main(int argc , char *argv[])
 
     //Prepare sockaddr_in struct with needed values
     server_sockaddr.sin_family = AF_INET;
-    server_sockaddr.sin_addr.s_addr = INADDR_ANY;;
+    server_sockaddr.sin_addr.s_addr = INADDR_ANY;
     server_sockaddr.sin_port = htons(21845);
 
 	
@@ -65,6 +66,7 @@ int main(int argc , char *argv[])
 		goto ErrorExit;
 	}
 
+	goto UnderConstruction;
 
 	//Listen
 	if ( listen(server_sockfd, 3) == 0)
@@ -76,11 +78,15 @@ int main(int argc , char *argv[])
 		goto ErrorExit;
 	}
 
-	goto UnderConstruction;
+
 
 	client_addrlen = sizeof(struct sockaddr_in);
+	
+	//Ok, so the cast is to a general sockaddr type
+	//HOWEVER length passed is the size of sockaddr_in... strange
+	client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
 
-	client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t*)&client_addrlen);
+	
 	
 	if( client_sockfd < 0 )
 	{
