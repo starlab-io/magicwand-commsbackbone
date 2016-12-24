@@ -25,6 +25,7 @@
 #include <netinet/in.h>
 
 #include <message_types.h>
+#include <translate.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
@@ -46,6 +47,22 @@ typedef struct _sinfo {
 
 sinfo_t sock_info;
 
+
+
+
+int
+isAF_INET( struct sockaddr * SockAddr, socklen_t * size)
+{
+	int ret = 0;
+
+	if ( SockAddr->sa_family != AF_INET || *size != sizeof(struct sockaddr_in) )
+	{
+		perror("Only AF_INET is supported at this time\n");
+		ret = 1;
+	}
+
+	return ret;
+}
 
 void
 build_create_socket( mt_request_generic_t * Request )
@@ -80,47 +97,28 @@ build_close_socket( mt_request_generic_t * Request, int sockfd )
 }
 
 
+
+
+
 void
 build_bind_socket( 
 		mt_request_generic_t * Request, 
 		int sockfd, 
-		const struct sockaddr * SockAddr, 
+		struct sockaddr_in * SockAddr, 
 		socklen_t Addrlen 
 		)
 {
 
 	mt_request_socket_bind_t * bind = &(Request->socket_bind);
 
-	struct sockaddr_in * sockaddr;
-
 	bzero( Request, sizeof(*Request) );
+
+	populate_mt_sockaddr_in( &bind->sockaddr, SockAddr );
 
     bind->base.sig  = MT_SIGNATURE_REQUEST;
     bind->base.type = MtRequestSocketBind;
     bind->base.id = request_id++;
     bind->base.sockfd = sockfd;
-
-	//We need to confirm that this is a sockaddr_in by checking if sa_family = AF_INET
-	//Then cast it to it's correct type
-	if( SockAddr->sa_family == AF_INET 
-		&& sizeof(*SockAddr) == sizeof(struct sockaddr_in) )
-	{
-		//Perform the cast
-		//Struct sockaddr points to an area in memory the same size as sockaddr_in
-		sockaddr = (struct sockaddr_in *)SockAddr;
-
-	}else
-	{
-		//ERROR
-		printf("Error casting sockaddr into sockaddr_t");
-	}
-
-	//Now convert it into our message type
-	bind->sockaddr.sin_family         = sockaddr->sin_family;
-	bind->sockaddr.sin_port           = sockaddr->sin_port;
-	bind->sockaddr.sin_addr.s_addr    = sockaddr->sin_addr.s_addr;
-
-	memcpy( bind->sockaddr.sin_zero, sockaddr->sin_zero, sizeof(bind->sockaddr.sin_zero) );
 
     bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
 }
@@ -135,20 +133,19 @@ build_listen_socket( mt_request_generic_t * Request,
 	
 	bzero( Request, sizeof(*Request) );
 
+	listen->backlog = *backlog;
+	listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
+
 	listen->base.sig = MT_SIGNATURE_REQUEST;
 	listen->base.type = MtRequestSocketListen;
 	listen->base.id = request_id++;
 	listen->base.sockfd = sockfd;
 
-	listen->backlog = *backlog;
-
 	listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
-
 }
 
 void build_accept_socket( mt_request_generic_t * Request,
-						  int sockfd,
-						  struct sockaddr * sockaddr )
+						  int sockfd)
 {
 	mt_request_socket_accept_t * accept = &(Request->socket_accept);
 
@@ -159,10 +156,7 @@ void build_accept_socket( mt_request_generic_t * Request,
 	accept->base.id = request_id++;
 	accept->base.sockfd = sockfd;
 
-//	accept->sockaddr = (mt_sockaddr_t) sockaddr;
-
-
-
+	accept->base.size = MT_REQUEST_SOCKET_ACCEPT_SIZE;
 }
 
 
@@ -256,6 +250,7 @@ close(int sock_fd)
       
    build_close_socket( &request, sock_fd );
 
+
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
@@ -275,25 +270,36 @@ close(int sock_fd)
 
 
 int
-bind( int sockfd,
-	  const struct sockaddr * sockaddr, 
+bind( int SockFd,
+	  const struct sockaddr * SockAddr, 
 	  socklen_t addrlen )
 {
 
 	mt_request_generic_t request;
 	mt_response_generic_t response;
+	struct sockaddr_in * sockaddr_in;
 
-	if ( sock_info.sockfd <= 0 )
+	if ( SockFd <= 0 )
 	{
 		printf("Socket file discriptor value invalid\n");
 		return 1;
 	}	
-	
-	build_bind_socket( &request, sockfd, sockaddr, addrlen);
-	
+
+	if ( SockAddr->sa_family != AF_INET || addrlen != sizeof(struct sockaddr_in) )
+	{
+		perror("Only AF_INET is supported at this time\n");
+		return 1;
+	}
+
+	sockaddr_in = ( struct sockaddr_in * ) SockAddr;
+
+	build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
+
+#ifndef NODEVICE	
 	write( fd, &request, sizeof(request) );
 
 	read( fd, &response, sizeof(response) );
+#endif
 
 	return response.base.status;
 }
@@ -316,9 +322,11 @@ listen( int sockfd, int backlog )
 
 	build_listen_socket( &request, sockfd, &backlog);
 
+#ifndef NODEVICE
 	write( fd, &request, sizeof(request) );
 
 	read( fd, &response, sizeof(response) );
+#endif
 
 	return response.base.status;
 
@@ -327,7 +335,7 @@ listen( int sockfd, int backlog )
 
 int
 accept( int sockfd, 
-		struct sockaddr * sockaddr, 
+		struct sockaddr * SockAddr, 
 		socklen_t * socklen)
 {
 
@@ -339,13 +347,18 @@ accept( int sockfd,
 		printf("Socket file discriptor value invalid");
 		return 1;
 	}
+	
+	build_accept_socket(&request, sockfd);
 
-	build_accept_socket(&request, sockfd, sockaddr);
-
+#ifndef NODEVICE
 	write( fd, &request, sizeof(request) );
 
 	read( fd, &response, sizeof(response) );
-	
+#endif
+
+	populate_sockaddr_in( (struct sockaddr_in *)SockAddr, &response.socket_accept.sockaddr);
+	*socklen = sizeof(struct sockaddr_in);
+
 	return response.base.status;
 
 }
@@ -376,9 +389,11 @@ connect(int sockfd,
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
+#ifndef NODEVICE
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
+#endif
 
    printf("Connect-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
@@ -409,9 +424,11 @@ send(int sockfd,
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
+#ifndef NODEVICE
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
+#endif
 
    printf("Write-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
@@ -434,11 +451,11 @@ void _init(void)
 #ifdef NODEVICE
 	fd = open("/dev/null", O_RDWR);
 #else
-    fd = open("/dev/mwchar", O_RDWR);
+	fd = open("/dev/mwchar", O_RDWR);
 #endif
 
-    if (fd < 0) {
-        perror("Failed to open the device...");
-        return;
-   }
+	if (fd < 0) {
+		perror("Failed to open the device...");
+		return;
+	}
 }

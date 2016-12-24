@@ -28,8 +28,8 @@ int 				client_sockfd = -1;
 int main(int argc , char *argv[])
 {
 
-	int					client_addrlen;
-	int					read_size;
+	int					client_addrlen = 0;
+	int					read_size = 0;
     struct sockaddr_in 	server_sockaddr, client_sockaddr;
 
     char               	client_message[MSG_SIZE];
@@ -37,8 +37,10 @@ int main(int argc , char *argv[])
 
 
     memset( client_message, 0, 20);
+	bzero( &server_sockaddr, sizeof(server_sockaddr) );
+	bzero( &client_sockaddr, sizeof(client_sockaddr) );
     strcpy(client_message, hello);
-
+	
 
     //Create Socket
     server_sockfd = socket(AF_INET , SOCK_STREAM , 0);
@@ -66,7 +68,6 @@ int main(int argc , char *argv[])
 		goto ErrorExit;
 	}
 
-	goto UnderConstruction;
 
 	//Listen
 	if ( listen(server_sockfd, 3) == 0)
@@ -84,9 +85,12 @@ int main(int argc , char *argv[])
 	
 	//Ok, so the cast is to a general sockaddr type
 	//HOWEVER length passed is the size of sockaddr_in... strange
+	//I figured it out, the sockaddr is cast as a struct_sockaddr on the other side based on the
+	//sin_family value
 	client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
 
 	
+	goto UnderConstruction;
 	
 	if( client_sockfd < 0 )
 	{

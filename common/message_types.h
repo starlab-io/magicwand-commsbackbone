@@ -270,14 +270,13 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 {
 	mt_request_base_t base;
-	mt_sockaddr_t sockaddr;
 
 } mt_request_socket_accept_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
 	mt_response_base_t base;
-	mt_socket_fd_t client_sockfd;
+	mt_sockaddr_in_t sockaddr;
 
 } mt_response_socket_accept_t;
 
