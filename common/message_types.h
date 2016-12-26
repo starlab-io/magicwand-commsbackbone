@@ -280,8 +280,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 
 } mt_response_socket_accept_t;
 
-#define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t);
-#define MT_RESPONSE_SOCKET_ACCEPT_SIZE sizeof(mt_response_socket_accept_t);
+#define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t)
+#define MT_RESPONSE_SOCKET_ACCEPT_SIZE sizeof(mt_response_socket_accept_t)
 
 
 
