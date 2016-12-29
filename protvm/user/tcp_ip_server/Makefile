@@ -10,7 +10,7 @@ CFLAGS += -I../../../common
 
 DEBUG = -ggdb
 
-CFLAGS += -DNODEVICE
+#CFLAGS += -DNODEVICE
 
 LD = ld
 LDFLAGS = -shared

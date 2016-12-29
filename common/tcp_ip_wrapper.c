@@ -50,20 +50,6 @@ sinfo_t sock_info;
 
 
 
-int
-isAF_INET( struct sockaddr * SockAddr, socklen_t * size)
-{
-	int ret = 0;
-
-	if ( SockAddr->sa_family != AF_INET || *size != sizeof(struct sockaddr_in) )
-	{
-		perror("Only AF_INET is supported at this time\n");
-		ret = 1;
-	}
-
-	return ret;
-}
-
 void
 build_create_socket( mt_request_generic_t * Request )
 {
@@ -95,8 +81,6 @@ build_close_socket( mt_request_generic_t * Request, int sockfd )
     csock->base.id = request_id++;
     csock->base.sockfd = sockfd;
 }
-
-
 
 
 

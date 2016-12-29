@@ -144,10 +144,10 @@ typedef struct _mt_in_addr
 
 typedef struct _mt_sockaddr_in
 {
-	int16_t 			sin_family;
-	uint16_t			sin_port;
-	mt_in_addr_t 		sin_addr;
-	uint8_t 			sin_zero[8];
+	mt_protocol_family_t  sin_family;
+	uint16_t			  sin_port;
+	mt_in_addr_t 		  sin_addr;
+	uint8_t 			  sin_zero[8];
 
 } mt_sockaddr_in_t;
 

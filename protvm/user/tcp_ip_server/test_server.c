@@ -89,7 +89,12 @@ int main(int argc , char *argv[])
 	//sin_family value
 	client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
 
-	
+
+	if( client_sockfd != 0 )
+	{
+		printf("SUCCESS\n");
+	}
+
 	goto UnderConstruction;
 	
 	if( client_sockfd < 0 )
