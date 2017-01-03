@@ -24,88 +24,95 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#define OPEN_CLOSE_CNT  4 
+
 void *
-thread_func( void *data )
+thread_func_1( void *data )
 {
     int  socket_desc;
     int  err = 0;
+    int  cnt;
 
-    // 1> Call Socket
-    socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
-     
-    if (socket_desc == -1)
+    for(cnt = 0;cnt < OPEN_CLOSE_CNT; ++cnt)
     {
-        printf("Could not create socket");
-        err = 1;
-        goto ErrorExit;
 
-    } else {
-        printf("Socket Number: %d\n", socket_desc);
-    }
+        printf("Thread number %ld\n", pthread_self());
+        // 1> Call Socket
+        socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
+     
+        if (socket_desc == -1)
+        {
+            printf("Could not create socket");
+            err = 1;
+            goto ErrorExit;
+
+        } else {
+            printf("Socket Number: %d\n", socket_desc);
+        }
     
-    // 2> Call close
-    close(socket_desc);
+        printf("Thread number %ld\n", pthread_self());
+        // 2> Call close
+        close(socket_desc);
+    }
 
 ErrorExit:
     return;
 }
 
+void *
+thread_func_2( void *data )
+{
+    int  socket_desc;
+    int  err = 0;
+    int  cnt;
+
+
+    for(cnt = 0;cnt < OPEN_CLOSE_CNT; ++cnt)
+    {
+
+        printf("Thread number %ld\n", pthread_self());
+        // 1> Call Socket
+        socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
+     
+        if (socket_desc == -1)
+        {
+            printf("Could not create socket");
+            err = 1;
+            goto ErrorExit;
+
+        } else {
+            printf("Socket Number: %d\n", socket_desc);
+        }
+    
+        printf("Thread number %ld\n", pthread_self());
+        // 2> Call close
+        close(socket_desc);
+    }
+
+ErrorExit:
+    return;
+
+}
+
 int main(int argc , char *argv[])
 {
-    int                 socket_desc;
-    struct sockaddr_in  server;
     int                 err = 0;
-    char               client_message[20];
-    char              *hello = "Hello\n";
-    pthread_t          thr;
+    pthread_t           thrd_1;
+    pthread_t           thrd_2;
 
-    memset( client_message, 0, 20 );
-    strcpy( client_message, hello );
 
-    // 1> Call Socket
-    socket_desc = socket(AF_INET , SOCK_STREAM , 0);
-     
-    if ( socket_desc == -1 )
+    if ( pthread_create( &thrd_1, NULL, thread_func_1, NULL )  != 0 )
     {
-        printf("Could not create socket");
-        err = 1;
-        goto ErrorExit;
-
-    } else {
-        printf("Socket Number: %d\n", socket_desc);
-    }
-
-    // 2> Call connect
-
-    server.sin_addr.s_addr = inet_addr("192.168.0.4");
-    server.sin_family = AF_INET;
-    server.sin_port = htons( 21845);
-
-    if (connect(socket_desc, (struct sockaddr *)&server , sizeof(server)) < 0)
-    {
-        printf("connect failed. Error");
-        return 1;
-    }
-
-    printf("Connected\n");
-
-    // 3> Call send 
-    if (send(socket_desc, client_message , strlen(client_message), 0) < 0)
-    {
-        printf("send failed. Error");
-        return 1;
-    }
-
-    // 4> Call close
-    close(socket_desc);
-
-    printf("\n\nCalling Thread Function\n\n");
-
-    if ( pthread_create( &thr, NULL, thread_func, NULL )  != 0 )
         exit(1);
+    }
 
-    pthread_join( thr, NULL );
+    if ( pthread_create( &thrd_2, NULL, thread_func_2, NULL )  != 0 )
+    {
+        exit(1);
+    }
+
+    pthread_join( thrd_1, NULL );
+    pthread_join( thrd_2, NULL );
      
-ErrorExit:
     return err;
 }

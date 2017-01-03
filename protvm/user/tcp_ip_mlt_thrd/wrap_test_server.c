@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <pthread.h>
 
 #include "sock_info_list.h"
 #include <assert.h>
@@ -39,8 +40,13 @@
 static int fd;
 static int request_id;
 
-sinfo_t      sock_info;
-struct list *list;
+sinfo_t          sock_info;
+struct list     *list;
+
+pthread_mutex_t  create_lock;
+pthread_mutex_t  close_lock;
+pthread_mutex_t  connect_lock;
+pthread_mutex_t  send_lock;
 
 void
 build_create_socket( mt_request_generic_t * Request )
@@ -103,7 +109,7 @@ build_write_socket( mt_request_generic_t * Request,
     static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
-    wsock ->base.sig  = MT_SIGNATURE_REQUEST;
+    wsock->base.sig  = MT_SIGNATURE_REQUEST;
     wsock->base.type = MtRequestSocketWrite;
     wsock->base.id = request_id++;
     wsock->base.sockfd = SockInfo->sockfd;
@@ -122,14 +128,16 @@ socket( int domain,
         int protocol )
 {
 
+   pthread_mutex_lock(&create_lock);
+
    mt_request_generic_t  request;
    mt_response_generic_t response;
 
    build_create_socket( &request );
 
-   printf("Sending socket-create request\n");
-   printf("\tSize of request base: %lu\n", sizeof(request));
-   printf("\t\tSize of payload: %d\n", request.base.size);
+   //printf("Sending socket-create request\n");
+   //printf("\tSize of request base: %lu\n", sizeof(request));
+   //printf("\t\tSize of payload: %d\n", request.base.size);
 
    write(fd, &request, sizeof(request)); 
 
@@ -140,9 +148,9 @@ socket( int domain,
    // Add Connection to List
    add_sock_info( list, &sock_info );
 
-   printf("Create-socket response returned\n");
-   printf("\tSize of response base: %lu\n", sizeof(response));
-   printf("\t\tSize of payload: %d\n", response.base.size);
+   //printf("Create-socket response returned\n");
+   //printf("\tSize of response base: %lu\n", sizeof(response));
+   //printf("\t\tSize of payload: %d\n", response.base.size);
 
    if ( response.base.status )
    {
@@ -150,6 +158,8 @@ socket( int domain,
       // Returns -1 on error
       return -1;
    }
+
+   pthread_mutex_unlock(&create_lock);
 
    // Returns socket number on success
    return sock_info.sockfd;
@@ -159,6 +169,8 @@ int
 close( int sock_fd )
 {
  
+   pthread_mutex_lock(&close_lock);
+
    mt_request_generic_t  request;
    mt_response_generic_t response;
 
@@ -171,16 +183,16 @@ close( int sock_fd )
    build_close_socket( &request, &sock_info );
 
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
-   printf("\tSize of request base: %lu\n", sizeof(request));
-   printf("\t\tSize of payload: %d\n", request.base.size);
+   //printf("\tSize of request base: %lu\n", sizeof(request));
+   //printf("\t\tSize of payload: %d\n", request.base.size);
 
    write(fd, &request, sizeof(request)); 
 
    read(fd, &response, sizeof(response));
 
-   printf("Close-socket response returned\n");
-   printf("\tSize of response base: %lu\n", sizeof(response));
-   printf("\t\tSize of payload: %d\n", response.base.size);
+   //printf("Close-socket response returned\n");
+   //printf("\tSize of response base: %lu\n", sizeof(response));
+   //printf("\t\tSize of payload: %d\n", response.base.size);
 
    if ( response.base.status )
    {
@@ -188,6 +200,8 @@ close( int sock_fd )
       // Returns -1 on error
       return -1;
    }
+
+   pthread_mutex_unlock(&close_lock);
 
    // Returns 0 on success
    return response.base.status;
@@ -198,6 +212,7 @@ connect( int sockfd,
          const struct sockaddr *addr,
          socklen_t addrlen )
 {
+   pthread_mutex_lock(&connect_lock);
 
    mt_request_generic_t request;
    mt_response_generic_t response;
@@ -237,6 +252,8 @@ connect( int sockfd,
       return -1;
    }
 
+   pthread_mutex_unlock(&connect_lock);
+
    // Returns 0 on success
    return response.base.status;
 }
@@ -247,6 +264,8 @@ send( int         sockfd,
       size_t      len,
       int         flags )
 {
+   pthread_mutex_lock(&send_lock);
+
    mt_request_generic_t request;
    mt_response_generic_t response;
    mt_size_t size_sent;
@@ -279,6 +298,8 @@ send( int         sockfd,
       return size_sent; 
    }
 
+   pthread_mutex_unlock(&send_lock);
+
    // Returns -1 on error
    return -1;
 }
@@ -300,6 +321,11 @@ _init( void )
 
    list = create_sock_info_list();
    assert (list);
+
+   pthread_mutex_init(&create_lock, NULL);
+   pthread_mutex_init(&close_lock, NULL);
+   pthread_mutex_init(&connect_lock, NULL);
+   pthread_mutex_init(&send_lock, NULL);
    
 }
 
@@ -326,6 +352,11 @@ _fini( void )
 
    destroy_sock_info( list, sock_info.sockfd );
    destroy_list( &list );
+
+   pthread_mutex_destroy(&create_lock);
+   pthread_mutex_destroy(&close_lock);
+   pthread_mutex_destroy(&connect_lock);
+   pthread_mutex_destroy(&send_lock);
 
    printf("Intercept module unloaded\n");
 }
