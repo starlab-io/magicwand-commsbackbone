@@ -92,7 +92,7 @@ void
 populate_mt_sockaddr_in( mt_sockaddr_in_t * mt_sockaddr,
 						 struct sockaddr_in * SockAddr)
 {	
-	mt_sockaddr->sin_family         = SockAddr->sin_family;
+	mt_sockaddr->sin_family         = xe_net_get_mt_protocol_family( SockAddr->sin_family );
 	mt_sockaddr->sin_port           = SockAddr->sin_port;
 	mt_sockaddr->sin_addr.s_addr    = SockAddr->sin_addr.s_addr;
 	memcpy( mt_sockaddr->sin_zero, SockAddr->sin_zero, sizeof(mt_sockaddr->sin_zero) );
