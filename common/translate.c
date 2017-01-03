@@ -7,6 +7,10 @@
 
 #include "message_types.h"
 #include "translate.h"
+<<<<<<< HEAD
+=======
+#include "app_common.h"
+>>>>>>> origin/server_implementation
 
 
 mt_protocol_family_t
@@ -69,7 +73,6 @@ xe_net_get_native_sock_type( mt_sock_type_t Type )
         break;
     case MT_ST_UNSET:
     default:
-        //MYASSERT( !"Invalid socket type requested" );
         perror("Invalid socket type requested");
     }
 
