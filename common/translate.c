@@ -7,10 +7,6 @@
 
 #include "message_types.h"
 #include "translate.h"
-<<<<<<< HEAD
-=======
-#include "app_common.h"
->>>>>>> origin/server_implementation
 
 
 mt_protocol_family_t
