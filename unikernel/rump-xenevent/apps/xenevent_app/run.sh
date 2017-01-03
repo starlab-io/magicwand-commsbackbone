@@ -4,19 +4,13 @@
 ## Refer to setup_net.sh 
 ##
 
-echo "Running xenvent without debugging enabled"
-
-#sudo ../rumprun/bin/rumprun xen -di -I xen0,xenif -W xen0,inet,static,10.190.2.24/24 
-
 #FOR ALEX
 IP=10.0.2.138
 
-# rumprun -S xen -dip -D 1234 -M 128 -N client-rump \
-#         -I if,tap0,'-net tap,script=no,ifname=tap0' \
-#         -W if,inet,static,10.0.120.101/24 \
-#         client.run
+echo "Running xenvent without debugging enabled"
+echp "IP address: $IP"
 
 rumprun -S xen -di -M 256 -N xenevent-rump \
         -I xen0,xenif \
-        -W xen0,inet,dhcp \
+        -W xen0,inet,static,$IP/24 \
         xenevent.run

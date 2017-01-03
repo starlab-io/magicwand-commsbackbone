@@ -31,50 +31,6 @@ xe_net_set_base_response( IN mt_request_generic_t   * Request,
 }
 
 
-/*
-static int
-xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
-{
-    int pfam = -1;
-
-    switch( Fam )
-    {
-    case MT_PF_INET:
-        pfam = AF_INET;
-        break;
-    case MT_PF_INET6:
-        pfam = AF_INET6;
-        break;
-    case MT_PF_UNSET:
-    default:
-        MYASSERT( !"Invalid protocol family requested" );
-    }
-
-    return pfam;
-}
-
-static int
-xe_net_get_native_sock_type( mt_sock_type_t Type )
-{
-    int stype = -1;
-
-    switch( Type )
-    {
-    case MT_ST_DGRAM:
-        stype = SOCK_DGRAM;
-        break;
-    case MT_ST_STREAM:
-        stype = SOCK_STREAM;
-        break;
-    case MT_ST_UNSET:
-    default:
-        MYASSERT( !"Invalid socket type requested" );
-    }
-
-    return stype;
-}
-
-*/
 
 int
 xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
@@ -230,11 +186,11 @@ xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
 
 	if(Response->base.status != 0 )
 	{
-		printf("Bind failed\n");
+		DEBUG_PRINT("Bind failed\n");
 	}
 	else
 	{
-		printf("Bind success\n");
+		DEBUG_PRINT("Bind success\n");
 	}
 
 	xe_net_set_base_response( (mt_request_generic_t *) Request,
@@ -279,10 +235,15 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 	
 	int addrlen = sizeof(sockaddr);
 
+    DEBUG_PRINT ( "Worker thread %d (socket %d) is listening for connections.\n",
+                  WorkerThread->idx, WorkerThread->sock_fd);
+
 	Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
 
-	populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
+    DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
+                  WorkerThread->idx, WorkerThread->sock_fd );
 
+	populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
 
 	xe_net_set_base_response( (mt_request_generic_t *)	Request,
 							  MT_RESPONSE_SOCKET_ACCEPT_SIZE,
