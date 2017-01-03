@@ -19,6 +19,7 @@
 #include <linux/err.h>
 #include <linux/fs.h>             
 #include <linux/semaphore.h>
+#include <linux/mutex.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>          
@@ -95,6 +96,9 @@ ktime_t start, end;
 s64 actual_time;
 
 static struct semaphore mw_sem;
+
+static struct mutex mw_req_mutex;
+static struct mutex mw_res_mutex;
 
 // Defines:
 // mwevent_sring_t
@@ -297,6 +301,8 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
 
    //printk(KERN_INFO "In receive_response(). Entering while loop ... \n");
 
+   mutex_lock( &mw_res_mutex );
+
    do
    {
 
@@ -362,6 +368,9 @@ receive_response(void *Response, size_t Size, size_t *BytesWritten)
    //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
    //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
 
+   mutex_unlock( &mw_res_mutex );
+
+
 ErrorExit:
    return rc;
 
@@ -373,6 +382,8 @@ send_request(void *Request, size_t Size)
 
    bool notify = false;  
    void * dest = NULL;
+
+   mutex_lock(&mw_req_mutex);
 
    if (RING_FULL(&front_ring)) {
 
@@ -406,6 +417,8 @@ send_request(void *Request, size_t Size)
       //printk(KERN_INFO "MWChar: send_request(). notify = %u \n", notify);
       
    }
+
+   mutex_unlock(&mw_req_mutex);
 }
 
 static void
@@ -749,6 +762,9 @@ static int __init mwchar_init(void) {
    }
 
    sema_init(&mw_sem,0);
+
+   mutex_init( &mw_req_mutex );
+   mutex_init( &mw_res_mutex );
    
    return 0;
 }
@@ -797,6 +813,10 @@ static void __exit mwchar_exit(void){
    if (!is_evt_chn_closed()) {
       free_unbound_evt_chn();
    }
+
+   mutex_destroy( &mw_req_mutex );
+   mutex_destroy( &mw_res_mutex );
+   
 
    printk(KERN_INFO "MWChar: Unloading gnt_srvr LKM\n");
    printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");
