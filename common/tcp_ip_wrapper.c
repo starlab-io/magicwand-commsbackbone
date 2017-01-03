@@ -33,7 +33,7 @@
 #define SERVER_NAME "rumprun-echo_server-rumprun.bin"
 
 //Server IP address is the ip address that the final message will be sent to
-#define SERVER_IP   "10.1.2.5"
+#define SERVER_IP   "10.0.2.15"
 #define SERVER_PORT 21845 
 
 static int fd;
