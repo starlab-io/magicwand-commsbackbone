@@ -489,11 +489,17 @@ process_buffer_item( buffer_item_t * BufferItem )
 	case MtRequestSocketBind: 
 		rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
 								 (mt_response_socket_bind_t *) &response,
-								 worker );
+	   							 worker );
+		break;
 	case MtRequestSocketListen:
 		rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
 								   (mt_response_socket_listen_t *) &response,
 									worker );
+		break;
+	case MtRequestSocketAccept:
+		rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
+								   (mt_response_socket_accept_t *) &response,
+								    worker );
         break;
     case MtRequestInvalid:
     default:
@@ -970,7 +976,7 @@ message_dispatcher( void )
 
         // Remember: we'll yield next...
         request_type = MT_RESPONSE_GET_TYPE( myitem->request );
-        if ( request_type == MtRequestSocketConnect )
+        if ( request_type == MtRequestSocketConnect || request_type == MtRequestSocketAccept)
         {
             xe_yield();
         } else 
@@ -1075,7 +1081,7 @@ test_message_dispatcher2( void )
 int main(void)
 {
     int rc = 0;
-    
+  
     rc = init_state();
     if ( rc )
     {
@@ -1090,3 +1096,4 @@ ErrorExit:
     fini_state();
     return rc;
 }
+

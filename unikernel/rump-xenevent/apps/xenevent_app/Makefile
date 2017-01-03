@@ -51,8 +51,9 @@ $(APPNAME).run: $(APPNAME).bin
 	@echo " gdb -ex 'target remote:1234' $@"
 
 # threads.c
-$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c
+$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c ../../../../common/translate.c
 	$(CC) $(CFLAGS) -o $@ $^
+
 
 clean:
 	rm -f $(APPNAME).run $(APPNAME).bin *.o

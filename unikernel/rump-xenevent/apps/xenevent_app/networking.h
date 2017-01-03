@@ -41,5 +41,9 @@ xe_net_bind_socket( IN mt_request_socket_bind_t   * Request,
 int
 xe_net_listen_socket( IN  mt_request_socket_listen_t	* Request,
 					  OUT mt_response_socket_listen_t 	* Response,
-					  IN  thread_item_t					*WorkerThread);
+					  IN  thread_item_t					* WorkerThread );
+int
+xe_net_accept_socket( IN   mt_request_socket_accept_t		* Request,
+					  OUT  mt_response_socket_accept_t 		* Response,
+					  IN   thread_item_t					* WorkerThread );
 #endif // xenevent_app_networking_h
