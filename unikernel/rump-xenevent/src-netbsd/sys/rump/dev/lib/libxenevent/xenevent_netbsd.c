@@ -143,3 +143,10 @@ xenevent_atomic_dec( uint32_t * old )
 {
     return atomic_dec_32_nv( old );
 }
+
+
+int
+xenevent_kpause( const char *wmesg, bool intr, int timo, xenevent_mutex_t *mtx)
+{
+    return kpause(wmesg, intr, timo, (kmutex_t *) mtx );
+}

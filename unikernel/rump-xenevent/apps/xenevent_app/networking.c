@@ -13,7 +13,7 @@
 #include "networking.h"
 #include "message_types.h"
 #include "threadpool.h"
-
+#include "translate.h"
 
 // XXXXXXXX verify that errno values match between Linux and NetBSD
 
@@ -31,6 +31,7 @@ xe_net_set_base_response( IN mt_request_generic_t   * Request,
 }
 
 
+/*
 static int
 xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
 {
@@ -73,6 +74,7 @@ xe_net_get_native_sock_type( mt_sock_type_t Type )
     return stype;
 }
 
+*/
 
 int
 xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
@@ -207,21 +209,26 @@ ErrorExit:
     return Response->base.status;
 }
 
+
+
 int
 xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
 					OUT mt_response_socket_bind_t 	* Response,
 					IN thread_item_t				* WorkerThread)
 {
-
-	printf("In bind socket\n");
 	
+	MYASSERT(WorkerThread->sock_fd == Request->base.sockfd);
+	MYASSERT( 1 == WorkerThread->in_use);
+		
 	int sockfd = Request->base.sockfd;
-	struct sockaddr* server_sockaddr = (struct sockaddr*)&Request->sockaddr;
-	size_t addrlen = Request->addrlen;
+	struct sockaddr_in sockaddr;
+    size_t addrlen = sizeof(sockaddr);;
 
-	Response->base.status =  bind(sockfd, server_sockaddr, addrlen);
+    populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-	if ( Response->base.status != 0 )
+	Response->base.status =  bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
+
+	if(Response->base.status != 0 )
 	{
 		printf("Bind failed\n");
 	}
@@ -243,11 +250,42 @@ xe_net_listen_socket( IN	mt_request_socket_listen_t	*Request,
 					  OUT	mt_response_socket_listen_t	*Response,
 					  IN	thread_item_t 				*WorkerThread)
 {
+
+	MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
+	MYASSERT(1 == WorkerThread->in_use);
+
 	Response->base.status = listen( Request->base.sockfd,
 									Request->backlog);
 
 	xe_net_set_base_response( (mt_request_generic_t *)	Request,
 							  MT_RESPONSE_SOCKET_LISTEN_SIZE,
+							  (mt_response_generic_t *)	Response);
+
+	return Response->base.status;
+}
+
+
+int
+xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
+	                  OUT  mt_response_socket_accept_t *Response,
+					  IN   thread_item_t               *WorkerThread )
+{
+	MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
+	MYASSERT( 1 == WorkerThread->in_use );
+
+
+	struct sockaddr_in sockaddr;
+	bzero( &sockaddr, sizeof(sockaddr));
+	
+	int addrlen = sizeof(sockaddr);
+
+	Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
+
+	populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
+
+
+	xe_net_set_base_response( (mt_request_generic_t *)	Request,
+							  MT_RESPONSE_SOCKET_ACCEPT_SIZE,
 							  (mt_response_generic_t *)	Response);
 
 	return Response->base.status;

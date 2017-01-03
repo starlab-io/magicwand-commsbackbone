@@ -31,4 +31,7 @@ xenevent_atomic_inc( uint32_t * old );
 uint32_t
 xenevent_atomic_dec( uint32_t * old );
 
+int
+xenevent_kpause( const char *wmesg, bool intr, int timo, xenevent_mutex_t *mtx ); 
+
 #endif // xenevent_netbsd_h

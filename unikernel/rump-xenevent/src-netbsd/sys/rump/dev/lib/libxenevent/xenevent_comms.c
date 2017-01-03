@@ -58,7 +58,7 @@
 #include "xenevent_minios.h"
 #include "message_types.h"
 #include "xen_keystore_defs.h"
-
+#include "xenevent_netbsd.h"
 
 // The RING macros use memset
 #define memset bmk_memset
@@ -335,7 +335,8 @@ xe_comms_read_item( void * Memory,
         if ( !available )
         {
             // Nothing was available. Block until event arrives and try again.
-            xenevent_semaphore_down( g_state.messages_available );
+            //xenevent_semaphore_down( g_state.messages_available );
+            xenevent_kpause("Pausing to wait for read", true, 1, NULL);
             continue;
         }
     } while ( !available );

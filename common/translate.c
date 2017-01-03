@@ -32,10 +32,10 @@ xe_net_get_mt_protocol_family( sa_family_t Fam )
 }
 
 
-int 
+sa_family_t
 xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
 {
-    int pfam = -1; 
+    sa_family_t pfam = -1; 
 
     switch( Fam )
     {   

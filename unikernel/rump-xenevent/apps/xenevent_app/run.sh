@@ -7,7 +7,9 @@
 echo "Running xenvent without debugging enabled"
 
 #sudo ../rumprun/bin/rumprun xen -di -I xen0,xenif -W xen0,inet,static,10.190.2.24/24 
-IP=10.1.2.18
+
+#FOR ALEX
+IP=10.0.2.138
 
 # rumprun -S xen -dip -D 1234 -M 128 -N client-rump \
 #         -I if,tap0,'-net tap,script=no,ifname=tap0' \
