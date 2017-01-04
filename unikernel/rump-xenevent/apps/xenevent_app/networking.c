@@ -168,88 +168,88 @@ ErrorExit:
 
 
 int
-xe_net_bind_socket( IN mt_request_socket_bind_t 	* Request,
-					OUT mt_response_socket_bind_t 	* Response,
-					IN thread_item_t				* WorkerThread)
+xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
+                    OUT mt_response_socket_bind_t   * Response,
+                    IN thread_item_t                * WorkerThread)
 {
-	
-	MYASSERT(WorkerThread->sock_fd == Request->base.sockfd);
-	MYASSERT( 1 == WorkerThread->in_use);
-		
-	int sockfd = Request->base.sockfd;
-	struct sockaddr_in sockaddr;
+    
+    MYASSERT(WorkerThread->sock_fd == Request->base.sockfd);
+    MYASSERT( 1 == WorkerThread->in_use);
+        
+    int sockfd = Request->base.sockfd;
+    struct sockaddr_in sockaddr;
     size_t addrlen = sizeof(sockaddr);;
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-	Response->base.status =  bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
+    Response->base.status =  bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
 
-	if(Response->base.status != 0 )
-	{
-		DEBUG_PRINT("Bind failed\n");
-	}
-	else
-	{
-		DEBUG_PRINT("Bind success\n");
-	}
+    if(Response->base.status != 0 )
+    {
+        DEBUG_PRINT("Bind failed\n");
+    }
+    else
+    {
+        DEBUG_PRINT("Bind success\n");
+    }
 
-	xe_net_set_base_response( (mt_request_generic_t *) Request,
-							  MT_RESPONSE_SOCKET_BIND_SIZE,
-							  (mt_response_generic_t *) Response);
+    xe_net_set_base_response( (mt_request_generic_t *) Request,
+                              MT_RESPONSE_SOCKET_BIND_SIZE,
+                              (mt_response_generic_t *) Response);
 
-	return Response->base.status;;
+    return Response->base.status;;
 }
 
 
 int
-xe_net_listen_socket( IN	mt_request_socket_listen_t	*Request,
-					  OUT	mt_response_socket_listen_t	*Response,
-					  IN	thread_item_t 				*WorkerThread)
+xe_net_listen_socket( IN    mt_request_socket_listen_t  *Request,
+                      OUT   mt_response_socket_listen_t *Response,
+                      IN    thread_item_t               *WorkerThread)
 {
 
-	MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
-	MYASSERT(1 == WorkerThread->in_use);
+    MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
+    MYASSERT(1 == WorkerThread->in_use);
 
-	Response->base.status = listen( Request->base.sockfd,
-									Request->backlog);
+    Response->base.status = listen( Request->base.sockfd,
+                                    Request->backlog);
 
-	xe_net_set_base_response( (mt_request_generic_t *)	Request,
-							  MT_RESPONSE_SOCKET_LISTEN_SIZE,
-							  (mt_response_generic_t *)	Response);
+    xe_net_set_base_response( (mt_request_generic_t *)  Request,
+                              MT_RESPONSE_SOCKET_LISTEN_SIZE,
+                              (mt_response_generic_t *) Response);
 
-	return Response->base.status;
+    return Response->base.status;
 }
 
 
 int
 xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
-	                  OUT  mt_response_socket_accept_t *Response,
-					  IN   thread_item_t               *WorkerThread )
+                      OUT  mt_response_socket_accept_t *Response,
+                      IN   thread_item_t               *WorkerThread )
 {
-	MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
-	MYASSERT( 1 == WorkerThread->in_use );
+    MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
+    MYASSERT( 1 == WorkerThread->in_use );
 
 
-	struct sockaddr_in sockaddr;
-	bzero( &sockaddr, sizeof(sockaddr));
-	
-	int addrlen = sizeof(sockaddr);
+    struct sockaddr_in sockaddr;
+    bzero( &sockaddr, sizeof(sockaddr));
+    
+    int addrlen = sizeof(sockaddr);
 
     DEBUG_PRINT ( "Worker thread %d (socket %d) is listening for connections.\n",
                   WorkerThread->idx, WorkerThread->sock_fd);
 
-	Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
+    Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
 
     DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
                   WorkerThread->idx, WorkerThread->sock_fd );
 
-	populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
+    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
 
-	xe_net_set_base_response( (mt_request_generic_t *)	Request,
-							  MT_RESPONSE_SOCKET_ACCEPT_SIZE,
-							  (mt_response_generic_t *)	Response);
+    xe_net_set_base_response( (mt_request_generic_t *)  Request,
+                              MT_RESPONSE_SOCKET_ACCEPT_SIZE,
+                              (mt_response_generic_t *) Response);
 
-	return Response->base.status;
+    return Response->base.status;
 }
 
 

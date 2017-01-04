@@ -55,9 +55,9 @@ typedef enum
     MtRequestSocketClose   = MT_REQUEST( 3 ),
     MtRequestSocketRead    = MT_REQUEST( 4 ),
     MtRequestSocketWrite   = MT_REQUEST( 5 ),
-	MtRequestSocketBind	   = MT_REQUEST( 6 ),
-	MtRequestSocketListen  = MT_REQUEST( 7 ),
-	MtRequestSocketAccept  = MT_REQUEST( 8 ),
+    MtRequestSocketBind    = MT_REQUEST( 6 ),
+    MtRequestSocketListen  = MT_REQUEST( 7 ),
+    MtRequestSocketAccept  = MT_REQUEST( 8 ),
 } mt_request_type_t;
 
 
@@ -69,9 +69,9 @@ typedef enum
     MtResponseSocketClose   = MT_RESPONSE( MtRequestSocketClose   ),
     MtResponseSocketRead    = MT_RESPONSE( MtRequestSocketRead    ),
     MtResponseSocketWrite   = MT_RESPONSE( MtRequestSocketWrite   ),
-	MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
-	MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
-	MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
+    MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
+    MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
+    MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -127,8 +127,8 @@ typedef enum
 
 typedef struct _mt_sockaddr
 {
-	uint16_t sa_family;
-	uint8_t sa_data[MT_SA_DATA_LEN];
+    uint16_t sa_family;
+    uint8_t sa_data[MT_SA_DATA_LEN];
 } mt_sockaddr_t;
 
 
@@ -137,17 +137,17 @@ typedef struct _mt_sockaddr
 //
 typedef struct _mt_in_addr
 {
-	uint64_t 	s_addr;
+    uint64_t    s_addr;
 
 } mt_in_addr_t;
 
 
 typedef struct _mt_sockaddr_in
 {
-	mt_protocol_family_t  sin_family;
-	uint16_t			  sin_port;
-	mt_in_addr_t 		  sin_addr;
-	uint8_t 			  sin_zero[8];
+    mt_protocol_family_t  sin_family;
+    uint16_t              sin_port;
+    mt_in_addr_t          sin_addr;
+    uint8_t               sin_zero[8];
 
 } mt_sockaddr_in_t;
 
@@ -229,14 +229,14 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
-	mt_request_base_t base;
-	mt_sockaddr_in_t sockaddr;  //Hard coded for now, but should be a union of all sockaddr types.
+    mt_request_base_t base;
+    mt_sockaddr_in_t sockaddr;  //Hard coded for now, but should be a union of all sockaddr types.
 
 } mt_request_socket_bind_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 {
-	mt_response_base_t base;
+    mt_response_base_t base;
 
 } mt_response_socket_bind_t;
 
@@ -249,14 +249,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_listen
 {
-	mt_request_base_t base;
-	int backlog;
+    mt_request_base_t base;
+    int backlog;
 
 } mt_request_socket_listen_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 {
-	mt_response_base_t base;
+    mt_response_base_t base;
 
 } mt_response_socket_listen_t;
 
@@ -270,14 +270,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 {
-	mt_request_base_t base;
+    mt_request_base_t base;
 
 } mt_request_socket_accept_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
-	mt_response_base_t base;
-	mt_sockaddr_in_t sockaddr;
+    mt_response_base_t base;
+    mt_sockaddr_in_t sockaddr;
 
 } mt_response_socket_accept_t;
 
@@ -388,9 +388,9 @@ typedef union _mt_request_generic
     mt_request_socket_close_t   socket_close;
     mt_request_socket_read_t    socket_read;
     mt_request_socket_write_t   socket_write;
-	mt_request_socket_bind_t	socket_bind;
-	mt_request_socket_listen_t  socket_listen;
-	mt_request_socket_accept_t  socket_accept;
+    mt_request_socket_bind_t    socket_bind;
+    mt_request_socket_listen_t  socket_listen;
+    mt_request_socket_accept_t  socket_accept;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -408,9 +408,9 @@ typedef union _mt_response_generic
     mt_response_socket_close_t   socket_close;
     mt_response_socket_read_t    socket_read;
     mt_response_socket_write_t   socket_write;
-	mt_response_socket_bind_t	 socket_bind;
-	mt_response_socket_listen_t  socket_listen;
-	mt_response_socket_accept_t  socket_accept;
+    mt_response_socket_bind_t    socket_bind;
+    mt_response_socket_listen_t  socket_listen;
+    mt_response_socket_accept_t  socket_accept;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

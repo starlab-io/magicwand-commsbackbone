@@ -129,15 +129,15 @@ static xenevent_globals_t g_state;
 static struct timespec 
 diff(struct timespec start, struct timespec end)
 {
-	struct timespec temp;
-	if ((end.tv_nsec-start.tv_nsec)<0) {
-		temp.tv_sec = end.tv_sec-start.tv_sec-1;
-		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
-	} else {
-		temp.tv_sec = end.tv_sec-start.tv_sec;
-		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
-	}
-	return temp;
+    struct timespec temp;
+    if ((end.tv_nsec-start.tv_nsec)<0) {
+        temp.tv_sec = end.tv_sec-start.tv_sec-1;
+        temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec-start.tv_sec;
+        temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+    }
+    return temp;
 }
 */
 
@@ -486,20 +486,20 @@ process_buffer_item( buffer_item_t * BufferItem )
         rc = xe_net_write_socket( (mt_request_socket_write_t *) request,
                                   (mt_response_socket_write_t *) &response,
                                   worker );
-	case MtRequestSocketBind: 
-		rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
-								 (mt_response_socket_bind_t *) &response,
-	   							 worker );
-		break;
-	case MtRequestSocketListen:
-		rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
-								   (mt_response_socket_listen_t *) &response,
-									worker );
-		break;
-	case MtRequestSocketAccept:
-		rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
-								   (mt_response_socket_accept_t *) &response,
-								    worker );
+    case MtRequestSocketBind: 
+        rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
+                                 (mt_response_socket_bind_t *) &response,
+                                 worker );
+        break;
+    case MtRequestSocketListen:
+        rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
+                                   (mt_response_socket_listen_t *) &response,
+                                    worker );
+        break;
+    case MtRequestSocketAccept:
+        rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
+                                   (mt_response_socket_accept_t *) &response,
+                                    worker );
         break;
     case MtRequestInvalid:
     default:
@@ -526,7 +526,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     //clock_gettime(CLOCK_REALTIME, &t2);
     //t3 = diff(t1,t2);
     //DEBUG_PRINT( "Time of Execution for write(). sec: %ld  nsec: %ld\n",
-	         //t3.tv_sec, t3.tv_nsec);
+             //t3.tv_sec, t3.tv_nsec);
 
     if ( written != response.base.size )
     {
@@ -987,7 +987,7 @@ message_dispatcher( void )
         //clock_gettime(CLOCK_REALTIME, &t2);
         //t3 = diff(t1,t2);
         //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
-	             //t3.tv_sec, t3.tv_nsec);
+                 //t3.tv_sec, t3.tv_nsec);
 
 
     } // while
