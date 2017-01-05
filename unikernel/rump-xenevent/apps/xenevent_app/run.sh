@@ -8,7 +8,7 @@
 IP=10.0.2.138
 
 echo "Running xenvent without debugging enabled"
-echp "IP address: $IP"
+echo "IP address: $IP"
 
 rumprun -S xen -di -M 256 -N xenevent-rump \
         -I xen0,xenif \
