@@ -16,12 +16,13 @@ LDFLAGS = -pthread -lcheck_pic -lrt -lm
 TEST_APP_NAME=test_sock_info_list
 LIST_SRCS = main.c sock_info_list_tests.c 
 LIST_OBJ = list.o sock_info_list.o
+OBJ_DIR = ../wrapper
 
 all: $(TEST_APP_NAME) 
 
 $(TEST_APP_NAME): $(LIST_SRCS) $(LIST_OBJ)
 	@echo ""
-	$(CC) $^ -o $@ $(LDFLAGS)
+	$(CC) $(OBJ_DIR)$^ -o $@ $(LDFLAGS)
 
 clean:
 	rm -f $(TEST_APP_NAME) 
