@@ -16,7 +16,7 @@ TCP_IP_APP_NAME=test_server
 all: $(TCP_IP_APP_NAME) 
 
 $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
-	$(CC) $(DEBUG) $(CFLAGS) $? -o $@ 
+	$(CC) $(DEBUG) $(CFLAGS) $^ -o $@ 
 	$(MAKE) -C $(WRAPPER_DIR)
 
 clean:

@@ -63,7 +63,7 @@ int main(int argc , char *argv[])
     printf("Connected\n");
 
 
-    for( i = 0; i < 200; i++ )
+    for( i = 0; i < 2; i++ )
     {
         // 3> Call write
         send(socket_desc, client_message , strlen(client_message), 0);
