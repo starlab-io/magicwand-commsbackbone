@@ -58,6 +58,7 @@ typedef enum
     MtRequestSocketBind    = MT_REQUEST( 6 ),
     MtRequestSocketListen  = MT_REQUEST( 7 ),
     MtRequestSocketAccept  = MT_REQUEST( 8 ),
+    MtRequestSocketRecv    = MT_REQUEST( 9 ),
 } mt_request_type_t;
 
 
@@ -72,6 +73,7 @@ typedef enum
     MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
     MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
     MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
+    MtResponseSocketRecv    = MT_RESPONSE( MtRequestSocketRecv    ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -287,6 +289,30 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 
 
 //
+//Recv
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
+{
+    mt_request_base_t base;
+    int flags;
+    mt_size_t requested;
+
+} mt_request_socket_recv_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
+{
+    mt_response_base_t base;
+    mt_size_t bytes_read;
+    uint8_t bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
+
+} mt_response_socket_recv_t;
+
+#define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv ) )
+#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof(mt_response_socket_recv ) )
+
+
+//
 // Connect
 //
 
@@ -338,6 +364,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_read
 {
     mt_request_base_t base;
     mt_size_t         requested;
+
 } mt_request_socket_read_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
@@ -391,6 +418,7 @@ typedef union _mt_request_generic
     mt_request_socket_bind_t    socket_bind;
     mt_request_socket_listen_t  socket_listen;
     mt_request_socket_accept_t  socket_accept;
+    mt_request_socket_recv_t    socket_recv;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -411,6 +439,7 @@ typedef union _mt_response_generic
     mt_response_socket_bind_t    socket_bind;
     mt_response_socket_listen_t  socket_listen;
     mt_response_socket_accept_t  socket_accept;
+    mt_response_socket_recv_t    socket_recv;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

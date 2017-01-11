@@ -51,8 +51,8 @@ pthread_mutex_t  send_lock;
 pthread_mutex_t  bind_lock;
 pthread_mutex_t  accept_lock;
 pthread_mutex_t  listen_lock;
-//pthread_mutex_t  accept_lock;
-//pthread_mutex_t  recv_lock;
+pthread_mutex_t  accept_lock;
+pthread_mutex_t  recv_lock;
 
 
 void
@@ -386,6 +386,47 @@ accept( int sockfd,
 }
 
 
+void
+build_recv_socket( sinfo_t * SockInfo,
+                   int ClientSockFd,
+                   size_t MessageSize,
+                   int Flags,
+                   mt_request_generic_t * Request )
+{
+   mt_request_socket_recv_t * recieve = &(Request->socket_recv);
+
+    bzero( Request, sizeof(*Request) );
+
+    recieve->base.sig  = MT_SIGNATURE_REQUEST;
+    recieve->base.type = MtRequestSocketConnect;
+    recieve->base.id = request_id++;
+    recieve->base.sockfd = SockInfo->sockfd;
+    
+    recieve->requested = MessageSize;
+    recieve->flags = Flags;
+}
+
+
+ssize_t
+recv(int ClientSockFd, void* Buff, size_t MessageSize, int Flags )
+{
+    pthread_mutex_lock(&recv_lock);
+    
+    mt_request_generic_t request;
+    mt_response_generic_t response;
+
+    build_recv_socket( &sock_info, ClientSockFd, MessageSize, Flags, &request );
+    
+    write( fd, &request, sizeof(request) );
+
+    read( fd, &response, sizeof(response) );
+
+    pthread_mutex_unlock(&recv_lock);
+
+    return response.socket_recv.bytes_read;
+}
+
+
 int 
 connect( int sockfd, 
          const struct sockaddr *addr,
@@ -516,7 +557,7 @@ _init( void )
    pthread_mutex_init(&bind_lock, NULL);
    pthread_mutex_init(&listen_lock, NULL);
    pthread_mutex_init(&accept_lock, NULL);
-   
+   pthread_mutex_init(&recv_lock, NULL);
 }
 
 void
@@ -550,6 +591,7 @@ _fini( void )
    pthread_mutex_destroy(&bind_lock);
    pthread_mutex_destroy(&listen_lock);
    pthread_mutex_destroy(&accept_lock);
+   pthread_mutex_destroy(&recv_lock);
 
    printf("Intercept module unloaded\n");
 }

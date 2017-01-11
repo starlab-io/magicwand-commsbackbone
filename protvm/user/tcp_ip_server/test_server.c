@@ -91,13 +91,6 @@ int main(int argc , char *argv[])
     client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
 
 
-    if( client_sockfd != 0 )
-    {
-        printf("ACCEPT SUCCESS\n");
-    }
-
-    goto UnderConstruction;
-    
     if( client_sockfd < 0 )
     {
         printf("Accept failed\n");
@@ -117,12 +110,12 @@ int main(int argc , char *argv[])
         printf("Received message: %s\n\n", client_message);
 
         //Send message back to client
-//        write( client_sockfd, client_message, strlen(client_message));
-    
+        send(client_sockfd, client_message , strlen(client_message), 0);
+
         //Clear messge buffer
         memset( &client_message, 0, sizeof(client_message) );
 
-//        printf("Sent message back to client\n");
+        printf("Sent message back to client\n");
         i++;
     }
 
@@ -138,7 +131,7 @@ int main(int argc , char *argv[])
     close(server_sockfd);
     close(client_sockfd);
     
-UnderConstruction:
+/*UnderConstruction:
 
     printf("Exiting Program early, Closing sockets\n");
 
@@ -146,7 +139,7 @@ UnderConstruction:
         close(server_sockfd);
 
     if(client_sockfd != -1 )
-        close(client_sockfd);
+        close(client_sockfd);*/
 
     return 0;
 
