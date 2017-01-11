@@ -502,6 +502,11 @@ process_buffer_item( buffer_item_t * BufferItem )
 								   (mt_response_socket_accept_t *) &response,
 								    worker );
         break;
+    case MtRequestSocketRecv:
+        rc = xe_net_recv_socket( (mt_request_socket_recv_t*) request,
+                                 (mt_response_socket_recv_t*) &response,
+                                  worker );
+        break;
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );

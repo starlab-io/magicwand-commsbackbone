@@ -254,6 +254,28 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
 
 int
+xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
+                    OUT  mt_response_socket_recv_t  * Response,
+                    IN   thread_item_t              * WorkerThread )
+{
+    
+
+    Response->bytes_read = recv( Request->client_sockfd, 
+                                 (char *) Response->bytes,
+                                 Request->requested,
+                                 Request->flags );
+
+
+    xe_net_set_base_response( (mt_request_generic_t*) Request,
+                               MT_RESPONSE_SOCKET_RECV_SIZE,
+                              (mt_response_generic_t *) Response);
+
+    return Response->bytes_read;
+
+}
+
+
+int
 xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread )

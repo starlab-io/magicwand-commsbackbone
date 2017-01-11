@@ -296,6 +296,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
     mt_request_base_t base;
     int flags;
+    mt_socket_fd_t client_sockfd;
     mt_size_t requested;
 
 } mt_request_socket_recv_t;
@@ -308,8 +309,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
 
 } mt_response_socket_recv_t;
 
-#define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv ) )
-#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof(mt_response_socket_recv ) )
+#define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv_t ) )
+#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof(mt_response_socket_recv_t ) )
 
 
 //
