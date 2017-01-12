@@ -29,8 +29,8 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                     IN thread_item_t              * WorkerThread );
 
 int
-xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
-                     OUT mt_response_socket_write_t * Response,
+xe_net_send_socket( IN  mt_request_socket_send_t   * Request,
+                     OUT mt_response_socket_send_t  * Response,
                      IN thread_item_t               * WorkerThread );
 
 int

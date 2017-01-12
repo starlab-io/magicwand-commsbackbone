@@ -482,9 +482,9 @@ process_buffer_item( buffer_item_t * BufferItem )
                                  (mt_response_socket_read_t *) &response,
                                  worker );
         break;
-    case MtRequestSocketWrite:
-        rc = xe_net_write_socket( (mt_request_socket_write_t *) request,
-                                  (mt_response_socket_write_t *) &response,
+    case MtRequestSocketSend:
+        rc = xe_net_send_socket( (mt_request_socket_send_t *)  request,
+                                  (mt_response_socket_send_t *) &response,
                                   worker );
         break;
 	case MtRequestSocketBind: 

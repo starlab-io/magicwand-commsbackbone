@@ -352,9 +352,9 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
 
 
 int
-xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
-                     OUT mt_response_socket_write_t * Response,
-                     IN thread_item_t               * WorkerThread )
+xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
+                     OUT mt_response_socket_send_t   * Response,
+                     IN thread_item_t                * WorkerThread )
 {
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -370,7 +370,7 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
 
     // base.size is the total size of the request; account for the
     // header.
-    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_WRITE_SIZE )
+    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE )
     {
         ssize_t sent = send( Request->base.sockfd,
                              &Request->bytes[ totSent ],
@@ -390,7 +390,7 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_WRITE_SIZE,
+                              MT_RESPONSE_SOCKET_SEND_SIZE,
                               (mt_response_generic_t *)Response );
 
     return Response->base.status;
