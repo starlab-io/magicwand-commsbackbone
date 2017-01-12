@@ -170,25 +170,25 @@ build_connect_socket( mt_request_generic_t * Request,
 }
 
 void
-build_write_socket( mt_request_generic_t * Request, 
+build_send_socket( mt_request_generic_t * Request, 
                     sinfo_t * SockInfo )
 {
-    mt_request_socket_write_t * wsock = &(Request->socket_write);
+    mt_request_socket_send_t * send = &(Request->socket_send);
 
     static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
-    wsock->base.sig  = MT_SIGNATURE_REQUEST;
-    wsock->base.type = MtRequestSocketWrite;
-    wsock->base.id = request_id++;
-    wsock->base.sockfd = SockInfo->sockfd;
+    send->base.sig  = MT_SIGNATURE_REQUEST;
+    send->base.type = MtRequestSocketSend;
+    send->base.id = request_id++;
+    send->base.sockfd = SockInfo->sockfd;
 
-    snprintf( (char *) wsock->bytes, sizeof(wsock->bytes),
+    snprintf( (char *) send->bytes, sizeof(send->bytes),
               "Hello from build traffic file: message %d sock %d\n",
               msg_num++, SockInfo->sockfd );
 
     // Fix to handle non-ascii payload
-    wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
+    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + strlen( (const char *)send->bytes ) + 1;
 }
 
 int 
@@ -398,12 +398,15 @@ build_recv_socket( sinfo_t * SockInfo,
     bzero( Request, sizeof(*Request) );
 
     recieve->base.sig  = MT_SIGNATURE_REQUEST;
-    recieve->base.type = MtRequestSocketConnect;
+    recieve->base.type = MtRequestSocketRecv;
     recieve->base.id = request_id++;
     recieve->base.sockfd = SockInfo->sockfd;
     
     recieve->requested = MessageSize;
     recieve->flags = Flags;
+    recieve->client_sockfd = ClientSockFd;
+    
+    recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
 }
 
 
@@ -499,7 +502,7 @@ send( int         sockfd,
    }
 
    // XXXX: pass the size
-   build_write_socket( &request, &sock_info );
+   build_send_socket( &request, &sock_info );
 
    printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
@@ -517,7 +520,7 @@ send( int         sockfd,
 
    if ( response.base.status == 0 )
    {
-      size_sent = request.base.size - MT_REQUEST_SOCKET_WRITE_SIZE;
+      size_sent = request.base.size - MT_REQUEST_SOCKET_SEND_SIZE;
       printf("\t\tSize sent: %u\n", size_sent);
       return size_sent; 
    }

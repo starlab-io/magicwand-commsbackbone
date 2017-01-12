@@ -54,7 +54,7 @@ typedef enum
     MtRequestSocketConnect = MT_REQUEST( 2 ),
     MtRequestSocketClose   = MT_REQUEST( 3 ),
     MtRequestSocketRead    = MT_REQUEST( 4 ),
-    MtRequestSocketWrite   = MT_REQUEST( 5 ),
+    MtRequestSocketSend    = MT_REQUEST( 5 ),
     MtRequestSocketBind    = MT_REQUEST( 6 ),
     MtRequestSocketListen  = MT_REQUEST( 7 ),
     MtRequestSocketAccept  = MT_REQUEST( 8 ),
@@ -69,7 +69,7 @@ typedef enum
     MtResponseSocketConnect = MT_RESPONSE( MtRequestSocketConnect ),
     MtResponseSocketClose   = MT_RESPONSE( MtRequestSocketClose   ),
     MtResponseSocketRead    = MT_RESPONSE( MtRequestSocketRead    ),
-    MtResponseSocketWrite   = MT_RESPONSE( MtRequestSocketWrite   ),
+    MtResponseSocketSend    = MT_RESPONSE( MtRequestSocketSend    ),
     MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
     MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
     MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
@@ -384,24 +384,24 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
 //
 // Write
 //
-typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_write
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
     mt_request_base_t base;
 
     // Count of valid bytes is in base.size
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
-} mt_request_socket_write_t;
+} mt_request_socket_send_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_write
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 {
     mt_response_base_t base;
     // Count of bytes written
     mt_size_t          written;
-} mt_response_socket_write_t;
+} mt_response_socket_send_t;
 
 // User must add count of filled bytes to size
-#define MT_REQUEST_SOCKET_WRITE_SIZE  sizeof(mt_request_base_t)
-#define MT_RESPONSE_SOCKET_WRITE_SIZE sizeof(mt_response_socket_write_t)
+#define MT_REQUEST_SOCKET_SEND_SIZE  sizeof(mt_request_base_t)
+#define MT_RESPONSE_SOCKET_SEND_SIZE sizeof(mt_response_socket_send_t)
 
 
 //
@@ -415,7 +415,7 @@ typedef union _mt_request_generic
     mt_request_socket_connect_t socket_connect;
     mt_request_socket_close_t   socket_close;
     mt_request_socket_read_t    socket_read;
-    mt_request_socket_write_t   socket_write;
+    mt_request_socket_send_t    socket_send;
     mt_request_socket_bind_t    socket_bind;
     mt_request_socket_listen_t  socket_listen;
     mt_request_socket_accept_t  socket_accept;
@@ -436,7 +436,7 @@ typedef union _mt_response_generic
     mt_response_socket_connect_t socket_connect;
     mt_response_socket_close_t   socket_close;
     mt_response_socket_read_t    socket_read;
-    mt_response_socket_write_t   socket_write;
+    mt_response_socket_send_t    socket_send;
     mt_response_socket_bind_t    socket_bind;
     mt_response_socket_listen_t  socket_listen;
     mt_response_socket_accept_t  socket_accept;

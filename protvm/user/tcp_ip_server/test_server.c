@@ -19,7 +19,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define MSG_SIZE 1500
+#define MSG_SIZE 15
 
 int                 server_sockfd = -1;
 int                 client_sockfd = -1;
