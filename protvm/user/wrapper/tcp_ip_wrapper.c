@@ -171,24 +171,29 @@ build_connect_socket( mt_request_generic_t * Request,
 
 void
 build_send_socket( mt_request_generic_t * Request, 
-                    sinfo_t * SockInfo )
+                   sinfo_t * SockInfo,
+                   const void* bytes,
+                   size_t len )
 {
     mt_request_socket_send_t * send = &(Request->socket_send);
+    size_t actual_len = len;
 
-    static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
     send->base.sig  = MT_SIGNATURE_REQUEST;
     send->base.type = MtRequestSocketSend;
     send->base.id = request_id++;
     send->base.sockfd = SockInfo->sockfd;
+    
+    if( len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    {
+        actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
+    }
 
-    snprintf( (char *) send->bytes, sizeof(send->bytes),
-              "Hello from build traffic file: message %d sock %d\n",
-              msg_num++, SockInfo->sockfd );
+    memcpy(send->bytes, bytes, actual_len);
 
     // Fix to handle non-ascii payload
-    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + strlen( (const char *)send->bytes ) + 1;
+    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + strlen( (const char *)actual_len );
 }
 
 int 
@@ -501,8 +506,7 @@ send( int         sockfd,
       return 1;
    }
 
-   // XXXX: pass the size
-   build_send_socket( &request, &sock_info );
+   build_send_socket( &request, &sock_info, buf, len );
 
    printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
