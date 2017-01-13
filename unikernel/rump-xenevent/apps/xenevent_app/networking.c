@@ -360,7 +360,6 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    ssize_t totSent = 0; // track total bytes sent here
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
@@ -368,7 +367,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %d bytes\n",
                   WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
 
-    // base.size is the total size of the request; account for the
+/*    // base.size is the total size of the request; account for the
     // header.
     while ( totSent < Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE )
     {
@@ -387,7 +386,12 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 
 
         printf("Sent OK. %u bytes\n", (unsigned int)sent);
-    }
+    }*/
+
+    Response->base.status = send(Request->client_sockfd,
+                                 Request->bytes,
+                                 Request->len,
+                                 0 );
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_SEND_SIZE,

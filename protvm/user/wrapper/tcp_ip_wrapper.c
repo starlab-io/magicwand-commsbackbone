@@ -171,9 +171,10 @@ build_connect_socket( mt_request_generic_t * Request,
 
 void
 build_send_socket( mt_request_generic_t * Request, 
-                   sinfo_t * SockInfo,
-                   const void* bytes,
-                   size_t len )
+                   sinfo_t              * SockInfo,
+                   int                  * client_sockfd,
+                   const void           * bytes,
+                   size_t               len )
 {
     mt_request_socket_send_t * send = &(Request->socket_send);
     size_t actual_len = len;
@@ -190,10 +191,13 @@ build_send_socket( mt_request_generic_t * Request,
         actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
     }
 
+    send->len = actual_len;
+    send->client_sockfd = *client_sockfd;
+
     memcpy(send->bytes, bytes, actual_len);
 
     // Fix to handle non-ascii payload
-    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + strlen( (const char *)actual_len );
+    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
 }
 
 int 
@@ -506,7 +510,7 @@ send( int         sockfd,
       return 1;
    }
 
-   build_send_socket( &request, &sock_info, buf, len );
+   build_send_socket( &request, &sock_info, &sockfd, buf, len );
 
    printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));

@@ -386,9 +386,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
-    mt_request_base_t base;
-
-    // Count of valid bytes is in base.size
+    mt_request_base_t  base;
+    int                client_sockfd;
+    size_t             len;
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 } mt_request_socket_send_t;
 
