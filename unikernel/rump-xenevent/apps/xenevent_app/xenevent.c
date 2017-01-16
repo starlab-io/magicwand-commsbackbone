@@ -459,7 +459,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     
     DEBUG_PRINT( "Processing buffer item %d\n", BufferItem->idx );
     MYASSERT( MT_IS_REQUEST( request ) );
-    
+
     switch( request->base.type )
     {
     case MtRequestSocketCreate:
@@ -487,20 +487,20 @@ process_buffer_item( buffer_item_t * BufferItem )
                                   (mt_response_socket_write_t *) &response,
                                   worker );
         break;
-	case MtRequestSocketBind: 
-		rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
-								 (mt_response_socket_bind_t *) &response,
-	   							 worker );
-		break;
-	case MtRequestSocketListen:
-		rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
-								   (mt_response_socket_listen_t *) &response,
-									worker );
-		break;
-	case MtRequestSocketAccept:
-		rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
-								   (mt_response_socket_accept_t *) &response,
-								    worker );
+    case MtRequestSocketBind: 
+        rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
+                                 (mt_response_socket_bind_t *) &response,
+                                 worker );
+        break;
+    case MtRequestSocketListen:
+        rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
+                                   (mt_response_socket_listen_t *) &response,
+                                   worker );
+        break;
+    case MtRequestSocketAccept:
+        rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
+                                   (mt_response_socket_accept_t *) &response,
+                                   worker );
         break;
     case MtRequestInvalid:
     default:
@@ -519,6 +519,26 @@ process_buffer_item( buffer_item_t * BufferItem )
     MYASSERT( MT_IS_RESPONSE( &response ) );
     
     //clock_gettime(CLOCK_REALTIME, &t1);
+
+    // In accept's success case, assign the new socket to an available thread
+    if ( MtRequestSocketAccept == request->base.type
+         && response.base.status >= 0 )
+    {
+        thread_item_t * accept_thread = NULL;
+        rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, &accept_thread );
+        if ( rc )
+        {
+            MYASSERT( !"Failed to find thread to service accepted socket" );
+            // Destroy the new socket and fail the request
+            close( response.base.status );
+            response.base.status = -1;
+        }
+        else
+        {
+            // A thread was available - record the assignment now
+            accept_thread->sock_fd = response.base.status;
+        }
+    }
 
     size_t written = write( g_state.output_fd,
                             &response,
