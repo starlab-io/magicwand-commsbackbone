@@ -110,13 +110,13 @@ int main(int argc , char *argv[])
         printf("Received message: %s\n\n", client_message);
 
         //Send message back to client
-        send(client_sockfd, client_message , strlen(client_message), 0);
+//        send(client_sockfd, client_message , strlen(client_message), 0);
 
         //Clear messge buffer
-        memset( &client_message, 0, sizeof(client_message) );
+//        memset( &client_message, 0, sizeof(client_message) );
 
-        printf("Sent message back to client\n");
-        i++;
+//        printf("Sent message back to client\n");
+ //       i++;
     }
 
     if( read_size == 0 )
