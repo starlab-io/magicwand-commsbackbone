@@ -260,7 +260,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 {
     
 
-    Response->bytes_read = recv( Request->client_sockfd, 
+    Response->bytes_read = recv( Request->base.sockfd, 
                                  (char *) Response->bytes,
                                  Request->requested,
                                  Request->flags );
@@ -270,7 +270,9 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
                                MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *) Response);
 
-    return Response->bytes_read;
+    Response->base.status = Response->bytes_read;
+
+    return Response->base.status;;
 
 }
 
@@ -367,35 +369,15 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %d bytes\n",
                   WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
 
-/*    // base.size is the total size of the request; account for the
-    // header.
-    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE )
-    {
-        ssize_t sent = send( Request->base.sockfd,
-                             &Request->bytes[ totSent ],
-                             Request->base.size - totSent,
-                             0 );
-        if ( sent < 0 )
-        {
-            Response->base.status = errno;
-            MYASSERT( !"send" );
-            break;
-        }
 
-        totSent += sent;
+    Response->base.status = send( Request->sockfd,
+                                  Request->bytes,
+                                  Request->len,
+                                  0 );
 
-
-        printf("Sent OK. %u bytes\n", (unsigned int)sent);
-    }*/
-
-    Response->base.status = send(Request->client_sockfd,
-                                 Request->bytes,
-                                 Request->len,
-                                 0 );
-
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_SEND_SIZE,
-                              (mt_response_generic_t *)Response );
+    xe_net_set_base_response( ( mt_request_generic_t * )  Request,
+                                MT_RESPONSE_SOCKET_SEND_SIZE,
+                              ( mt_response_generic_t * ) Response );
 
     return Response->base.status;
 }

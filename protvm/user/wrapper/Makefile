@@ -4,12 +4,12 @@
 # 
 
 CC = gcc
-CFLAGS = -Wall -fPIC -DPIC
+CFLAGS = -ggdb -Wall -fPIC -DPIC
 CFLAGS += -I..
 CFLAGS += -I../../../common
 
 LD = ld
-LDFLAGS = -shared
+LDFLAGS = -ggdb -shared
 LIBS = -lpthread
 
 PRE_LOAD_LIB_NAME=tcp_ip_wrapper

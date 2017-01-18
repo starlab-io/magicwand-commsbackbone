@@ -171,30 +171,29 @@ build_connect_socket( mt_request_generic_t * Request,
 
 void
 build_send_socket( mt_request_generic_t * Request, 
-                   sinfo_t              * SockInfo,
-                   int                  * client_sockfd,
-                   const void           * bytes,
-                   size_t               len )
+                   int                  * SockFd,
+                   const void           * Bytes,
+                   size_t               Len )
 {
     mt_request_socket_send_t * send = &(Request->socket_send);
-    size_t actual_len = len;
+    size_t actual_len = Len;
 
     bzero( Request, sizeof(*Request) );
 
     send->base.sig  = MT_SIGNATURE_REQUEST;
     send->base.type = MtRequestSocketSend;
     send->base.id = request_id++;
-    send->base.sockfd = SockInfo->sockfd;
+    send->base.sockfd = *SockFd;
     
-    if( len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
     {
         actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
     }
 
     send->len = actual_len;
-    send->client_sockfd = *client_sockfd;
+    send->sockfd = *SockFd;
 
-    memcpy(send->bytes, bytes, actual_len);
+    memcpy(send->bytes, Bytes, actual_len);
 
     // Fix to handle non-ascii payload
     send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
@@ -409,11 +408,10 @@ build_recv_socket( sinfo_t * SockInfo,
     recieve->base.sig  = MT_SIGNATURE_REQUEST;
     recieve->base.type = MtRequestSocketRecv;
     recieve->base.id = request_id++;
-    recieve->base.sockfd = SockInfo->sockfd;
+    recieve->base.sockfd = ClientSockFd;
     
     recieve->requested = MessageSize;
     recieve->flags = Flags;
-    recieve->client_sockfd = ClientSockFd;
     
     recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
 }
@@ -493,10 +491,10 @@ connect( int sockfd,
 }
 
 ssize_t 
-send( int         sockfd, 
-      const void *buf, 
-      size_t      len,
-      int         flags )
+send( int         SockFd, 
+      const void *Buff, 
+      size_t      Len,
+      int         Flags )
 {
    pthread_mutex_lock(&send_lock);
 
@@ -510,9 +508,9 @@ send( int         sockfd,
       return 1;
    }
 
-   build_send_socket( &request, &sock_info, &sockfd, buf, len );
+   build_send_socket( &request, &SockFd, Buff, Len );
 
-   printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
+   printf("Sending write-socket request on socket number: %d\n", SockFd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 

@@ -24,8 +24,8 @@ int main(int argc , char *argv[])
     struct sockaddr_in server;
     int                err = 0;
 
-    char               client_message[20];
-    char              *hello = "Hello\n";
+    char               client_message[50];
+    char              *hello = "This is a client message\n";
 
     int i = 0;
 
@@ -66,7 +66,7 @@ int main(int argc , char *argv[])
     for( i = 0; i < 2; i++ )
     {
         // 3> Call write
-        send(socket_desc, client_message , strlen(client_message), 0);
+        send(socket_desc, client_message , strlen(client_message) + 1, 0);
     }
 
     // 4> Call close

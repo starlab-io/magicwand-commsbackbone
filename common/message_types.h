@@ -296,7 +296,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
     mt_request_base_t base;
     int flags;
-    mt_socket_fd_t client_sockfd;
     mt_size_t requested;
 
 } mt_request_socket_recv_t;
@@ -387,7 +386,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
     mt_request_base_t  base;
-    int                client_sockfd;
+    int                sockfd;
     size_t             len;
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 } mt_request_socket_send_t;
