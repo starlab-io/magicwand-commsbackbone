@@ -75,7 +75,7 @@ build_create_socket( mt_request_generic_t * Request )
 
 void
 build_close_socket( mt_request_generic_t * Request, 
-                    sinfo_t * SockInfo )
+                    int SockFd )
 {
     mt_request_socket_close_t * csock = &(Request->socket_close);
 
@@ -85,7 +85,7 @@ build_close_socket( mt_request_generic_t * Request,
     csock->base.type = MtRequestSocketClose;
     csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
     csock->base.id = request_id++;
-    csock->base.sockfd = SockInfo->sockfd;
+    csock->base.sockfd = SockFd;
 }
 
 
@@ -171,7 +171,7 @@ build_connect_socket( mt_request_generic_t * Request,
 
 void
 build_send_socket( mt_request_generic_t * Request, 
-                   int                  * SockFd,
+                   int                  SockFd,
                    const void           * Bytes,
                    size_t               Len )
 {
@@ -183,15 +183,12 @@ build_send_socket( mt_request_generic_t * Request,
     send->base.sig  = MT_SIGNATURE_REQUEST;
     send->base.type = MtRequestSocketSend;
     send->base.id = request_id++;
-    send->base.sockfd = *SockFd;
+    send->base.sockfd = SockFd;
     
     if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
     {
         actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
     }
-
-    send->len = actual_len;
-    send->sockfd = *SockFd;
 
     memcpy(send->bytes, Bytes, actual_len);
 
@@ -232,7 +229,7 @@ socket( int domain,
 
    if ( response.base.status )
    {
-      printf( "\t\tError creating socket. Error Number: %u\n", response.base.status );
+      printf( "\t\tError creating socket. Error Number: %ld\n", response.base.status );
       // Returns -1 on error
       return -1;
    }
@@ -258,7 +255,7 @@ close( int sock_fd )
       return 1;
    }
       
-   build_close_socket( &request, &sock_info );
+   build_close_socket( &request, sock_fd );
 
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
    //printf("\tSize of request base: %lu\n", sizeof(request));
@@ -276,7 +273,7 @@ close( int sock_fd )
 
    if ( response.base.status )
    {
-      printf( "\t\tError closing socket. Error Number: %u\n", response.base.status );
+      printf( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
       // Returns -1 on error
       return -1;
    }
@@ -360,23 +357,25 @@ listen( int sockfd, int backlog )
 
 
 int
-accept( int sockfd, 
+accept( int SockFd, 
         struct sockaddr * SockAddr, 
-        socklen_t * socklen)
+        socklen_t * SockLen)
 {
 
     pthread_mutex_lock(&accept_lock);
 
+//    sinfo_t sock_info;
+
     mt_request_generic_t request;
     mt_response_generic_t response;
 
-    if ( sockfd <= 0 )
+    if ( SockFd <= 0 )
     {
         printf("Socket file discriptor value invalid");
         return 1;
     }
     
-    build_accept_socket(&request, sockfd);
+    build_accept_socket(&request, SockFd);
 
 #ifndef NODEVICE
     write( fd, &request, sizeof(request) );
@@ -385,7 +384,9 @@ accept( int sockfd,
 #endif
 
     populate_sockaddr_in( (struct sockaddr_in *)SockAddr, &response.socket_accept.sockaddr);
-    *socklen = sizeof(struct sockaddr_in);
+
+//    sock_info.sockfd = response.base.status;
+//    add_sock_info( list, &sock_info );
 
     pthread_mutex_lock(&accept_lock);
 
@@ -395,9 +396,8 @@ accept( int sockfd,
 
 
 void
-build_recv_socket( sinfo_t * SockInfo,
-                   int ClientSockFd,
-                   size_t MessageSize,
+build_recv_socket( int SockFd,
+                   size_t Len,
                    int Flags,
                    mt_request_generic_t * Request )
 {
@@ -408,9 +408,14 @@ build_recv_socket( sinfo_t * SockInfo,
     recieve->base.sig  = MT_SIGNATURE_REQUEST;
     recieve->base.type = MtRequestSocketRecv;
     recieve->base.id = request_id++;
-    recieve->base.sockfd = ClientSockFd;
+    recieve->base.sockfd = SockFd;
     
-    recieve->requested = MessageSize;
+    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    {
+       Len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
+    } 
+
+    recieve->len = Len;
     recieve->flags = Flags;
     
     recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
@@ -418,22 +423,24 @@ build_recv_socket( sinfo_t * SockInfo,
 
 
 ssize_t
-recv(int ClientSockFd, void* Buff, size_t MessageSize, int Flags )
+recv(int SockFd, void* Buf, size_t Len, int Flags )
 {
     pthread_mutex_lock(&recv_lock);
     
     mt_request_generic_t request;
     mt_response_generic_t response;
 
-    build_recv_socket( &sock_info, ClientSockFd, MessageSize, Flags, &request );
+    build_recv_socket( SockFd, Len, Flags, &request );
     
     write( fd, &request, sizeof(request) );
 
     read( fd, &response, sizeof(response) );
+    
+    memcpy( Buf, response.socket_recv.buf, response.base.status );
 
     pthread_mutex_unlock(&recv_lock);
 
-    return response.socket_recv.bytes_read;
+    return (ssize_t) response.base.status;
 }
 
 
@@ -479,7 +486,7 @@ connect( int sockfd,
 
    if ( response.base.status )
    {
-      printf( "\t\tError connecting. Error Number: %u\n", response.base.status );
+      printf( "\t\tError connecting. Error Number: %lu\n", response.base.status );
       // Returns -1 on error
       return -1;
    }
@@ -500,7 +507,6 @@ send( int         SockFd,
 
    mt_request_generic_t request;
    mt_response_generic_t response;
-   mt_size_t size_sent;
 
    if (sock_info.sockfd <= 0)
    {
@@ -508,7 +514,7 @@ send( int         SockFd,
       return 1;
    }
 
-   build_send_socket( &request, &SockFd, Buff, Len );
+   build_send_socket( &request, SockFd, Buff, Len );
 
    printf("Sending write-socket request on socket number: %d\n", SockFd);
    printf("\tSize of request base: %lu\n", sizeof(request));
@@ -524,17 +530,11 @@ send( int         SockFd,
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   if ( response.base.status == 0 )
-   {
-      size_sent = request.base.size - MT_REQUEST_SOCKET_SEND_SIZE;
-      printf("\t\tSize sent: %u\n", size_sent);
-      return size_sent; 
-   }
-
+   
    pthread_mutex_unlock(&send_lock);
 
-   // Returns -1 on error
-   return -1;
+   return response.base.status;
+
 }
 
 void 

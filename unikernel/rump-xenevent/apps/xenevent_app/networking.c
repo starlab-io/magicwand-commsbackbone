@@ -60,8 +60,9 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     if ( sockfd < 0 )
     {
-        Response->base.status = errno;
+        Response->base.status = -errno;
     }
+
     
     // Set up Response
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -81,7 +82,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     
     printf("Create Socket OK\n");
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -122,11 +123,11 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     }
 
     rc = getaddrinfo( (const char *)Request->hostname, portBuf, &serverHints, &serverInfo );
-    if ( 0 != rc )
+    if (  0 != rc )
     {
         DEBUG_PRINT( "getaddrinfo failed: %s\n", gai_strerror(rc) );
         MYASSERT( !"getaddrinfo" );
-        Response->base.status = EADDRNOTAVAIL;
+        Response->base.status = -EADDRNOTAVAIL;
         goto ErrorExit;
     }
 
@@ -154,7 +155,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         DEBUG_PRINT( "Couldn't connect() to %s:%s\n",
                      Request->hostname, portBuf );
         DEBUG_BREAK();
-        Response->base.status = EADDRNOTAVAIL;
+        Response->base.status = -EADDRNOTAVAIL;
     }
 
 ErrorExit:
@@ -162,7 +163,7 @@ ErrorExit:
                               MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
     
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -184,20 +185,17 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     Response->base.status =  bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
 
-    if(Response->base.status != 0 )
+    if(Response->base.status < 0 )
     {
         DEBUG_PRINT("Bind failed\n");
-    }
-    else
-    {
-        DEBUG_PRINT("Bind success\n");
+        Response->base.status = -errno;
     }
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
                               MT_RESPONSE_SOCKET_BIND_SIZE,
                               (mt_response_generic_t *) Response);
 
-    return Response->base.status;;
+    return 0;
 }
 
 
@@ -206,18 +204,22 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  *Request,
                       OUT   mt_response_socket_listen_t *Response,
                       IN    thread_item_t               *WorkerThread)
 {
-
     MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
     MYASSERT(1 == WorkerThread->in_use);
 
     Response->base.status = listen( Request->base.sockfd,
                                     Request->backlog);
 
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }
+
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_LISTEN_SIZE,
                               (mt_response_generic_t *) Response);
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -240,8 +242,15 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
     Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
 
-    DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
-                  WorkerThread->idx, WorkerThread->sock_fd );
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }else{
+
+        DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
+                      WorkerThread->idx, WorkerThread->sock_fd );
+    }
+
 
     populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
 
@@ -249,7 +258,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
                               (mt_response_generic_t *) Response);
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -260,20 +269,21 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 {
     
 
-    Response->bytes_read = recv( Request->base.sockfd, 
-                                 (char *) Response->bytes,
-                                 Request->requested,
+    Response->base.status = recv( Request->base.sockfd, 
+                                 (void *) Response->buf,
+                                 Request->len,
                                  Request->flags );
-
+    
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }
 
     xe_net_set_base_response( (mt_request_generic_t*) Request,
-                               MT_RESPONSE_SOCKET_RECV_SIZE,
+                               MT_RESPONSE_SOCKET_RECV_SIZE + Response->base.status,
                               (mt_response_generic_t *) Response);
 
-    Response->base.status = Response->bytes_read;
-
-    return Response->base.status;;
-
+    return 0;
 }
 
 
@@ -282,7 +292,6 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread )
 {
-    int rc = 0;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -295,10 +304,11 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
     Response->base.status = 0;
     
-    rc = close( Request->base.sockfd );
-    if ( rc < 0 )
+    Response->base.status = close( Request->base.sockfd );
+
+    if ( Response->base.status < 0 )
     {
-        Response->base.status = errno;
+        Response->base.status = -errno;
     }
     else
     {
@@ -309,7 +319,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                               MT_RESPONSE_SOCKET_CLOSE_SIZE,
                               (mt_response_generic_t *)Response );
 
-    return Response->base.status;
+    return 0;
 }
 
 int
@@ -338,18 +348,20 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                             0 );
         if ( rcv < 0 )
         {
-            Response->base.status = errno;
+            Response->base.status = -errno;
             MYASSERT( !"recv" );
             break;
         }
 
         totRead += rcv;
+        Response->base.status = totRead;
     }
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_READ_SIZE + totRead,
                               (mt_response_generic_t *)Response );
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -362,6 +374,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
+    ssize_t totSent = 0; // track total bytes sent here
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
@@ -369,16 +382,32 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %d bytes\n",
                   WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
 
+    // base.size is the total size of the request; account for the
+    // header.
+    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE )
+    {   
+        ssize_t sent = send( Request->base.sockfd,
+                             &Request->bytes[ totSent ],
+                             Request->base.size - totSent - MT_REQUEST_SOCKET_SEND_SIZE,
+                             0 );
+        if ( sent < 0 ) 
+        {   
+            Response->base.status = -errno;
+            MYASSERT( !"send" );
+            break;
+        }   
 
-    Response->base.status = send( Request->sockfd,
-                                  Request->bytes,
-                                  Request->len,
-                                  0 );
+        totSent += sent;
 
-    xe_net_set_base_response( ( mt_request_generic_t * )  Request,
-                                MT_RESPONSE_SOCKET_SEND_SIZE,
-                              ( mt_response_generic_t * ) Response );
 
-    return Response->base.status;
+        DEBUG_PRINT( "Sent OK. %u bytes\n", (unsigned int)sent );
+    }   
+
+    Response->base.status = totSent;
+
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_SEND_SIZE,
+                              (mt_response_generic_t *)Response );
+
+    return 0;
 }
-

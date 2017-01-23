@@ -33,13 +33,11 @@ int main(int argc , char *argv[])
     struct sockaddr_in  server_sockaddr, client_sockaddr;
 
     char                client_message[MSG_SIZE];
-    char                *hello = "Hello\n";
 
 
     memset( client_message, 0, 20);
     bzero( &server_sockaddr, sizeof(server_sockaddr) );
     bzero( &client_sockaddr, sizeof(client_sockaddr) );
-    strcpy(client_message, hello);
     
 
     //Create Socket
@@ -102,21 +100,23 @@ int main(int argc , char *argv[])
     }
 
     int i = 0;
+    ssize_t recv_size = 0;
 
     //Recieve a message from the client
-    while( (read_size = recv( client_sockfd, client_message, MSG_SIZE, 0 ) > 0 ) )
+    while ( ( recv_size = recv( client_sockfd, client_message, MSG_SIZE, 0 ) ) > 0 )
     {
+
         printf("Received data: %d\n", i);
         printf("Received message: %s\n\n", client_message);
 
         //Send message back to client
-//        send(client_sockfd, client_message , strlen(client_message), 0);
+        send(client_sockfd, client_message , recv_size, 0);
 
         //Clear messge buffer
-//        memset( &client_message, 0, sizeof(client_message) );
+        memset( &client_message, 0, sizeof(client_message) );
 
-//        printf("Sent message back to client\n");
- //       i++;
+        printf("Sent message back to client\n");
+        i++;
     }
 
     if( read_size == 0 )
@@ -131,19 +131,6 @@ int main(int argc , char *argv[])
     close(server_sockfd);
     close(client_sockfd);
     
-/*UnderConstruction:
-
-    printf("Exiting Program early, Closing sockets\n");
-
-    if(server_sockfd != -1)
-        close(server_sockfd);
-
-    if(client_sockfd != -1 )
-        close(client_sockfd);*/
-
-    return 0;
-
-     
 ErrorExit:
     printf("Error exit called\n");
     close(server_sockfd);

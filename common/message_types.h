@@ -87,7 +87,7 @@ typedef uint32_t mt_addrlen_t;
 typedef uint16_t mt_port_t;
 
 // maps to errno; 0 == success
-typedef uint32_t mt_status_t;
+typedef uint64_t mt_status_t;
 
 #define CRITICAL_ERROR(x) (0xc0000000 | (x))
 
@@ -296,20 +296,19 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
     mt_request_base_t base;
     int flags;
-    mt_size_t requested;
+    mt_size_t len;
 
 } mt_request_socket_recv_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
 {
     mt_response_base_t base;
-    mt_size_t bytes_read;
-    uint8_t bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
+    uint8_t buf[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 
 } mt_response_socket_recv_t;
 
 #define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv_t ) )
-#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof(mt_response_socket_recv_t ) )
+#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof( mt_response_base_t ) )
 
 
 //
@@ -386,16 +385,12 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_read
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
     mt_request_base_t  base;
-    int                sockfd;
-    size_t             len;
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 } mt_request_socket_send_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 {
     mt_response_base_t base;
-    // Count of bytes written
-    mt_size_t          written;
 } mt_response_socket_send_t;
 
 // User must add count of filled bytes to size

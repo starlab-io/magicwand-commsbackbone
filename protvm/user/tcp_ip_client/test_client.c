@@ -14,9 +14,13 @@
 
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+#define MSG_LEN 50
 
 int main(int argc , char *argv[])
 {
@@ -24,12 +28,12 @@ int main(int argc , char *argv[])
     struct sockaddr_in server;
     int                err = 0;
 
-    char               client_message[50];
+    char               client_message[MSG_LEN];
     char              *hello = "This is a client message\n";
 
     int i = 0;
 
-    memset( client_message, 0, 20);
+    memset( client_message, 0, MSG_LEN);
     strcpy(client_message, hello);
 
     // Get Time 1
