@@ -1,0 +1,21 @@
+#!/bin/bash 
+
+PVM_IP=192.168.0.19
+PVM_USER=sluser
+MWROOT="$HOME/proj/mw-cbb"
+
+docmd() {
+   echo "Command: $*"
+   $*
+}
+
+# Try: rsync -r --delete 
+
+#docmd scp -rq $MWROOT/common $PVM_USER@$PVM_IP:
+#docmd scp -rq $MWROOT/protvm $PVM_USER@$PVM_IP:
+
+
+docmd scp -rq $PVM_USER@$PVM_IP:common /tmp/mwpvm
+docmd scp -rq $PVM_USER@$PVM_IP:protvm /tmp/mwpvm
+#docmd rsync -r --delete $PVM_USER@$PVM_IP:common /tmp/mwpvm
+#docmd rsync -r --delete $PVM_USER@$PVM_IP:protvm /tmp/mwpvm

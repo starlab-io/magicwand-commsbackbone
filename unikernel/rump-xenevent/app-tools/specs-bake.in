@@ -1,0 +1,17 @@
+*startfile:
+!DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/lib/rumprun-!PLATFORM!/rumprun.o
+
+*endfile:
+
+
+*lib:
+!LDFLAGS_BAKE! -L!DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/lib/rumprun-!PLATFORM!	\
+    --whole-archive -lrump --no-whole-archive				\
+    --start-group -lrumprun_base -lpthread -lc --end-group
+
+*link:
+%{m64:-m elf_x86_64;mx32:-m elf32_x86_64;m32:-m elf_i386} -T !DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/lib/!PLATFORM!.ldscript %:replace-outfile(-lstdc++ -lc++) %{rdynamic:}
+
+%rename link_libgcc old_link_libgcc
+
+%rename libgcc old_libgcc

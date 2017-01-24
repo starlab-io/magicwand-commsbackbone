@@ -1,0 +1,8 @@
+INCSDIR= /usr/include/xen
+INCSDIR= ../../../../platform/xen/xen/include
+
+# Only install includes which are used by userland
+#INCS=	mbppio.h
+
+.include <bsd.kinc.mk>
+

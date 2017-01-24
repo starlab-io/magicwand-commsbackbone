@@ -1,0 +1,47 @@
+
+
+
+For performance testing:
+
+Modify run.sh to run this command:
+
+	rumprun -S xen -di xenevent.run
+
+
+In the makefile, /comms_chan/rump_comms/rump-xenevent/apps/xenevent_app/ comment out the following line:
+
+	CFLAGS += -DMYDEBUG
+
+
+The last thing to do is to modify xenevent_common.h in the libxenevent directory
+
+	In the following code snippit found around line 56
+
+#ifdef MYDEBUG
+#  define DEBUG_BREAK()                                                 \
+    DEBUG_PREAMBLE();                                                   \
+    bmk_printf ( "At breakpoint\n" );                                   \
+    asm("int $3\n\t")
+#else
+#  define DEBUG_BREAK() ((void)0)
+#endif
+
+	On the line:
+	
+		bmk_printf ( "At breakpoint\n" );
+	
+	Comment out the “\” at the end of the line.
+
+	Then completely comment out the line: 
+	
+		asm("int $3\n\t")
+
+from command rumprun -S xen -dip -D1234 xenevent.run
+remove p, -d 1234 to get rumprun -S xen -di xenevent.run
+
+Makefile in xenevent_app directory 
+
+remove -ggdb from CFLAGS variable
+
+Makefile in Libxenevent directory
+#CPPFLAGS += -DMYDEBUG

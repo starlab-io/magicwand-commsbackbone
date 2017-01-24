@@ -1,0 +1,17 @@
+*startfile:
+
+
+*endfile:
+
+
+*lib:
+-L!DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/lib		\
+    --start-group -lpthread -lc --end-group 		\
+    !DESTDIR!/rumprun-!MACHINE_GNU_ARCH!/lib/pseudolinkstubs.o
+
+*link:
+%{m64:-m elf_x86_64;mx32:-m elf32_x86_64;m32:-m elf_i386} %:replace-outfile(-lstdc++ -lc++) %{rdynamic:}
+
+%rename link_libgcc old_link_libgcc
+
+%rename libgcc old_libgcc
