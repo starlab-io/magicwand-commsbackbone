@@ -60,7 +60,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     if ( sockfd < 0 )
     {
-        Response->base.status = errno;
+        Response->base.status = -errno;
     }
     
     // Set up Response
@@ -117,7 +117,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     if ( snprintf( portBuf, sizeof(portBuf), "%d", Request->port ) <= 0 )
     {
         MYASSERT( !"snprintf failed to extract port number" );
-        Response->base.status = EINVAL;
+        Response->base.status = -EINVAL;
         goto ErrorExit;
     }
 
@@ -126,7 +126,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     {
         DEBUG_PRINT( "getaddrinfo failed: %s\n", gai_strerror(rc) );
         MYASSERT( !"getaddrinfo" );
-        Response->base.status = EADDRNOTAVAIL;
+        Response->base.status = -EADDRNOTAVAIL;
         goto ErrorExit;
     }
 
@@ -142,8 +142,6 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
             continue;
         }
 
-        printf("Connect OK\n");
-
         // If we get here, we must have connected successfully
         break; 
     }
@@ -154,7 +152,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         DEBUG_PRINT( "Couldn't connect() to %s:%s\n",
                      Request->hostname, portBuf );
         DEBUG_BREAK();
-        Response->base.status = EADDRNOTAVAIL;
+        Response->base.status = -EADDRNOTAVAIL;
     }
 
 ErrorExit:
@@ -182,7 +180,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    Response->base.status =  bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
+    Response->base.status = bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
 
     if(Response->base.status != 0 )
     {
@@ -238,7 +236,8 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is listening for connections.\n",
                   WorkerThread->idx, WorkerThread->sock_fd);
 
-    Response->base.status = accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
+    Response->base.status =
+        accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
 
     DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
                   WorkerThread->idx, WorkerThread->sock_fd );
@@ -274,11 +273,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     rc = close( Request->base.sockfd );
     if ( rc < 0 )
     {
-        Response->base.status = errno;
-    }
-    else
-    {
-        printf("Socket: %d Closed\n", Request->base.sockfd);
+        Response->base.status = -errno;
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -314,7 +309,7 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                             0 );
         if ( rcv < 0 )
         {
-            Response->base.status = errno;
+            Response->base.status = -errno;
             MYASSERT( !"recv" );
             break;
         }
@@ -338,6 +333,7 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
+    //XXXX: does this send() past the end of the given buffer?
     ssize_t totSent = 0; // track total bytes sent here
     Response->base.status = 0;
 
@@ -356,15 +352,12 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
                              0 );
         if ( sent < 0 )
         {
-            Response->base.status = errno;
+            Response->base.status = -errno;
             MYASSERT( !"send" );
             break;
         }
 
         totSent += sent;
-
-
-        printf("Sent OK. %u bytes\n", (unsigned int)sent);
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,

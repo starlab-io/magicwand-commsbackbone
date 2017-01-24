@@ -166,7 +166,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // MtRequest*
     mt_request_type_t   type;
     
-    // Size of the populated bytes in the payload. This struct not included.
+    // All-inclusive size of the populated bytes in the payload,
+    // including this structure.
     mt_size_t   size;
 
     // Server-generated request ID
