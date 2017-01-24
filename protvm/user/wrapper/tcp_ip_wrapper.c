@@ -51,8 +51,8 @@ pthread_mutex_t  send_lock;
 pthread_mutex_t  bind_lock;
 pthread_mutex_t  accept_lock;
 pthread_mutex_t  listen_lock;
-//pthread_mutex_t  accept_lock;
-//pthread_mutex_t  recv_lock;
+pthread_mutex_t  accept_lock;
+pthread_mutex_t  recv_lock;
 
 
 void
@@ -75,7 +75,7 @@ build_create_socket( mt_request_generic_t * Request )
 
 void
 build_close_socket( mt_request_generic_t * Request, 
-                    sinfo_t * SockInfo )
+                    int                    SockFd )
 {
     mt_request_socket_close_t * csock = &(Request->socket_close);
 
@@ -85,18 +85,16 @@ build_close_socket( mt_request_generic_t * Request,
     csock->base.type = MtRequestSocketClose;
     csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
     csock->base.id = request_id++;
-    csock->base.sockfd = SockInfo->sockfd;
+    csock->base.sockfd = SockFd;
 }
 
 
 
 void
-build_bind_socket( 
-        mt_request_generic_t * Request, 
-        int sockfd, 
-        struct sockaddr_in * SockAddr, 
-        socklen_t Addrlen 
-        )
+build_bind_socket( mt_request_generic_t * Request, 
+                   int                    SockFd, 
+                   struct sockaddr_in   * SockAddr, 
+                   socklen_t              Addrlen )
 {
 
     mt_request_socket_bind_t * bind = &(Request->socket_bind);
@@ -108,7 +106,7 @@ build_bind_socket(
     bind->base.sig  = MT_SIGNATURE_REQUEST;
     bind->base.type = MtRequestSocketBind;
     bind->base.id = request_id++;
-    bind->base.sockfd = sockfd;
+    bind->base.sockfd = SockFd;
 
     bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
 }
@@ -116,8 +114,8 @@ build_bind_socket(
 
 void
 build_listen_socket( mt_request_generic_t * Request,
-                     int sockfd,
-                     int * backlog)
+                     int                    SockFd,
+                     int                  * backlog)
 {
     mt_request_socket_listen_t * listen = &(Request->socket_listen);
     
@@ -129,13 +127,13 @@ build_listen_socket( mt_request_generic_t * Request,
     listen->base.sig = MT_SIGNATURE_REQUEST;
     listen->base.type = MtRequestSocketListen;
     listen->base.id = request_id++;
-    listen->base.sockfd = sockfd;
+    listen->base.sockfd = SockFd;
 
     listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
 }
 
 void build_accept_socket( mt_request_generic_t * Request,
-                          int sockfd)
+                          int                    SockFd)
 {
     mt_request_socket_accept_t * accept = &(Request->socket_accept);
 
@@ -144,7 +142,7 @@ void build_accept_socket( mt_request_generic_t * Request,
     accept->base.sig = MT_SIGNATURE_REQUEST;
     accept->base.type = MtRequestSocketAccept;
     accept->base.id = request_id++;
-    accept->base.sockfd = sockfd;
+    accept->base.sockfd = SockFd;
 
     accept->base.size = MT_REQUEST_SOCKET_ACCEPT_SIZE;
 }
@@ -170,25 +168,30 @@ build_connect_socket( mt_request_generic_t * Request,
 }
 
 void
-build_write_socket( mt_request_generic_t * Request, 
-                    sinfo_t * SockInfo )
+build_send_socket( mt_request_generic_t * Request, 
+                   int                    SockFd,
+                   const void           * Bytes,
+                   size_t                 Len )
 {
-    mt_request_socket_write_t * wsock = &(Request->socket_write);
+    mt_request_socket_send_t * send = &(Request->socket_send);
+    size_t actual_len = Len;
 
-    static int msg_num = 1;
     bzero( Request, sizeof(*Request) );
 
-    wsock->base.sig  = MT_SIGNATURE_REQUEST;
-    wsock->base.type = MtRequestSocketWrite;
-    wsock->base.id = request_id++;
-    wsock->base.sockfd = SockInfo->sockfd;
+    send->base.sig  = MT_SIGNATURE_REQUEST;
+    send->base.type = MtRequestSocketSend;
+    send->base.id = request_id++;
+    send->base.sockfd = SockFd;
+    
+    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    {
+        actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
+    }
 
-    snprintf( (char *) wsock->bytes, sizeof(wsock->bytes),
-              "Hello from build traffic file: message %d sock %d\n",
-              msg_num++, SockInfo->sockfd );
+    memcpy(send->bytes, Bytes, actual_len);
 
     // Fix to handle non-ascii payload
-    wsock->base.size = MT_REQUEST_SOCKET_WRITE_SIZE + strlen( (const char *)wsock->bytes ) + 1;
+    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
 }
 
 int 
@@ -224,7 +227,7 @@ socket( int domain,
 
    if ( response.base.status )
    {
-      printf( "\t\tError creating socket. Error Number: %u\n", response.base.status );
+      printf( "\t\tError creating socket. Error Number: %ld\n", response.base.status );
       // Returns -1 on error
       return -1;
    }
@@ -250,7 +253,7 @@ close( int sock_fd )
       return 1;
    }
       
-   build_close_socket( &request, &sock_info );
+   build_close_socket( &request, sock_fd );
 
    printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
    //printf("\tSize of request base: %lu\n", sizeof(request));
@@ -268,7 +271,7 @@ close( int sock_fd )
 
    if ( response.base.status )
    {
-      printf( "\t\tError closing socket. Error Number: %u\n", response.base.status );
+      printf( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
       // Returns -1 on error
       return -1;
    }
@@ -315,6 +318,9 @@ bind( int SockFd,
 
     pthread_mutex_lock(&bind_lock);
 
+
+
+
     return response.base.status;
 }
 
@@ -346,29 +352,35 @@ listen( int sockfd, int backlog )
 
     pthread_mutex_lock(&listen_lock);
 
-    return response.base.status;
+    if ( response.base.status < 0 )
+    {
+        errno = -response.base.status;
+    }
 
+    return ( response.base.status < 0 ? -1 : response.base.status );
 }
 
 
 int
-accept( int sockfd, 
+accept( int SockFd, 
         struct sockaddr * SockAddr, 
-        socklen_t * socklen)
+        socklen_t * SockLen)
 {
 
     pthread_mutex_lock(&accept_lock);
 
+//    sinfo_t sock_info;
+
     mt_request_generic_t request;
     mt_response_generic_t response;
 
-    if ( sockfd <= 0 )
+    if ( SockFd <= 0 )
     {
         printf("Socket file discriptor value invalid");
         return 1;
     }
     
-    build_accept_socket(&request, sockfd);
+    build_accept_socket(&request, SockFd);
 
 #ifndef NODEVICE
     write( fd, &request, sizeof(request) );
@@ -377,11 +389,84 @@ accept( int sockfd,
 #endif
 
     populate_sockaddr_in( (struct sockaddr_in *)SockAddr, &response.socket_accept.sockaddr);
-    *socklen = sizeof(struct sockaddr_in);
+
+//    sock_info.sockfd = response.base.status;
+//    add_sock_info( list, &sock_info );
 
     pthread_mutex_lock(&accept_lock);
 
-    return response.base.status;
+    if ( response.base.status < 0 )
+    {
+        errno = -response.base.status;
+        return -1;
+    }
+    else
+    {
+        return response.base.status;
+    }
+
+}
+
+
+void
+build_recv_socket( int SockFd,
+                   size_t Len,
+                   int Flags,
+                   mt_request_generic_t * Request )
+{
+   mt_request_socket_recv_t * recieve = &(Request->socket_recv);
+
+    bzero( Request, sizeof(*Request) );
+
+    recieve->base.sig  = MT_SIGNATURE_REQUEST;
+    recieve->base.type = MtRequestSocketRecv;
+    recieve->base.id = request_id++;
+    recieve->base.sockfd = SockFd;
+    
+    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    {
+       Len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
+    } 
+
+    recieve->requested = Len;
+    recieve->flags     = Flags;
+    
+    recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
+}
+
+
+ssize_t
+recv(int SockFd, void* Buf, size_t Len, int Flags )
+{
+    pthread_mutex_lock(&recv_lock);
+    
+    mt_request_generic_t request;
+    mt_response_generic_t response;
+    ssize_t rc = 0;
+    
+    build_recv_socket( SockFd, Len, Flags, &request );
+    
+    write( fd, &request, sizeof(request) );
+
+    read( fd, &response, sizeof(response) );
+
+    rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
+
+    if ( rc > 0 )
+    {
+        memcpy( Buf, response.socket_recv.bytes, rc );
+    }
+
+
+    pthread_mutex_unlock(&recv_lock);
+
+    if ( response.base.status < 0 )
+    {
+        errno = -response.base.status;
+    }
+    // else: rc already set correctly
+
+    return ( response.base.status < 0 ? -1 : rc );
 
 }
 
@@ -426,41 +511,39 @@ connect( int sockfd,
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-   if ( response.base.status )
-   {
-      printf( "\t\tError connecting. Error Number: %u\n", response.base.status );
-      // Returns -1 on error
-      return -1;
-   }
 
    pthread_mutex_unlock(&connect_lock);
 
-   // Returns 0 on success
-   return response.base.status;
+   if ( response.base.status )
+   {
+       printf( "\t\tError connecting. Error Number: %lu\n", response.base.status );
+       errno = -response.base.status;
+   }       
+
+   return ( response.base.status < 0 ? -1 : response.base.status );
 }
 
 ssize_t 
-send( int         sockfd, 
-      const void *buf, 
-      size_t      len,
-      int         flags )
+send( int         SockFd, 
+      const void *Buff, 
+      size_t      Len,
+      int         Flags )
 {
    pthread_mutex_lock(&send_lock);
 
    mt_request_generic_t request;
-   mt_response_generic_t response;
-   mt_size_t size_sent;
-
+   mt_response_socket_send_t response;
+   
    if (sock_info.sockfd <= 0)
    {
-      printf("Socket file descriptor value invalid\n");
-      return 1;
+       printf("Socket file descriptor value invalid\n");
+       errno = EINVAL;
+       return -1;
    }
 
-   // XXXX: pass the size
-   build_write_socket( &request, &sock_info );
+   build_send_socket( &request, SockFd, Buff, Len );
 
-   printf("Sending write-socket request on socket number: %d\n", sock_info.sockfd);
+   printf("Sending write-socket request on socket number: %d\n", SockFd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
@@ -473,18 +556,14 @@ send( int         sockfd,
    printf("Write-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
-
-   if ( response.base.status == 0 )
-   {
-      size_sent = request.base.size - MT_REQUEST_SOCKET_WRITE_SIZE;
-      printf("\t\tSize sent: %u\n", size_sent);
-      return size_sent; 
-   }
-
+   
    pthread_mutex_unlock(&send_lock);
 
-   // Returns -1 on error
-   return -1;
+   if ( response.base.status < 0 )
+   {
+       errno = -response.base.status;
+   }
+   return ( response.base.status < 0 ? -1 : response.sent );
 }
 
 void 
@@ -516,7 +595,7 @@ _init( void )
    pthread_mutex_init(&bind_lock, NULL);
    pthread_mutex_init(&listen_lock, NULL);
    pthread_mutex_init(&accept_lock, NULL);
-   
+   pthread_mutex_init(&recv_lock, NULL);
 }
 
 void
@@ -550,6 +629,7 @@ _fini( void )
    pthread_mutex_destroy(&bind_lock);
    pthread_mutex_destroy(&listen_lock);
    pthread_mutex_destroy(&accept_lock);
+   pthread_mutex_destroy(&recv_lock);
 
    printf("Intercept module unloaded\n");
 }

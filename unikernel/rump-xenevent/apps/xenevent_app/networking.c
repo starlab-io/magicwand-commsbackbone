@@ -15,6 +15,12 @@
 #include "threadpool.h"
 #include "translate.h"
 
+//
+// Upon recv(), should we attempt to receive the entire buffer given?
+//
+#define XE_RECEIVE_ALL 0
+
+
 // XXXXXXXX verify that errno values match between Linux and NetBSD
 
 static void
@@ -29,7 +35,6 @@ xe_net_set_base_response( IN mt_request_generic_t   * Request,
     Response->base.type = MT_RESPONSE( Request->base.type );
     Response->base.size = PayloadLen;
 }
-
 
 
 int
@@ -62,6 +67,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     {
         Response->base.status = -errno;
     }
+
     
     // Set up Response
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -78,10 +84,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     DEBUG_PRINT ( "**** Thread %d <== socket %d\n",
                   WorkerThread->idx, sockfd );
-    
-    printf("Create Socket OK\n");
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -112,7 +116,6 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %d) is connecting to %s:%d\n",
                   WorkerThread->idx, WorkerThread->sock_fd,
                   Request->hostname, Request->port );
-    DEBUG_BREAK();
 
     if ( snprintf( portBuf, sizeof(portBuf), "%d", Request->port ) <= 0 )
     {
@@ -122,7 +125,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     }
 
     rc = getaddrinfo( (const char *)Request->hostname, portBuf, &serverHints, &serverInfo );
-    if ( 0 != rc )
+    if (  0 != rc )
     {
         DEBUG_PRINT( "getaddrinfo failed: %s\n", gai_strerror(rc) );
         MYASSERT( !"getaddrinfo" );
@@ -131,27 +134,25 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     }
 
     // Loop through all the results and connect to the first we can
-    for (serverIter = serverInfo; serverIter != NULL; serverIter = serverIter->ai_next)
+    for ( serverIter = serverInfo; serverIter != NULL; serverIter = serverIter->ai_next )
     {
         if ( serverIter->ai_family != WorkerThread->sock_domain ) continue;
 
-        rc = connect( Request->base.sockfd, serverIter->ai_addr, serverIter->ai_addrlen);
+        rc = connect( Request->base.sockfd, serverIter->ai_addr, serverIter->ai_addrlen );
         if ( rc < 0 )
         {
-            // Silently continue
-            continue;
+            continue; // Silently continue
         }
 
-        // If we get here, we must have connected successfully
-        break; 
+        break; // If we get here, we must have connected successfully
     }
     
-    if (serverIter == NULL)
+    if ( serverIter == NULL )
     {
         // Looped off the end of the list with no connection.
         DEBUG_PRINT( "Couldn't connect() to %s:%s\n",
                      Request->hostname, portBuf );
-        DEBUG_BREAK();
+        MYASSERT( !"connect" );
         Response->base.status = -EADDRNOTAVAIL;
     }
 
@@ -159,20 +160,18 @@ ErrorExit:
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
-    
-    return Response->base.status;
+    return 0;
 }
-
 
 
 int
 xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
                     OUT mt_response_socket_bind_t   * Response,
-                    IN thread_item_t                * WorkerThread)
+                    IN thread_item_t                * WorkerThread )
 {
     
-    MYASSERT(WorkerThread->sock_fd == Request->base.sockfd);
-    MYASSERT( 1 == WorkerThread->in_use);
+    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( 1 == WorkerThread->in_use );
         
     int sockfd = Request->base.sockfd;
     struct sockaddr_in sockaddr;
@@ -182,20 +181,17 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     Response->base.status = bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
 
-    if(Response->base.status != 0 )
+    if ( Response->base.status < 0 )
     {
         DEBUG_PRINT("Bind failed\n");
-    }
-    else
-    {
-        DEBUG_PRINT("Bind success\n");
+        Response->base.status = -errno;
     }
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
                               MT_RESPONSE_SOCKET_BIND_SIZE,
-                              (mt_response_generic_t *) Response);
+                              (mt_response_generic_t *) Response );
 
-    return Response->base.status;;
+    return 0;
 }
 
 
@@ -204,18 +200,22 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  *Request,
                       OUT   mt_response_socket_listen_t *Response,
                       IN    thread_item_t               *WorkerThread)
 {
-
-    MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
-    MYASSERT(1 == WorkerThread->in_use);
+    MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
+    MYASSERT( 1 == WorkerThread->in_use );
 
     Response->base.status = listen( Request->base.sockfd,
                                     Request->backlog);
+
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_LISTEN_SIZE,
                               (mt_response_generic_t *) Response);
 
-    return Response->base.status;
+    return 0;
 }
 
 
@@ -224,7 +224,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                       OUT  mt_response_socket_accept_t *Response,
                       IN   thread_item_t               *WorkerThread )
 {
-    MYASSERT(Request->base.sockfd == WorkerThread->sock_fd);
+    MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
     MYASSERT( 1 == WorkerThread->in_use );
 
 
@@ -237,18 +237,76 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                   WorkerThread->idx, WorkerThread->sock_fd);
 
     Response->base.status =
-        accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen);
+        accept( Request->base.sockfd, (struct sockaddr*)&sockaddr, (socklen_t*)&addrlen );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
-                  WorkerThread->idx, WorkerThread->sock_fd );
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }
+    else
+    {
+        DEBUG_PRINT ( "Worker thread %d (socket %d) accepted connection\n",
+                      WorkerThread->idx, WorkerThread->sock_fd );
+    }
 
-    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr);
+    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
-                              (mt_response_generic_t *) Response);
+                              (mt_response_generic_t *) Response );
 
-    return Response->base.status;
+    return 0;
+}
+
+
+int
+xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
+                    OUT  mt_response_socket_recv_t  * Response,
+                    IN   thread_item_t              * WorkerThread )
+{
+    
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+
+    ssize_t totRecv = 0;
+    Response->base.status = 0;
+    
+    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    
+    DEBUG_PRINT ( "Worker thread %d (socket %d) is receiving %d bytes\n",
+                  WorkerThread->idx, WorkerThread->sock_fd, Request->requested );
+
+    while ( totRecv < Request->requested )
+    {
+        ssize_t rcv = recv( Request->base.sockfd,
+                            &Response->bytes[ totRecv ],
+                            Request->requested - totRecv,
+                            0 );
+        if ( rcv < 0 )
+        {
+            // Error, even if some data has been received already
+            Response->base.status = -errno;
+            MYASSERT( !"recv" );
+            break;
+        }
+
+        // rcv >= 0
+        totRecv += rcv;
+
+        if ( !XE_RECEIVE_ALL || 0 == rcv )
+        {
+            // Either: we are not attempting to recv() all the
+            // requested bytes, or nothing was received. We're done.
+            break;
+        }
+    }
+
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_RECV_SIZE + totRecv,
+                              (mt_response_generic_t *)Response );
+
+    return 0;
 }
 
 
@@ -257,7 +315,6 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread )
 {
-    int rc = 0;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -270,8 +327,9 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
     Response->base.status = 0;
     
-    rc = close( Request->base.sockfd );
-    if ( rc < 0 )
+    Response->base.status = close( Request->base.sockfd );
+
+    if ( Response->base.status < 0 )
     {
         Response->base.status = -errno;
     }
@@ -280,9 +338,10 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                               MT_RESPONSE_SOCKET_CLOSE_SIZE,
                               (mt_response_generic_t *)Response );
 
-    return Response->base.status;
+    return 0;
 }
 
+/*
 int
 xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                     OUT mt_response_socket_read_t * Response,
@@ -293,63 +352,74 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
     MYASSERT( NULL != WorkerThread );
 
     ssize_t totRead = 0;
-    //Response->base.size   = 0; // track total bytes received here
     Response->base.status = 0;
-
+    Response->base.size   = MT_RESPONSE_SOCKET_READ_SIZE;
+    
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
     
     DEBUG_PRINT ( "Worker thread %d (socket %d) is reading %d bytes\n",
                   WorkerThread->idx, WorkerThread->sock_fd, Request->requested);
 
-    while ( Response->base.size < Request->requested )
+    while ( totRead < Request->requested )
     {
         ssize_t rcv = recv( Request->base.sockfd,
-                            &Response->bytes[ Response->base.size ],
-                            Request->requested - Response->base.size,
+                            &Response->bytes[ totRead ],
+                            Request->requested - totRead,
                             0 );
-        if ( rcv < 0 )
+        if ( rcv < 0 && totRead == 0 )
         {
             Response->base.status = -errno;
-            MYASSERT( !"recv" );
+            MYASSERT( !"read" );
+            break;
+        }
+        if ( rcv =< 0 )
+        {
+            // We read some bytes but not all of them. Not an error,
+            // but we're done.
             break;
         }
 
+        // rcv > 0
         totRead += rcv;
+        Response->base.size += rcv;
     }
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_READ_SIZE + totRead,
                               (mt_response_generic_t *)Response );
 
-    return Response->base.status;
+    return 0;
 }
-
+*/
 
 int
-xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
-                     OUT mt_response_socket_write_t * Response,
-                     IN thread_item_t               * WorkerThread )
+xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
+                     OUT mt_response_socket_send_t   * Response,
+                     IN thread_item_t                * WorkerThread )
 {
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    //XXXX: does this send() past the end of the given buffer?
     ssize_t totSent = 0; // track total bytes sent here
+
+    // payload length is declared size minus header size
+    ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
     
-    DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %d bytes\n",
-                  WorkerThread->idx, WorkerThread->sock_fd, Request->base.size );
+    DEBUG_PRINT ( "Worker thread %d (socket %d) is writing %ld bytes\n",
+                  WorkerThread->idx, WorkerThread->sock_fd, maxExpected );
 
     // base.size is the total size of the request; account for the
     // header.
-    while ( totSent < Request->base.size - MT_REQUEST_SOCKET_WRITE_SIZE )
-    {
+    while ( totSent < maxExpected )
+    {   
         ssize_t sent = send( Request->base.sockfd,
                              &Request->bytes[ totSent ],
-                             Request->base.size - totSent,
-                             0 );
+                             maxExpected - totSent,
+                             (int) Request->flags );
         if ( sent < 0 )
         {
             Response->base.status = -errno;
@@ -360,10 +430,11 @@ xe_net_write_socket( IN  mt_request_socket_write_t  * Request,
         totSent += sent;
     }
 
+    Response->sent = totSent;
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_WRITE_SIZE,
+                              MT_RESPONSE_SOCKET_SEND_SIZE,
                               (mt_response_generic_t *)Response );
 
-    return Response->base.status;
+    return 0;
 }
-

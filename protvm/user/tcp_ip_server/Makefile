@@ -17,8 +17,12 @@ all: $(TCP_IP_APP_NAME)
 
 $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
 	$(CC) $(DEBUG) $(CFLAGS) $^ -o $@ 
+	@echo ""
+	@echo ""
 	$(MAKE) -C $(WRAPPER_DIR)
 
 clean:
 	rm -f $(TCP_IP_APP_NAME)
-
+	@echo ""
+	@echo ""
+	$(MAKE) clean all -C $(WRAPPER_DIR)

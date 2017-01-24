@@ -477,14 +477,14 @@ process_buffer_item( buffer_item_t * BufferItem )
                                   (mt_response_socket_close_t *) &response,
                                   worker );
         break;
-    case MtRequestSocketRead:
-        rc = xe_net_read_socket( (mt_request_socket_read_t *) request,
-                                 (mt_response_socket_read_t *) &response,
-                                 worker );
-        break;
-    case MtRequestSocketWrite:
-        rc = xe_net_write_socket( (mt_request_socket_write_t *) request,
-                                  (mt_response_socket_write_t *) &response,
+//    case MtRequestSocketRead:
+//        rc = xe_net_read_socket( (mt_request_socket_read_t *) request,
+//                                 (mt_response_socket_read_t *) &response,
+//                                 worker );
+//        break;
+    case MtRequestSocketSend:
+        rc = xe_net_send_socket( (mt_request_socket_send_t *)  request,
+                                  (mt_response_socket_send_t *) &response,
                                   worker );
         break;
     case MtRequestSocketBind: 
@@ -501,6 +501,11 @@ process_buffer_item( buffer_item_t * BufferItem )
         rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
                                    (mt_response_socket_accept_t *) &response,
                                    worker );
+        break;
+    case MtRequestSocketRecv:
+        rc = xe_net_recv_socket( (mt_request_socket_recv_t*) request,
+                                 (mt_response_socket_recv_t*) &response,
+                                  worker );
         break;
     case MtRequestInvalid:
     default:

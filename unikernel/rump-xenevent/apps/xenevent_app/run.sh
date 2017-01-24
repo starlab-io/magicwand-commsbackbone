@@ -4,8 +4,7 @@
 ## Refer to setup_net.sh 
 ##
 
-#FOR ALEX
-IP=10.0.2.138
+IP=192.168.0.17
 
 echo "Running xenvent without debugging enabled"
 echo "IP address: $IP"

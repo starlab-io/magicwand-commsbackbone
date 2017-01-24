@@ -18,8 +18,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdlib.h>
 
-#define MSG_SIZE 1500
+
+
+#define MAX_PORT 0xffff
+
+#define MSG_SIZE 15
 
 int                 server_sockfd = -1;
 int                 client_sockfd = -1;
@@ -31,15 +36,25 @@ int main(int argc , char *argv[])
     int                 client_addrlen = 0;
     int                 read_size = 0;
     struct sockaddr_in  server_sockaddr, client_sockaddr;
-
+    int                 port = 0;
     char                client_message[MSG_SIZE];
-    char                *hello = "Hello\n";
 
+    if ( argc != 2 )
+    {
+        printf( "Usage: %s <port number>\n", argv[0] );
+        goto ErrorExit;
+    }
 
-    memset( client_message, 0, 20);
+    port = atoi( argv[1] );
+    if ( port < 0 || port > MAX_PORT )
+    {
+        printf( "Invalid port number given: %d\n", port );
+        goto ErrorExit;
+    }
+    
+    bzero( client_message, sizeof(client_message) );
     bzero( &server_sockaddr, sizeof(server_sockaddr) );
     bzero( &client_sockaddr, sizeof(client_sockaddr) );
-    strcpy(client_message, hello);
     
 
     //Create Socket
@@ -54,19 +69,18 @@ int main(int argc , char *argv[])
         printf("Socket Number: %d\n", server_sockfd);
     }
 
-
     //Prepare sockaddr_in struct with needed values
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_addr.s_addr = INADDR_ANY;
-    server_sockaddr.sin_port = htons(21845);
-
+    server_sockaddr.sin_port = htons( port );
     
     //Bind to socket
     if( bind(server_sockfd, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) != 0 )
     {
         printf("bind failed\n");
         goto ErrorExit;
-    }else
+    }
+    else
     {
         printf("Bind succeeeded\n");
     }
@@ -75,8 +89,9 @@ int main(int argc , char *argv[])
     //Listen
     if ( listen(server_sockfd, 3) == 0)
     {
-        printf("waiting for connections\n");
-    }else
+        printf("waiting for connections on port %d\n", port);
+    }
+    else
     {
         printf("Listen failed\n");
         goto ErrorExit;
@@ -91,13 +106,6 @@ int main(int argc , char *argv[])
     client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
 
 
-    if( client_sockfd != 0 )
-    {
-        printf("ACCEPT SUCCESS\n");
-    }
-
-    goto UnderConstruction;
-    
     if( client_sockfd < 0 )
     {
         printf("Accept failed\n");
@@ -109,20 +117,22 @@ int main(int argc , char *argv[])
     }
 
     int i = 0;
+    ssize_t recv_size = 0;
 
-    //Recieve a message from the client
-    while( (read_size = recv( client_sockfd, client_message, MSG_SIZE, 0 ) > 0 ) )
+    // Recieve a message from the client
+    while ( ( recv_size = recv( client_sockfd, client_message, MSG_SIZE, 0 ) ) > 0 )
     {
+
         printf("Received data: %d\n", i);
         printf("Received message: %s\n\n", client_message);
 
         //Send message back to client
-//        write( client_sockfd, client_message, strlen(client_message));
-    
+        send(client_sockfd, client_message , recv_size, 0);
+
         //Clear messge buffer
         memset( &client_message, 0, sizeof(client_message) );
 
-//        printf("Sent message back to client\n");
+        printf("Sent message back to client\n");
         i++;
     }
 
@@ -134,26 +144,12 @@ int main(int argc , char *argv[])
     {
         printf("recieve failed!!!\n");
     }
-
-    close(server_sockfd);
-    close(client_sockfd);
     
-UnderConstruction:
-
-    printf("Exiting Program early, Closing sockets\n");
-
-    if(server_sockfd != -1)
-        close(server_sockfd);
-
-    if(client_sockfd != -1 )
-        close(client_sockfd);
-
-    return 0;
-
-     
 ErrorExit:
+
     printf("Error exit called\n");
-    close(server_sockfd);
-    close(client_sockfd);
+    if ( server_sockfd > 0 ) close( server_sockfd );
+    if ( client_sockfd > 0 ) close( client_sockfd );
+
     return 1;
 }
