@@ -46,6 +46,9 @@
 //  Grant Mapping Variables 
 //
 
+// XXXX: in moving to a multi-rump model, we can have smaller but more
+// shared regions. now we just have one.
+
 //
 // Number of grant refs (1/page). This determines how much space we
 // have for our ring buffer. For instance, if the order is 6, we share

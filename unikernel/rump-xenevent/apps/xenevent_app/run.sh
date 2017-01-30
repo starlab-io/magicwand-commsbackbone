@@ -5,6 +5,7 @@
 ##
 
 IP=192.168.0.17
+IP=10.15.32.8
 
 echo "Running xenvent without debugging enabled"
 echo "IP address: $IP"

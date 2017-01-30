@@ -179,7 +179,10 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    Response->base.status = bind(sockfd, (const struct sockaddr*)&sockaddr, addrlen);
+    DEBUG_PRINT ( "Worker thread %d (socket %d) is binding\n",
+                  WorkerThread->idx, WorkerThread->sock_fd );
+
+    Response->base.status = bind( sockfd, (const struct sockaddr*)&sockaddr, addrlen );
 
     if ( Response->base.status < 0 )
     {
@@ -233,7 +236,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     
     int addrlen = sizeof(sockaddr);
 
-    DEBUG_PRINT ( "Worker thread %d (socket %d) is listening for connections.\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %d) is accepting socket %d.\n",
                   WorkerThread->idx, WorkerThread->sock_fd);
 
     Response->base.status =
