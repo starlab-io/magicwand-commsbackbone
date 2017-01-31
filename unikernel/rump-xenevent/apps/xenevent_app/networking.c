@@ -7,6 +7,8 @@
 #include <netinet/in.h>
 #include <netdb.h> 
 #include <errno.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 
 #include "app_common.h"
@@ -61,24 +63,28 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     if ( sockfd < 0 )
     {
         Response->base.status = -errno;
+    }else{
+        Response->base.status = sockfd;
     }
 
     
+
     // Set up Response
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CREATE_SIZE,
                               (mt_response_generic_t *)Response );
 
+
     Response->base.sockfd = sockfd;
 
     // Set up BufferItem->assigned_thread for future reference during this session
-    WorkerThread->sock_fd       = sockfd;
+    WorkerThread->sock_fd       = sockfd;;
     WorkerThread->sock_domain   = native_fam;
     WorkerThread->sock_type     = native_type;
     WorkerThread->sock_protocol = Request->sock_protocol;
 
-    DEBUG_PRINT ( "**** Thread %d <== socket %d\n",
-                  WorkerThread->idx, sockfd );
+    DEBUG_PRINT ( "**** Thread %d <== socket %ld\n",
+                  WorkerThread->idx, Response->base.status );
     
     printf("Create Socket OK\n");
 
@@ -91,12 +97,13 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
                        OUT mt_response_socket_connect_t * Response,
                        IN  thread_item_t                * WorkerThread )
 {
-    int rc = 0;
-    char portBuf[6] = {0}; // Max: 65536\0
+//    int rc = 0;
+//    char portBuf[6] = {0}; // Max: 65536\0
 
-    struct addrinfo serverHints = {0};
-    struct addrinfo * serverInfo = NULL;
-    struct addrinfo * serverIter = NULL;
+//    struct addrinfo serverHints   = {0};
+    struct sockaddr_in sockaddr   = {0};
+//    struct addrinfo * serverInfo  = NULL;
+//    struct addrinfo * serverIter  = NULL;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -105,17 +112,31 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
     MYASSERT( 1 == WorkerThread->in_use );
     
-    serverHints.ai_family    = WorkerThread->sock_domain;
-    serverHints.ai_socktype  = WorkerThread->sock_type;
+//    serverHints.ai_family    = WorkerThread->sock_domain;
+//    serverHints.ai_socktype  = WorkerThread->sock_type;
 
     Response->base.status = 0;
 
+    populate_sockaddr_in( &sockaddr, &Request->sockaddr );
+
     DEBUG_PRINT ( "Worker thread %d (socket %d) is connecting to %s:%d\n",
                   WorkerThread->idx, WorkerThread->sock_fd,
-                  Request->hostname, Request->port );
+                  inet_ntoa( sockaddr.sin_addr ), htons( sockaddr.sin_port ) );
     DEBUG_BREAK();
 
-    if ( snprintf( portBuf, sizeof(portBuf), "%d", Request->port ) <= 0 )
+
+    Response->base.status = connect( Request->base.sockfd, 
+                                     (const struct sockaddr * ) &sockaddr,
+                                     sizeof( sockaddr ) );
+
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+    }
+
+
+/*
+    if ( snprintf( portBuf, sizeof(portBuf), "%d", htons( Request->sockaddr.sin_port ) ) <= 0 )
     {
         MYASSERT( !"snprintf failed to extract port number" );
         Response->base.status = EINVAL;
@@ -157,8 +178,9 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         DEBUG_BREAK();
         Response->base.status = -EADDRNOTAVAIL;
     }
+*/
 
-ErrorExit:
+//ErrorExit:
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
@@ -261,26 +283,72 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     return 0;
 }
 
+int
+xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
+                        OUT mt_response_socket_recvfrom_t   *Response,
+                        IN thread_item_t                    *WorkerThread )
+{
+    struct sockaddr_in   src_addr;
+    socklen_t            addrlen = 0;
+    uint64_t             bytes_read = 0;
+
+    bytes_read = recvfrom( Request->base.sockfd, 
+                           (void *) Response->buf,
+                           Request->len,
+                           Request->flags,
+                           ( struct sockaddr * ) &src_addr,
+                           &addrlen );
+   
+
+    if( Response->base.status < 0 )
+    {
+        Response->base.status = -errno;
+        bytes_read = 0;
+
+    }else{
+
+        Response->base.status = bytes_read;
+    }
+
+    
+    populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
+
+    Response->addrlen  = addrlen;
+
+    xe_net_set_base_response( ( mt_request_generic_t * ) Request,
+                              MT_RESPONSE_SOCKET_RECVFROM_SIZE + bytes_read,
+                              ( mt_response_generic_t * ) Response );
+
+    return 0;
+}
+
+
 
 int
 xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
                     OUT  mt_response_socket_recv_t  * Response,
                     IN   thread_item_t              * WorkerThread )
 {
-    
+   
+    uint64_t bytes_read = 0;
 
-    Response->base.status = recv( Request->base.sockfd, 
-                                 (void *) Response->buf,
-                                 Request->len,
-                                 Request->flags );
-    
-    if( Response->base.status < 0 )
+    bytes_read = recv( Request->base.sockfd, 
+               (void *) Response->buf,
+               Request->len,
+               Request->flags );
+
+    if( bytes_read < 0 )
     {
         Response->base.status = -errno;
+        bytes_read = 0;
+
+    }else{
+     
+        Response->base.status = bytes_read;
     }
 
     xe_net_set_base_response( (mt_request_generic_t*) Request,
-                               MT_RESPONSE_SOCKET_RECV_SIZE + Response->base.status,
+                               MT_RESPONSE_SOCKET_RECV_SIZE + bytes_read,
                               (mt_response_generic_t *) Response);
 
     return 0;

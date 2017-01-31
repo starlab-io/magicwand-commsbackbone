@@ -507,6 +507,11 @@ process_buffer_item( buffer_item_t * BufferItem )
                                  (mt_response_socket_recv_t*) &response,
                                   worker );
         break;
+    case MtRequestSocketRecvFrom:
+        rc = xe_net_recvfrom_socket( ( mt_request_socket_recv_t*) request,
+                                     ( mt_response_socket_recvfrom_t* ) &response,
+                                     worker );
+        break;
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
@@ -962,6 +967,8 @@ message_dispatcher( void )
         //
 
         DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
+
+        asm("int3");
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size < (ssize_t) sizeof(mt_request_base_t) ||

@@ -49,31 +49,33 @@ typedef uint16_t mt_size_t;
 
 typedef enum
 {
-    MtRequestInvalid       = MT_REQUEST( 0 ),
-    MtRequestSocketCreate  = MT_REQUEST( 1 ),
-    MtRequestSocketConnect = MT_REQUEST( 2 ),
-    MtRequestSocketClose   = MT_REQUEST( 3 ),
-    MtRequestSocketRead    = MT_REQUEST( 4 ),
-    MtRequestSocketSend    = MT_REQUEST( 5 ),
-    MtRequestSocketBind    = MT_REQUEST( 6 ),
-    MtRequestSocketListen  = MT_REQUEST( 7 ),
-    MtRequestSocketAccept  = MT_REQUEST( 8 ),
-    MtRequestSocketRecv    = MT_REQUEST( 9 ),
+    MtRequestInvalid        = MT_REQUEST( 0 ),
+    MtRequestSocketCreate   = MT_REQUEST( 1 ),
+    MtRequestSocketConnect  = MT_REQUEST( 2 ),
+    MtRequestSocketClose    = MT_REQUEST( 3 ),
+    MtRequestSocketRead     = MT_REQUEST( 4 ),
+    MtRequestSocketSend     = MT_REQUEST( 5 ),
+    MtRequestSocketBind     = MT_REQUEST( 6 ),
+    MtRequestSocketListen   = MT_REQUEST( 7 ),
+    MtRequestSocketAccept   = MT_REQUEST( 8 ),
+    MtRequestSocketRecv     = MT_REQUEST( 9 ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 10 ),
 } mt_request_type_t;
 
 
 typedef enum
 {
-    MtResponseInvalid       = MT_RESPONSE( MtRequestInvalid       ),
-    MtResponseSocketCreate  = MT_RESPONSE( MtRequestSocketCreate  ),
-    MtResponseSocketConnect = MT_RESPONSE( MtRequestSocketConnect ),
-    MtResponseSocketClose   = MT_RESPONSE( MtRequestSocketClose   ),
-    MtResponseSocketRead    = MT_RESPONSE( MtRequestSocketRead    ),
-    MtResponseSocketSend    = MT_RESPONSE( MtRequestSocketSend    ),
-    MtResponseSocketBind    = MT_RESPONSE( MtRequestSocketBind    ),
-    MtResponseSocketListen  = MT_RESPONSE( MtRequestSocketListen  ),
-    MtResponseSocketAccept  = MT_RESPONSE( MtRequestSocketAccept  ),
-    MtResponseSocketRecv    = MT_RESPONSE( MtRequestSocketRecv    ),
+    MtResponseInvalid           = MT_RESPONSE( MtRequestInvalid        ),
+    MtResponseSocketCreate      = MT_RESPONSE( MtRequestSocketCreate   ),
+    MtResponseSocketConnect     = MT_RESPONSE( MtRequestSocketConnect  ),
+    MtResponseSocketClose       = MT_RESPONSE( MtRequestSocketClose    ),
+    MtResponseSocketRead        = MT_RESPONSE( MtRequestSocketRead     ),
+    MtResponseSocketSend        = MT_RESPONSE( MtRequestSocketSend     ),
+    MtResponseSocketBind        = MT_RESPONSE( MtRequestSocketBind     ),
+    MtResponseSocketListen      = MT_RESPONSE( MtRequestSocketListen   ),
+    MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
+    MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
+    MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
@@ -294,21 +296,35 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
-    mt_request_base_t base;
-    int flags;
-    mt_size_t len;
+    mt_request_base_t   base;
+    int                 flags;
+    mt_size_t           len;
 
 } mt_request_socket_recv_t;
+#define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv_t ) )
+
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
 {
-    mt_response_base_t base;
-    uint8_t buf[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
+    mt_response_base_t  base;
+    uint8_t             buf[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 
 } mt_response_socket_recv_t;
-
-#define MT_REQUEST_SOCKET_RECV_SIZE ( sizeof(mt_request_socket_recv_t ) )
 #define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof( mt_response_base_t ) )
+
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recvfrom
+{
+    mt_response_base_t      base;
+    mt_sockaddr_in_t        src_addr;
+    uint32_t                addrlen;
+    uint8_t                 buf[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
+
+} mt_response_socket_recvfrom_t;
+#define MT_RESPONSE_SOCKET_RECVFROM_SIZE ( sizeof( mt_response_base_t ) \
+        + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
+
+
 
 
 //
@@ -318,9 +334,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_connect
 {
     mt_request_base_t base;
-
-    mt_port_t port;    
-    uint8_t hostname[ MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN ];
+    mt_sockaddr_in_t sockaddr;
 
 } mt_request_socket_connect_t;
 
@@ -331,8 +345,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_connect
     // nothing else
 } mt_response_socket_connect_t;
 
-#define MT_REQUEST_SOCKET_CONNECT_SIZE  (sizeof(mt_request_base_t) + sizeof(mt_port_t))
-#define MT_RESPONSE_SOCKET_CONNECT_SIZE sizeof(mt_response_socket_connect_t)
+#define MT_REQUEST_SOCKET_CONNECT_SIZE sizeof( mt_request_socket_connect_t )
+#define MT_RESPONSE_SOCKET_CONNECT_SIZE sizeof( mt_response_socket_connect_t )
 
 
 //
@@ -426,15 +440,16 @@ typedef union _mt_request_generic
 typedef union _mt_response_generic
 {
     mt_response_base_t           base;
-    mt_response_socket_create_t  socket_create;
-    mt_response_socket_connect_t socket_connect;
-    mt_response_socket_close_t   socket_close;
-    mt_response_socket_read_t    socket_read;
-    mt_response_socket_send_t    socket_send;
-    mt_response_socket_bind_t    socket_bind;
-    mt_response_socket_listen_t  socket_listen;
-    mt_response_socket_accept_t  socket_accept;
-    mt_response_socket_recv_t    socket_recv;
+    mt_response_socket_create_t     socket_create;
+    mt_response_socket_connect_t    socket_connect;
+    mt_response_socket_close_t      socket_close;
+    mt_response_socket_read_t       socket_read;
+    mt_response_socket_send_t       socket_send;
+    mt_response_socket_bind_t       socket_bind;
+    mt_response_socket_listen_t     socket_listen;
+    mt_response_socket_accept_t     socket_accept;
+    mt_response_socket_recv_t       socket_recv;
+    mt_response_socket_recvfrom_t   socket_recvfrom;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

@@ -85,8 +85,8 @@ xe_net_get_native_sock_type( mt_sock_type_t Type )
 
 static inline
 void
-populate_sockaddr_in( struct sockaddr_in * sockaddr,  
-		              mt_sockaddr_in_t *mt_sockaddr)
+populate_sockaddr_in( struct sockaddr_in    *sockaddr,  
+		              mt_sockaddr_in_t      *mt_sockaddr)
 {
 	    sockaddr->sin_family        = xe_net_get_native_protocol_family( mt_sockaddr->sin_family );
 		sockaddr->sin_port          = mt_sockaddr->sin_port;
@@ -97,8 +97,8 @@ populate_sockaddr_in( struct sockaddr_in * sockaddr,
 
 static inline
 void
-populate_mt_sockaddr_in( mt_sockaddr_in_t * mt_sockaddr,
-						 struct sockaddr_in * SockAddr)
+populate_mt_sockaddr_in( mt_sockaddr_in_t       *mt_sockaddr,
+						 struct sockaddr_in     *SockAddr)
 {	
 	mt_sockaddr->sin_family         = xe_net_get_mt_protocol_family( SockAddr->sin_family );
 	mt_sockaddr->sin_port           = SockAddr->sin_port;
