@@ -13,7 +13,7 @@
 #include "networking.h"
 #include "workqueue.h"
 #include "config.h"
-
+#include "mwsocket.h"
 
 typedef struct _worker_thread
 {
@@ -50,10 +50,16 @@ typedef struct _worker_thread
     workqueue_t * work_queue;
 
     //
-    // The socket under management - save it's metadata for easy state
-    // lookup.
+    // The exported socket value. We do not export our native socket
+    // value. See mwsocket.h for details.
     //
-    int          sock_fd;
+    mw_socket_fd_t sock_fd;
+    
+    //
+    // The native socket under management - save it's metadata for
+    // easy state lookup.
+    //
+    int            native_sock_fd;
 
     //
     // This socket metadata is the native NetBSD values, e.g. for AF_INET6.

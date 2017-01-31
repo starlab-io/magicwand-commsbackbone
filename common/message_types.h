@@ -9,6 +9,8 @@
  * like uint8_t, uint32_t, etc prior to including this file.
  ***************************************************************************/
 
+#include "mwsocket.h"
+
 // XXXX do this smartly
 // Set it small for testing - then we can deal with more messages
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN 64
@@ -75,8 +77,6 @@ typedef enum
 } mt_response_id_t;
 
 typedef uint64_t mt_id_t;
-
-typedef uint32_t mt_socket_fd_t;
 
 typedef uint32_t mt_addrlen_t;
 

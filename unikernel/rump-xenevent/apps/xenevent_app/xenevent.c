@@ -542,6 +542,8 @@ process_buffer_item( buffer_item_t * BufferItem )
         {
             // A thread was available - record the assignment now
             accept_thread->sock_fd = response.base.status;
+            accept_thread->native_sock_fd =
+                MW_SOCKET_GET_FD( response.base.status );
         }
     }
 
