@@ -968,9 +968,8 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
-
-        asm("int3");
+        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n",
+                     ONE_REQUEST_REGION_SIZE );
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size < (ssize_t) sizeof(mt_request_base_t) ||
