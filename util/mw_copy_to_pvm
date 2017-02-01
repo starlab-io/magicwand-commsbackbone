@@ -1,7 +1,6 @@
 #!/bin/bash 
 
-
-if -z $PVM_IP; then
+if [ -z $PVM_IP ]; then
    echo "Failure: PVM_IP must be defined in env"
    exit 1
 fi

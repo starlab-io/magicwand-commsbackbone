@@ -7,15 +7,12 @@
 echo "If debugging, use:"
 echo "gdb -tui -ex 'target remote:1234' xenevent.run"
 
-#sudo ../rumprun/bin/rumprun xen -di -I xen0,xenif -W xen0,inet,static,10.190.2.24/24 
-
-#FOR MARK
-#IP=192.168.0.18
-
-#FOR ALEX
-IP=10.0.2.138
+if [ -z $RUMP_IP ]; then
+    echo "Failure: PVM_IP must be defined in env"
+    exit 1
+fi
 
 rumprun -S xen -dip -D 1234 -M 512 -N xenevent-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$IP/24 \
+        -W xen0,inet,static,$RUMP_IP/24 \
         xenevent.run
