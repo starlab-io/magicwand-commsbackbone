@@ -320,7 +320,7 @@ release_buffer_item( buffer_item_t * BufferItem )
 // the thread that has already been assigned to work on Socket.
 //
 static int
-get_worker_thread_for_socket( IN mt_socket_fd_t Socket,
+get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
                               OUT thread_item_t ** WorkerThread )
 {
     int rc = EBUSY;
@@ -507,6 +507,11 @@ process_buffer_item( buffer_item_t * BufferItem )
                                  (mt_response_socket_recv_t*) &response,
                                   worker );
         break;
+    case MtRequestSocketRecvFrom:
+        rc = xe_net_recvfrom_socket( ( mt_request_socket_recv_t*) request,
+                                     ( mt_response_socket_recvfrom_t* ) &response,
+                                     worker );
+        break;
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
@@ -542,6 +547,8 @@ process_buffer_item( buffer_item_t * BufferItem )
         {
             // A thread was available - record the assignment now
             accept_thread->sock_fd = response.base.status;
+            accept_thread->native_sock_fd =
+                MW_SOCKET_GET_FD( response.base.status );
         }
     }
 
@@ -961,7 +968,8 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n", ONE_REQUEST_REGION_SIZE );
+        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n",
+                     ONE_REQUEST_REGION_SIZE );
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size < (ssize_t) sizeof(mt_request_base_t) ||

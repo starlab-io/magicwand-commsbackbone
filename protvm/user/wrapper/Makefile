@@ -4,7 +4,7 @@
 # 
 
 CC = gcc
-CFLAGS = -ggdb -Wall -fPIC -DPIC
+CFLAGS = -ggdb -Wall -fPIC -DPIC -std=gnu99
 CFLAGS += -I..
 CFLAGS += -I../../../common
 
@@ -26,7 +26,7 @@ $(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_NAME).c
 	#$(CC) $(CFLAGS) -o $@ $?
 
 $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ)
-	$(LD) $(LDFLAGS) $^ -o $@
+	$(LD) $(LDFLAGS) $^ -o $@ -ldl
 
 clean:
 	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ) $(PRE_LOAD_LIB_NAME).so

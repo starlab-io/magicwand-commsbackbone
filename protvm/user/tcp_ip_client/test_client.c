@@ -54,13 +54,14 @@ int main(int argc , char *argv[])
 
     // 2> Call connect
 
-    server.sin_addr.s_addr = inet_addr("10.0.2.15");
+//    server.sin_addr.s_addr = inet_addr("10.0.2.15");
+    server.sin_addr.s_addr = inet_addr("10.15.32.101");
     server.sin_family = AF_INET;
     server.sin_port = htons(21845);
 
     if (connect(socket_desc, (struct sockaddr *)&server , sizeof(server)) != 0)
     {
-        printf("connect failed. Error/n");
+        printf("connect failed. Error\n");
         return 1;
     }
 

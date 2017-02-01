@@ -24,35 +24,142 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
-#include <pthread.h>
 
-#include "sock_info_list.h"
-#include <assert.h>
+#include <dlfcn.h>
+
 #include <message_types.h>
 #include <translate.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
 
-#define SERVER_NAME "rumprun-echo_server-rumprun.bin"
-#define SERVER_IP   "10.0.2.15"
-#define SERVER_PORT 21845 
 
-static int fd;
-static int request_id;
+static int devfd = -1; // FD to MW device
 
-sinfo_t          sock_info;
-struct list     *list;
+//static int request_id = 0;
+static mt_id_t request_id = 0;
 
-pthread_mutex_t  create_lock;
-pthread_mutex_t  close_lock;
-pthread_mutex_t  connect_lock;
-pthread_mutex_t  send_lock;
-pthread_mutex_t  bind_lock;
-pthread_mutex_t  accept_lock;
-pthread_mutex_t  listen_lock;
-pthread_mutex_t  accept_lock;
-pthread_mutex_t  recv_lock;
+// Atomically increment and return the next mmessage ID. 
+static mt_id_t get_next_id( void )
+{
+    return __sync_add_and_fetch( &request_id, (mt_id_t) 1 );
+}
+
+
+static void * g_dlh_libc = NULL;
+
+static int
+(*libc_read)(int fd, void *buf, size_t count);
+
+static int
+(*libc_write)(int fd, const void *buf, size_t count);
+
+static int
+(*libc_close)(int fd);
+
+static ssize_t
+(*libc_send)(int sockfd, const void* buf, size_t len, int flags);
+
+static ssize_t
+(*libc_sendto)(int sockfd,
+               const void* buf,
+               size_t len,
+               int flags,
+               const struct sockaddr* dest_addr,
+               socklen_t addrlen);
+
+static ssize_t
+(*libc_recv)(int sockfd,
+             void* buf,
+             size_t len,
+             int flags);
+
+static ssize_t
+(*libc_recvfrom)(int sockfd,
+                 void* buf,
+                 size_t len,
+                 int flags,
+                 struct sockaddr* src_addr,
+                 socklen_t* addrlen);
+
+static void *
+get_libc_symbol( void ** Addr, const char * Symbol )
+{
+    *Addr = dlsym( g_dlh_libc, Symbol );
+    if ( NULL == *Addr )
+    {
+        printf( "Failure: %s\n", dlerror() );
+    }
+
+    return *Addr;
+}
+
+
+//
+// Track the sockets we have opened from MW
+//
+#define MAX_SOCKETS 1024
+static mw_socket_fd_t g_open_sockets[ MAX_SOCKETS ];
+
+static void
+init_open_sockets( void )
+{
+    for( int i = 0; i < MAX_SOCKETS; ++i )
+    {
+        g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
+    }
+}
+
+static void
+fini_open_sockets( void )
+{
+    for( int i = 0; i < MAX_SOCKETS; ++i )
+    {
+        if (  MT_INVALID_SOCKET_FD == g_open_sockets[ i ] )
+        {
+            continue;
+        }
+
+        // XXXX: twice the work necessary, since close
+        close( g_open_sockets[ i ] );
+        g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
+    }
+}
+
+
+static int
+insert_open_socket( mw_socket_fd_t NewSock )
+{
+    int rc = 0;
+
+    for( int i = 0; i < MAX_SOCKETS; ++i )
+    {
+        if (  MT_INVALID_SOCKET_FD == g_open_sockets[ i ] )
+        {
+            g_open_sockets[ i ] = NewSock;
+            goto ErrorExit;
+        }
+    }
+
+    rc = ENOMEM;
+    
+ErrorExit:
+    return rc;
+}
+
+
+static void
+remove_open_socket( mw_socket_fd_t SockFd )
+{
+    for( int i = 0; i < MAX_SOCKETS; ++i )
+    {
+        if ( SockFd == g_open_sockets[ i ] )
+        {
+            g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
+            break;
+        }
+    }
+}
 
 
 void
@@ -65,7 +172,7 @@ build_create_socket( mt_request_generic_t * Request )
     create->base.sig = MT_SIGNATURE_REQUEST;
     create->base.type = MtRequestSocketCreate;
     create->base.size = MT_REQUEST_SOCKET_CREATE_SIZE;
-    create->base.id = request_id++;
+    create->base.id = get_next_id();
     create->base.sockfd = 0;
 
     create->sock_fam = MT_PF_INET;
@@ -84,7 +191,7 @@ build_close_socket( mt_request_generic_t * Request,
     csock->base.sig  = MT_SIGNATURE_REQUEST;
     csock->base.type = MtRequestSocketClose;
     csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
-    csock->base.id = request_id++;
+    csock->base.id = get_next_id();
     csock->base.sockfd = SockFd;
 }
 
@@ -105,7 +212,7 @@ build_bind_socket( mt_request_generic_t * Request,
 
     bind->base.sig  = MT_SIGNATURE_REQUEST;
     bind->base.type = MtRequestSocketBind;
-    bind->base.id = request_id++;
+    bind->base.id = get_next_id();
     bind->base.sockfd = SockFd;
 
     bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
@@ -126,7 +233,7 @@ build_listen_socket( mt_request_generic_t * Request,
 
     listen->base.sig = MT_SIGNATURE_REQUEST;
     listen->base.type = MtRequestSocketListen;
-    listen->base.id = request_id++;
+    listen->base.id = get_next_id();
     listen->base.sockfd = SockFd;
 
     listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
@@ -141,7 +248,7 @@ void build_accept_socket( mt_request_generic_t * Request,
 
     accept->base.sig = MT_SIGNATURE_REQUEST;
     accept->base.type = MtRequestSocketAccept;
-    accept->base.id = request_id++;
+    accept->base.id = get_next_id();
     accept->base.sockfd = SockFd;
 
     accept->base.size = MT_REQUEST_SOCKET_ACCEPT_SIZE;
@@ -150,7 +257,8 @@ void build_accept_socket( mt_request_generic_t * Request,
 
 void
 build_connect_socket( mt_request_generic_t * Request, 
-                      sinfo_t * SockInfo )
+                      int SockFd,
+                      struct sockaddr_in *SockAddr )
 {
     mt_request_socket_connect_t * connect = &(Request->socket_connect);
 
@@ -158,13 +266,12 @@ build_connect_socket( mt_request_generic_t * Request,
 
     connect->base.sig  = MT_SIGNATURE_REQUEST;
     connect->base.type = MtRequestSocketConnect;
-    connect->base.id = request_id++;
-    connect->base.sockfd = SockInfo->sockfd;
+    connect->base.id = get_next_id();
+    connect->base.sockfd = SockFd;
 
-    connect->port = SockInfo->destport;
-
-    strcpy( (char *) connect->hostname, SockInfo->desthost );
-    connect->base.size = MT_REQUEST_SOCKET_CONNECT_SIZE + strlen( SERVER_IP ) + 1; 
+    populate_mt_sockaddr_in( &Request->socket_connect.sockaddr, SockAddr );
+    
+    connect->base.size = MT_REQUEST_SOCKET_CONNECT_SIZE;
 }
 
 void
@@ -180,7 +287,7 @@ build_send_socket( mt_request_generic_t * Request,
 
     send->base.sig  = MT_SIGNATURE_REQUEST;
     send->base.type = MtRequestSocketSend;
-    send->base.id = request_id++;
+    send->base.id = get_next_id();
     send->base.sockfd = SockFd;
     
     if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
@@ -199,12 +306,10 @@ socket( int domain,
         int type, 
         int protocol )
 {
-
-   pthread_mutex_lock(&create_lock);
-
    mt_request_generic_t  request;
    mt_response_generic_t response;
-
+   
+   // XXXX: args ignored
    build_create_socket( &request );
 
    //printf("Sending socket-create request\n");
@@ -212,74 +317,70 @@ socket( int domain,
    //printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write(fd, &request, sizeof(request)); 
-
-   read(fd, &response, sizeof(response));
+   write( devfd, &request, sizeof(request)); 
+   read( devfd, &response, sizeof(response));
 #endif
-   sock_info.sockfd = response.base.sockfd;
-
-   // Add Connection to List
-   add_sock_info( list, &sock_info );
 
    //printf("Create-socket response returned\n");
    //printf("\tSize of response base: %lu\n", sizeof(response));
    //printf("\t\tSize of payload: %d\n", response.base.size);
-
-   if ( response.base.status )
+   if ( response.base.status < 0)
    {
-      printf( "\t\tError creating socket. Error Number: %ld\n", response.base.status );
+       printf( "\t\tError creating socket. Error Number: %ld\n", response.base.status );
+       errno = -response.base.status;
       // Returns -1 on error
       return -1;
    }
 
-   pthread_mutex_unlock(&create_lock);
-
    // Returns socket number on success
-   return sock_info.sockfd;
+   if ( insert_open_socket( response.base.sockfd ) )
+   {
+       printf( "Failure: cannot track this socket\n" );
+       close( response.base.sockfd );
+       response.base.sockfd = MT_INVALID_SOCKET_FD;
+   }
+   
+   printf( "Returning socket 0x%x\n", response.base.sockfd );
+   return (int)response.base.sockfd;
 }
 
 int
-close( int sock_fd )
+close( int SockFd )
 {
- 
-   pthread_mutex_lock(&close_lock);
-
    mt_request_generic_t  request;
    mt_response_generic_t response;
 
-   if (sock_info.sockfd <= 0)
-   {
-      printf("Socket file descriptor value invalid\n");
-      return 1;
-   }
-      
-   build_close_socket( &request, sock_fd );
+    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    {
+       return libc_close( SockFd );
+    }
+    
+    build_close_socket( &request, SockFd );
 
-   printf("Sending close-socket request on socket number: %d\n", sock_info.sockfd);
-   //printf("\tSize of request base: %lu\n", sizeof(request));
-   //printf("\t\tSize of payload: %d\n", request.base.size);
+    //printf("\tSize of request base: %lu\n", sizeof(request));
+    //printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write(fd, &request, sizeof(request)); 
-
-   read(fd, &response, sizeof(response));
+    write( devfd, &request, sizeof(request)); 
+    read( devfd, &response, sizeof(response));
 #endif
 
-   //printf("Close-socket response returned\n");
-   //printf("\tSize of response base: %lu\n", sizeof(response));
-   //printf("\t\tSize of payload: %d\n", response.base.size);
+    //printf("Close-socket response returned\n");
+    //printf("\tSize of response base: %lu\n", sizeof(response));
+    //printf("\t\tSize of payload: %d\n", response.base.size);
 
-   if ( response.base.status )
-   {
-      printf( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
-      // Returns -1 on error
-      return -1;
-   }
+    remove_open_socket( SockFd );
+    
+    if ( response.base.status )
+    {
+        printf( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
+        errno = -response.base.status;
+        // Returns -1 on error
+        return -1;
+    }
 
-   pthread_mutex_unlock(&close_lock);
-
-   // Returns 0 on success
-   return response.base.status;
+    // Returns 0 on success
+    return response.base.status;
 }
 
 
@@ -288,22 +389,22 @@ bind( int SockFd,
       const struct sockaddr * SockAddr, 
       socklen_t addrlen )
 {
-    pthread_mutex_lock(&bind_lock);
-
     mt_request_generic_t request;
     mt_response_generic_t response;
     struct sockaddr_in * sockaddr_in;
 
-    if ( SockFd <= 0 )
+    if ( !MW_SOCKET_IS_FD(SockFd) )
     {
         printf("Socket file discriptor value invalid\n");
-        return 1;
-    }   
+        errno = ENOTSOCK;
+        return -1;
+    }
 
     if ( SockAddr->sa_family != AF_INET || addrlen != sizeof(struct sockaddr_in) )
     {
         perror("Only AF_INET is supported at this time\n");
-        return 1;
+        errno = EINVAL;
+        return -1;
     }
 
     sockaddr_in = ( struct sockaddr_in * ) SockAddr;
@@ -311,46 +412,33 @@ bind( int SockFd,
     build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
 
 #ifndef NODEVICE    
-    write( fd, &request, sizeof(request) );
-
-    read( fd, &response, sizeof(response) );
+    write( devfd, &request, sizeof(request) );
+    read( devfd, &response, sizeof(response) );
 #endif
-
-    pthread_mutex_lock(&bind_lock);
-
-
-
 
     return response.base.status;
 }
 
 
-
-
 int
-listen( int sockfd, int backlog )
+listen( int SockFd, int backlog )
 {
-    pthread_mutex_lock(&listen_lock);
-    
     mt_request_generic_t request;
     mt_response_generic_t response;
 
-    if ( sock_info.sockfd <= 0 )
+    if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
         printf("Socket file discriptor value invalid\n");
-        return 1;
+        errno = ENOTSOCK;
+        return -1;
     }
-    
 
-    build_listen_socket( &request, sockfd, &backlog);
+    build_listen_socket( &request, SockFd, &backlog);
 
 #ifndef NODEVICE
-    write( fd, &request, sizeof(request) );
-
-    read( fd, &response, sizeof(response) );
+    write( devfd, &request, sizeof(request) );
+    read( devfd, &response, sizeof(response) );
 #endif
-
-    pthread_mutex_lock(&listen_lock);
 
     if ( response.base.status < 0 )
     {
@@ -366,45 +454,32 @@ accept( int SockFd,
         struct sockaddr * SockAddr, 
         socklen_t * SockLen)
 {
-
-    pthread_mutex_lock(&accept_lock);
-
-//    sinfo_t sock_info;
-
     mt_request_generic_t request;
     mt_response_generic_t response;
 
-    if ( SockFd <= 0 )
+    if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
         printf("Socket file discriptor value invalid");
-        return 1;
+        errno = ENOTSOCK;
+        return -1;
     }
     
     build_accept_socket(&request, SockFd);
-
-#ifndef NODEVICE
-    write( fd, &request, sizeof(request) );
+    populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
+                          &response.socket_accept.sockaddr);
     
-    read( fd, &response, sizeof(response) );
+#ifndef NODEVICE
+    write( devfd, &request, sizeof(request) );
+    read( devfd, &response, sizeof(response) );
 #endif
-
-    populate_sockaddr_in( (struct sockaddr_in *)SockAddr, &response.socket_accept.sockaddr);
-
-//    sock_info.sockfd = response.base.status;
-//    add_sock_info( list, &sock_info );
-
-    pthread_mutex_lock(&accept_lock);
 
     if ( response.base.status < 0 )
     {
         errno = -response.base.status;
         return -1;
     }
-    else
-    {
-        return response.base.status;
-    }
-
+    
+    return response.base.status;
 }
 
 
@@ -412,18 +487,28 @@ void
 build_recv_socket( int SockFd,
                    size_t Len,
                    int Flags,
+                   struct sockaddr *SrcAddr,
+                   socklen_t *AddrLen,
                    mt_request_generic_t * Request )
 {
    mt_request_socket_recv_t * recieve = &(Request->socket_recv);
 
     bzero( Request, sizeof(*Request) );
-
-    recieve->base.sig  = MT_SIGNATURE_REQUEST;
-    recieve->base.type = MtRequestSocketRecv;
-    recieve->base.id = request_id++;
-    recieve->base.sockfd = SockFd;
     
-    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
+    recieve->base.sig  = MT_SIGNATURE_REQUEST;
+    recieve->base.id = get_next_id();
+    recieve->base.sockfd = SockFd;
+
+    if( NULL == SrcAddr )
+    {
+        recieve->base.type = MtRequestSocketRecv;
+    }
+    else
+    {
+        recieve->base.type = MtRequestSocketRecvFrom;
+    }
+
+    if ( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
     {
        Len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
     } 
@@ -434,93 +519,109 @@ build_recv_socket( int SockFd,
     recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
 }
 
-
 ssize_t
-recv(int SockFd, void* Buf, size_t Len, int Flags )
+recvfrom( int    SockFd,
+          void * Buf,
+          size_t Len,
+          int    Flags,
+          struct sockaddr * SrcAddr,
+          socklen_t       * AddrLen )
 {
-    pthread_mutex_lock(&recv_lock);
-    
     mt_request_generic_t request;
     mt_response_generic_t response;
     ssize_t rc = 0;
-    
-    build_recv_socket( SockFd, Len, Flags, &request );
-    
-    write( fd, &request, sizeof(request) );
 
-    read( fd, &response, sizeof(response) );
+    if ( !MW_SOCKET_IS_FD(SockFd) )
+    {
+        printf("Socket file discriptor value invalid\n");
+        errno = -ENOTSOCK;
+        return -1;
+    }
 
+    build_recv_socket( SockFd, Len, Flags, SrcAddr, AddrLen, &request );
+
+#ifndef NODEVICE
+    write( devfd, &request, sizeof(request) );
+    read( devfd, &response, sizeof(response) );
+#endif
+    
     rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
-
     if ( rc > 0 )
     {
         memcpy( Buf, response.socket_recv.bytes, rc );
     }
 
-
-    pthread_mutex_unlock(&recv_lock);
-
     if ( response.base.status < 0 )
     {
         errno = -response.base.status;
     }
-    // else: rc already set correctly
 
+    if ( response.base.type == MtResponseSocketRecvFrom )
+    {
+        if ( SrcAddr )
+        {
+            memcpy( SrcAddr,
+                    &response.socket_recvfrom.src_addr,
+                    sizeof( struct sockaddr ) );
+        }
+        if ( AddrLen )
+        {
+            memcpy( AddrLen,
+                    &response.socket_recvfrom.addrlen,
+                    sizeof( socklen_t ) );
+        }
+    }
     return ( response.base.status < 0 ? -1 : rc );
+}
 
+
+ssize_t
+recv( int     SockFd,
+      void  * Buf,
+      size_t  Len,
+      int     Flags )
+{
+    return recvfrom( SockFd, Buf, Len, Flags, NULL, NULL);
 }
 
 
 int 
-connect( int sockfd, 
-         const struct sockaddr *addr,
-         socklen_t addrlen )
+connect( int SockFd, 
+         const struct sockaddr * Addr,
+         socklen_t AddrLen )
 {
-   pthread_mutex_lock(&connect_lock);
-
    mt_request_generic_t request;
    mt_response_generic_t response;
-   sinfo_t   *sock_info_in_list;
 
-   if (sock_info.sockfd <= 0)
+   if ( !MW_SOCKET_IS_FD( SockFd ) )
    {
-      printf("Socket file descriptor value invalid\n");
-      return 1;
+       printf("Socket file discriptor value invalid\n");
+       errno = ENOTSOCK;
+       return -1;
    }
 
-   sock_info.desthost = SERVER_IP; 
-   sock_info.destport = SERVER_PORT; 
+   build_connect_socket( &request, SockFd, (struct sockaddr_in *) Addr );
 
-   sock_info_in_list = find_sock_info(list, sockfd);
-   sock_info_in_list->desthost = SERVER_IP; 
-   sock_info_in_list->destport = SERVER_PORT; 
-
-   build_connect_socket( &request, &sock_info );
-
-   printf("Sending connect-socket request on socket number: %d\n", sock_info.sockfd);
    printf("\tSize of request base: %lu\n", sizeof(request));
    printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write(fd, &request, sizeof(request)); 
-
-   read(fd, &response, sizeof(response));
+   write( devfd, &request, sizeof(request)); 
+   read( devfd, &response, sizeof(response));
 #endif
 
    printf("Connect-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
 
-
-   pthread_mutex_unlock(&connect_lock);
-
-   if ( response.base.status )
+   if ( response.base.status < 0 )
    {
        printf( "\t\tError connecting. Error Number: %lu\n", response.base.status );
        errno = -response.base.status;
+       return -1;
    }       
 
-   return ( response.base.status < 0 ? -1 : response.base.status );
+   return response.base.status;
 }
 
 ssize_t 
@@ -529,18 +630,16 @@ send( int         SockFd,
       size_t      Len,
       int         Flags )
 {
-   pthread_mutex_lock(&send_lock);
-
    mt_request_generic_t request;
    mt_response_socket_send_t response;
-   
-   if (sock_info.sockfd <= 0)
+
+   if ( !MW_SOCKET_IS_FD( SockFd ) )
    {
-       printf("Socket file descriptor value invalid\n");
+       printf( "send() received invalid FD 0x%x\n", SockFd );
        errno = EINVAL;
        return -1;
    }
-
+   
    build_send_socket( &request, SockFd, Buff, Len );
 
    printf("Sending write-socket request on socket number: %d\n", SockFd);
@@ -548,17 +647,14 @@ send( int         SockFd,
    printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write(fd, &request, sizeof(request)); 
-
-   read(fd, &response, sizeof(response));
+   write( devfd, &request, sizeof(request) ); 
+   read( devfd, &response, sizeof(response) );
 #endif
 
    printf("Write-socket response returned\n");
    printf("\tSize of response base: %lu\n", sizeof(response));
    printf("\t\tSize of payload: %d\n", response.base.size);
    
-   pthread_mutex_unlock(&send_lock);
-
    if ( response.base.status < 0 )
    {
        errno = -response.base.status;
@@ -570,66 +666,54 @@ void
 _init( void )
 {
     request_id = 0;
-    memset( &sock_info, 0, sizeof(sinfo_t) );
-
 
     printf("Intercept module loaded\n");
 
 #ifdef NODEVICE
-    fd = open("/dev/null", O_RDWR);
+    devfd = open("/dev/null", O_RDWR);
 #else
-    fd = open( DEV_FILE, O_RDWR);
+    devfd = open( DEV_FILE, O_RDWR);
 #endif
 
-    if (fd < 0) {
+    if (devfd < 0)
+    {
         perror("Failed to open the device...");
-   }
+        exit(1);
+    }
 
-   list = create_sock_info_list();
-   assert (list);
+    g_dlh_libc = dlopen( "libc.so.6", RTLD_NOW );
+    if ( NULL == g_dlh_libc )
+    {
+        printf("Failure: %s\n", dlerror() );
+        exit(1);
+    }
 
-   pthread_mutex_init(&create_lock, NULL);
-   pthread_mutex_init(&close_lock, NULL);
-   pthread_mutex_init(&connect_lock, NULL);
-   pthread_mutex_init(&send_lock, NULL);
-   pthread_mutex_init(&bind_lock, NULL);
-   pthread_mutex_init(&listen_lock, NULL);
-   pthread_mutex_init(&accept_lock, NULL);
-   pthread_mutex_init(&recv_lock, NULL);
+    init_open_sockets();
+    
+    get_libc_symbol( (void **) &libc_read,     "read"     );
+    get_libc_symbol( (void **) &libc_write,    "write"    );
+    get_libc_symbol( (void **) &libc_close,    "close"    );
+    get_libc_symbol( (void **) &libc_send,     "send"     );
+    get_libc_symbol( (void **) &libc_sendto,   "sendto"   );
+    get_libc_symbol( (void **) &libc_recv,     "recv"     );
+    get_libc_symbol( (void **) &libc_recvfrom, "recvfrom" );
 }
 
 void
 _fini( void )
 {
+    // In case of process crash, the kernel will close all the open
+    // FDs for us. However, the FDs from Rump are not registered with
+    // the kernel. We should have an easy way to do this, e.g. tell
+    // Rump to close all sockets associated with this PID.
+
+    fini_open_sockets();
     
-   list_iterator iterator;
-   sinfo_t       sock_info_in_list;
-
-   printf ( "\nNumber of sockets in list: %d\n", count_list_members( list ));
-
-   iterator = get_list_iterator(list);
-
-   while (is_another_list_member_available(iterator) ) 
-   {
-       get_next_sock_info( &iterator, &sock_info_in_list);
-
-       printf( "sock_info_in_list.sockfd: %d\n", sock_info_in_list.sockfd );
-       printf( "sock_info_in_list.desthost: %s\n", sock_info_in_list.desthost );
-       printf( "sock_info_in_list.destport: %d\n", sock_info_in_list.destport );
-
-   }
-
-   destroy_sock_info( list, sock_info.sockfd );
-   destroy_list( &list );
-
-   pthread_mutex_destroy(&create_lock);
-   pthread_mutex_destroy(&close_lock);
-   pthread_mutex_destroy(&connect_lock);
-   pthread_mutex_destroy(&send_lock);
-   pthread_mutex_destroy(&bind_lock);
-   pthread_mutex_destroy(&listen_lock);
-   pthread_mutex_destroy(&accept_lock);
-   pthread_mutex_destroy(&recv_lock);
+    if ( g_dlh_libc )
+    {
+        dlclose( g_dlh_libc );
+        g_dlh_libc = NULL;
+    }
 
    printf("Intercept module unloaded\n");
 }

@@ -86,24 +86,24 @@ xe_net_get_native_sock_type( mt_sock_type_t Type )
 static inline
 void
 populate_sockaddr_in( struct sockaddr_in * sockaddr,  
-		              mt_sockaddr_in_t *mt_sockaddr)
+                      mt_sockaddr_in_t *mt_sockaddr)
 {
-	    sockaddr->sin_family        = xe_net_get_native_protocol_family( mt_sockaddr->sin_family );
-		sockaddr->sin_port          = mt_sockaddr->sin_port;
-		sockaddr->sin_addr.s_addr   = mt_sockaddr->sin_addr.s_addr;
-		memcpy( sockaddr->sin_zero, mt_sockaddr->sin_zero, sizeof(sockaddr->sin_zero) );
+    sockaddr->sin_family        = xe_net_get_native_protocol_family( mt_sockaddr->sin_family );
+    sockaddr->sin_port          = mt_sockaddr->sin_port;
+    sockaddr->sin_addr.s_addr   = mt_sockaddr->sin_addr.s_addr;
+    memcpy( sockaddr->sin_zero, mt_sockaddr->sin_zero, sizeof(sockaddr->sin_zero) );
 }
 
 
 static inline
 void
 populate_mt_sockaddr_in( mt_sockaddr_in_t * mt_sockaddr,
-						 struct sockaddr_in * SockAddr)
+                         struct sockaddr_in * SockAddr)
 {	
-	mt_sockaddr->sin_family         = xe_net_get_mt_protocol_family( SockAddr->sin_family );
-	mt_sockaddr->sin_port           = SockAddr->sin_port;
-	mt_sockaddr->sin_addr.s_addr    = SockAddr->sin_addr.s_addr;
-	memcpy( mt_sockaddr->sin_zero, SockAddr->sin_zero, sizeof(mt_sockaddr->sin_zero) );
+    mt_sockaddr->sin_family         = xe_net_get_mt_protocol_family( SockAddr->sin_family );
+    mt_sockaddr->sin_port           = SockAddr->sin_port;
+    mt_sockaddr->sin_addr.s_addr    = SockAddr->sin_addr.s_addr;
+    memcpy( mt_sockaddr->sin_zero, SockAddr->sin_zero, sizeof(mt_sockaddr->sin_zero) );
 }
 
 #endif

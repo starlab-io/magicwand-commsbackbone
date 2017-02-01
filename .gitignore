@@ -1,0 +1,10 @@
+*~
+*.[oa]
+*.o.cmd
+*.ko
+*.mod.[co]
+*modules.order
+mw_setaddrs.sh
+*.bin
+*.run
+*.swp
