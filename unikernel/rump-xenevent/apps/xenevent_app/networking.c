@@ -72,6 +72,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     }
     else
     {
+        // success
+        MYASSERT( MW_SOCKET_FD_OK( sockfd ) );
         Response->base.status = MW_SOCKET_CREATE( client_id, sockfd );
     }
 
@@ -265,7 +267,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     
     int addrlen = sizeof(sockaddr);
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is listening for connections.\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is accepting.\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
@@ -274,12 +276,14 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                 (struct sockaddr*)&sockaddr,
                 (socklen_t*)&addrlen );
 
-    if( Response->base.status < 0 )
+    if ( Response->base.status < 0 )
     {
         Response->base.status = -errno;
     }
     else
-    {
+      {
+        // success
+        MYASSERT( MW_SOCKET_FD_OK( Response->base.status ) );
         Response->base.status =
             MW_SOCKET_CREATE( client_id, Response->base.status);
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted connection\n",
