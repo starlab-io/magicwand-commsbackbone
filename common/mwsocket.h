@@ -38,11 +38,14 @@ typedef int32_t mw_socket_fd_t;
      (MW_SOCKET_PREFIX_VAL == ( (int32_t)(x) & MW_SOCKET_PREFIX_MASK)) )
 
 
-#define MW_SOCKET_CREATE(rumpid, sockfd)                        \
+#define MW_SOCKET_CREATE(rumpid, sockfd)                                \
     ( MW_SOCKET_PREFIX_VAL | (((uint16_t)rumpid) << 16) | (sockfd) )
 
 
 #define MW_SOCKET_GET_FD(x)                     \
-    ((x) & MW_SOCKET_LOCAL_FD_MASK )
+    ( (x) & MW_SOCKET_LOCAL_FD_MASK )
+
+#define MW_SOCKET_FD_OK(_native)                 \
+    ( MW_SOCKET_GET_FD((_native)) == (_native) )
 
 #endif // mwsockets_h
