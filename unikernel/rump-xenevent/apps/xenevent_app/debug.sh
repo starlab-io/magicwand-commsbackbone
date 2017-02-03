@@ -8,7 +8,7 @@ echo "If debugging, use:"
 echo "gdb -tui -ex 'target remote:1234' xenevent.run"
 
 if [ -z $RUMP_IP ]; then
-    echo "Failure: PVM_IP must be defined in env"
+    echo "Failure: RUMP_IP must be defined in env"
     exit 1
 fi
 

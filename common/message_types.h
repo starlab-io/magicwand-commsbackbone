@@ -45,6 +45,12 @@ typedef uint16_t mt_size_t;
 // protected VM for matching requests and responses. The unikernel
 // copies a request's message ID into the corresponding response.
 //
+typedef uint64_t mt_id_t;
+
+#define MT_ID_UNSET_VALUE (mt_id_t)-3
+
+
+
 //
 // Possible message types - Request and Response values must run in parallel
 //
@@ -80,15 +86,13 @@ typedef enum
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
 } mt_response_id_t;
 
-typedef uint64_t mt_id_t;
-
 typedef uint32_t mt_addrlen_t;
 
 #define MT_INVALID_SOCKET_FD (mw_socket_fd_t)-1
 
 typedef uint16_t mt_port_t;
 
-// maps to errno; 0 == success
+// maps to errno; 0 == success; must be signed
 typedef int64_t mt_status_t;
 
 #define CRITICAL_ERROR(x) (0xc0000000 | (x))

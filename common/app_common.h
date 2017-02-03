@@ -5,6 +5,10 @@
 #define DEBUG_FLUSH_FUNCTION fflush
 
 #include <pthread.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+
 
 #ifdef MYDEBUG
 static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -30,9 +34,29 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
 // Debugging helpers
 //
+
+#ifdef MYDEBUG
+
+// Using gettid() would be better, but it isn't portable from Linux
+
+#  define DEBUG_EMIT_META()                     \
+    DEBUG_PRINT_FUNCTION( "P%d [%s:%d] ", getpid(), SHORT_FILE, __LINE__ )
+#else
+#  define DEBUG_EMIT_META() ((void)0)
+#endif
+
+
+#ifdef MYTRAP
+#  define BARE_DEBUG_BREAK() asm("int $3")
+#else
+#  define BARE_DEBUG_BREAK() ((void)0)
+#endif
+
 #if (defined MYDEBUG) && (defined MYTRAP)
-#  define DEBUG_BREAK() \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\tAt breakpoint\n", SHORT_FILE, __LINE__, __FUNCTION__); \
+#  define DEBUG_BREAK()                                                 \
+    DEBUG_EMIT_META();                                                  \
+    DEBUG_PRINT_FUNCTION( "At breakpoint\n" );                          \
+    DEBUG_FLUSH_FUNCTION(stdout);                                       \
     asm("int $3\n\t")
 #else
 #  define DEBUG_BREAK() ((void)0)
@@ -40,8 +64,8 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #ifdef MYDEBUG
 #  define DEBUG_PRINT(...)                                              \
-    pthread_mutex_lock( &__debug_mutex );                              \
-    DEBUG_PRINT_FUNCTION ( "[%s:%d] %s\t", SHORT_FILE, __LINE__, __FUNCTION__); \
+    pthread_mutex_lock( &__debug_mutex );                               \
+    DEBUG_EMIT_META();                                                  \
     DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     pthread_mutex_unlock( &__debug_mutex )

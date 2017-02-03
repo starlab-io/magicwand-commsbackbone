@@ -4,8 +4,8 @@
 ## Refer to setup_net.sh 
 ##
 
-if -z $RUMP_IP; then
-    echo "Failure: PVM_IP must be defined in env"
+if [ -z $RUMP_IP ]; then
+    echo "Failure: RUMP_IP must be defined in env"
     exit 1
 fi
 

@@ -7,13 +7,13 @@
 WRAPPER = ../wrapper
 
 CC = gcc
-CFLAGS = -Wall -fPIC -DPIC
+CFLAGS = -Wall -fPIC -DPIC -std=gnu99
 CFLAGS += -I..
-CFLAGS += -I ../../../common
+CFLAGS += -I../../../common
 
 LD = ld
 LDFLAGS = -shared
-LDFLAGS += -I../../../common
+#LDFLAGS += -I../../../common
 LIBS = -lpthread
 
 TCP_IP_APP_NAME=test_tcpip_app
@@ -22,7 +22,7 @@ all: $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).so
 
 $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
 	@echo ""
-	$(CC) $? -o $@ $(LIBS)
+	$(CC) $(CFLAGS) $? -o $@ $(LIBS)
 
 $(PRE_LOAD_LIB_NAME).so:
 	cd $(WRAPPER) && make

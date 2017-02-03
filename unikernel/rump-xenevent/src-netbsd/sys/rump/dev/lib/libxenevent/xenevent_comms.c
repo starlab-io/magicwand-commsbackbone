@@ -211,7 +211,7 @@ static int
 xe_comms_read_int_from_key( IN const char *Path,
                             OUT int * OutVal)
 {
-    char                *val;
+    char                *val = NULL;
     int                  res = 0;
 
     *OutVal = 0;
@@ -346,12 +346,16 @@ xe_comms_read_item( void * Memory,
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
+    DEBUG_PRINT( "Reading item idx %d from %p\n",
+                 g_state.back_ring.req_cons, request );
+    
     if ( !MT_IS_REQUEST( request ) ||
          request->base.size > Size ||
          0 == request->base.size         )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Programming error: there's a problem with the request" );
+        BARE_DEBUG_BREAK();
         goto ErrorExit;
     }
 
@@ -388,7 +392,7 @@ xe_comms_write_item( void * Memory,
                      size_t * BytesWritten )
 {
     int rc = 0;
-    bool do_event = false;
+//    bool do_event = false;
     mt_response_generic_t * response = (mt_response_generic_t *) Memory;
 
     // A response can only be placed in a slot that was used by a
@@ -405,17 +409,26 @@ xe_comms_write_item( void * Memory,
     
     *BytesWritten = response->base.size;
     MYASSERT( *BytesWritten <= Size );
+
+    DEBUG_PRINT( "Writing item idx %d to %p\n",
+                 g_state.back_ring.rsp_prod_pvt, dest );
+
     bmk_memcpy( dest, response, *BytesWritten );
 
     // We're producing a response
     ++g_state.back_ring.rsp_prod_pvt;
+
+    RING_PUSH_RESPONSES( &g_state.back_ring );
+    (void) send_event( g_state.local_event_port );
+    
+/*
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
 
     if ( do_event || !do_event )
     {
         (void) send_event( g_state.local_event_port );
     }
-
+*/
     DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
 
     return rc;
@@ -544,7 +557,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     minios_unmask_evtchn( g_state.local_event_port );
 
     // Indicate that the VM's event channel is bound
-    err = xe_comms_write_int_to_key( VM_EVT_CHN_IS_BOUND, 1 );
+    err = xe_comms_write_int_to_key( VM_EVT_CHN_BOUND_PATH, 1 );
     if ( err )
     {
         goto ErrorExit;
@@ -634,7 +647,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     //}
 
     // Get the event port and bind to it
-    rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PRT_PATH,
+    rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PORT_PATH,
                                               &vm_evt_chn_prt_nmbr );
     if ( rc )
     {

@@ -50,6 +50,12 @@ extern char *strrchr(const char *, int);
 #  define DEBUG_PREAMBLE()  ((void)0)
 #endif
 
+#ifdef MYTRAP
+#  define BARE_DEBUG_BREAK() asm("int $3")
+#else
+#  define BARE_DEBUG_BREAK() ((void)0)
+#endif
+
 #ifdef MYDEBUG
 #  define DEBUG_BREAK()                                                 \
     DEBUG_PREAMBLE();                                                   \

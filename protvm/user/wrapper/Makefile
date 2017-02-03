@@ -4,9 +4,11 @@
 # 
 
 CC = gcc
-CFLAGS = -ggdb -Wall -fPIC -DPIC -std=gnu99
-CFLAGS += -I..
-CFLAGS += -I../../../common
+CFLAGS = -Wall -fPIC -DPIC -std=gnu99
+CFLAGS += -I.. -I../../../common
+CFLAGS += -ggdb
+#CFLAGS += -DMYDEBUG
+#CFLAGS += -DMYTRAP
 
 LD = ld
 LDFLAGS = -ggdb -shared

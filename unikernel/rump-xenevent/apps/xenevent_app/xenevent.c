@@ -181,8 +181,10 @@ debug_print_state( void )
         
         (void) sem_getvalue( &curr->awaiting_work_sem, &pending );
         
-        printf("  %d: used %d sock %d, pending items %d\n",
-               curr->idx, curr->in_use, curr->sock_fd, pending );
+        printf("  %d: used %d sock %x/%d, pending items %d\n",
+               curr->idx, curr->in_use,
+               curr->sock_fd, curr->native_sock_fd,
+               pending );
 
         if ( curr->in_use )
         {
@@ -329,13 +331,13 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %d\n", Socket );
+    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Socket );
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
         curr = &g_state.worker_threads[i];
 
-        DEBUG_PRINT( "Worker thread %d: busy %d sock %d\n",
+        DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
                      i, curr->in_use, curr->sock_fd );
 
         if ( MT_INVALID_SOCKET_FD == Socket )
@@ -607,7 +609,6 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // Typically the caller needs to do more work on this buffer
     *ProcessFurther = true;
     
-    DEBUG_BREAK();
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
@@ -658,7 +659,6 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     {
         // This request is for an existing connection. Find the thread
         // that services the connection and assign it.
-        //DEBUG_BREAK();
         rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
         if ( rc )
         {
@@ -724,11 +724,8 @@ worker_thread_func( void * Arg )
         
         // Block until work arrives
         DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
-
         sem_wait( &myitem->awaiting_work_sem );
-        
         DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
-        DEBUG_BREAK();
 
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);

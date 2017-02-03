@@ -146,7 +146,6 @@ int main(int argc , char *argv[])
     }
     
 ErrorExit:
-
     printf("Error exit called\n");
     if ( server_sockfd > 0 ) close( server_sockfd );
     if ( client_sockfd > 0 ) close( client_sockfd );

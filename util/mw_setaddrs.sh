@@ -7,8 +7,8 @@
 ##
 
 setmwaddr() {                                                              
-    export PVM_IP=10.15.32.102
-    export RUMP_IP=10.15.32.103
+    export PVM_IP=192.168.0.14
+    export RUMP_IP=192.168.0.15
 }
 
 setmwaddr
