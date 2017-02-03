@@ -8,3 +8,4 @@ mw_setaddrs.sh
 *.bin
 *.run
 *.swp
+*.so

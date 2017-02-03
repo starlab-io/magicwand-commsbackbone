@@ -85,6 +85,7 @@ static ssize_t
 static void *
 get_libc_symbol( void ** Addr, const char * Symbol )
 {
+    dlerror();
     *Addr = dlsym( g_dlh_libc, Symbol );
     if ( NULL == *Addr )
     {
@@ -317,8 +318,8 @@ socket( int domain,
    //printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request)); 
-   read( devfd, &response, sizeof(response));
+   libc_write( devfd, &request, sizeof(request)); 
+   libc_read( devfd, &response, sizeof(response));
 #endif
 
    //printf("Create-socket response returned\n");
@@ -361,8 +362,8 @@ close( int SockFd )
     //printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request)); 
-    read( devfd, &response, sizeof(response));
+    libc_write( devfd, &request, sizeof(request)); 
+    libc_read( devfd, &response, sizeof(response));
 #endif
 
     //printf("Close-socket response returned\n");
@@ -412,8 +413,8 @@ bind( int SockFd,
     build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
 
 #ifndef NODEVICE    
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    libc_write( devfd, &request, sizeof(request) );
+    libc_read( devfd, &response, sizeof(response) );
 #endif
 
     return response.base.status;
@@ -436,8 +437,8 @@ listen( int SockFd, int backlog )
     build_listen_socket( &request, SockFd, &backlog);
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    libc_write( devfd, &request, sizeof(request) );
+    libc_read( devfd, &response, sizeof(response) );
 #endif
 
     if ( response.base.status < 0 )
@@ -469,8 +470,8 @@ accept( int SockFd,
                           &response.socket_accept.sockaddr);
     
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    libc_write( devfd, &request, sizeof(request) );
+    libc_read( devfd, &response, sizeof(response) );
 #endif
 
     if ( response.base.status < 0 )
@@ -484,12 +485,12 @@ accept( int SockFd,
 
 
 void
-build_recv_socket( int SockFd,
+build_recv_socket( mt_request_generic_t * Request, 
+                   int SockFd,
                    size_t Len,
                    int Flags,
                    struct sockaddr *SrcAddr,
-                   socklen_t *AddrLen,
-                   mt_request_generic_t * Request )
+                   socklen_t *AddrLen )
 {
    mt_request_socket_recv_t * recieve = &(Request->socket_recv);
 
@@ -538,11 +539,11 @@ recvfrom( int    SockFd,
         return -1;
     }
 
-    build_recv_socket( SockFd, Len, Flags, SrcAddr, AddrLen, &request );
+    build_recv_socket( &request, SockFd, Len, Flags, SrcAddr, AddrLen );
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    libc_write( devfd, &request, sizeof(request) );
+    libc_read( devfd, &response, sizeof(response) );
 #endif
     
     rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
@@ -584,6 +585,17 @@ recv( int     SockFd,
     return recvfrom( SockFd, Buf, Len, Flags, NULL, NULL);
 }
 
+ssize_t
+read( int Fd, void *Buf, size_t count )
+{
+    if ( !MW_SOCKET_IS_FD( Fd ) )
+    {
+        return libc_read( Fd, Buf, count );
+    }
+    
+    return recvfrom( Fd, Buf, count, 0,  NULL, NULL );
+}
+
 
 int 
 connect( int SockFd, 
@@ -606,8 +618,8 @@ connect( int SockFd,
    printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request)); 
-   read( devfd, &response, sizeof(response));
+   libc_write( devfd, &request, sizeof(request)); 
+   libc_read( devfd, &response, sizeof(response));
 #endif
 
    printf("Connect-socket response returned\n");
@@ -647,8 +659,8 @@ send( int         SockFd,
    printf("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request) ); 
-   read( devfd, &response, sizeof(response) );
+   libc_write( devfd, &request, sizeof(request) ); 
+   libc_read( devfd, &response, sizeof(response) );
 #endif
 
    printf("Write-socket response returned\n");
@@ -661,6 +673,19 @@ send( int         SockFd,
    }
    return ( response.base.status < 0 ? -1 : response.sent );
 }
+
+
+ssize_t
+write( int Fd, const void *Buf, size_t count )
+{
+    if( !MW_SOCKET_IS_FD( Fd ) )
+    {
+        return libc_write( Fd, Buf, count );
+    }
+    
+    return send( Fd, Buf, count, 0 );
+}
+
 
 void 
 _init( void )
