@@ -30,17 +30,25 @@
 
 #define XENEVENT_XENSTORE_ROOT "/unikernel/random"
 
-#define PRIVATE_ID_PATH           "domid"
+#define PRIVATE_ID_PATH       "domid"
 
+#define SERVER_ID_KEY             "server_id" 
+#define SERVER_ID_PATH            XENEVENT_XENSTORE_ROOT "/" SERVER_ID_KEY
 
-#define SERVER_ID_PATH            XENEVENT_XENSTORE_ROOT "/server_id" 
-#define CLIENT_ID_PATH            XENEVENT_XENSTORE_ROOT "/client_id" 
+#define CLIENT_ID_KEY             "client_id" 
+#define CLIENT_ID_PATH            XENEVENT_XENSTORE_ROOT "/" CLIENT_ID_KEY
 
-#define GRANT_REF_PATH            XENEVENT_XENSTORE_ROOT "/gnt_ref"
-#define MSG_LENGTH_PATH           XENEVENT_XENSTORE_ROOT "/msg_len"
+#define GNT_REF_KEY               "gnt_ref" 
+#define GRANT_REF_PATH            XENEVENT_XENSTORE_ROOT "/" GNT_REF_KEY
 
-#define VM_EVT_CHN_PRT_PATH       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_prt"
-#define VM_EVT_CHN_IS_BOUND       XENEVENT_XENSTORE_ROOT "/vm_evt_chn_is_bound"
+#define MSG_LEN_KEY               "msg_len"
+#define MSG_LEN_PATH              XENEVENT_XENSTORE_ROOT "/" MSG_LEN_KEY
+
+#define VM_EVT_CHN_PORT_KEY       "vm_evt_chn_prt"
+#define VM_EVT_CHN_PORT_PATH      XENEVENT_XENSTORE_ROOT "/" VM_EVT_CHN_PORT_KEY
+
+#define VM_EVT_CHN_BOUND_KEY      "vm_evt_chn_is_bound"
+#define VM_EVT_CHN_BOUND_PATH     XENEVENT_XENSTORE_ROOT "/" VM_EVT_CHN_BOUND_KEY
 
 //
 //  Grant Mapping Variables 

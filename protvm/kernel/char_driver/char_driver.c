@@ -12,11 +12,47 @@
  * @brief   A character driver to support comms.
  */
 
+/**
+ * This is the Magic Wand driver for the protected virtual machine
+ * (PVM). It supports multithreading/multiprocessing - e.g a
+ * multi-threaded application above it can read/write to its device,
+ * and each request (write) can expect to receive the corresponding
+ * response (from read).
+ *
+ * The driver supports a handshake with another Xen virtual machine,
+ * the unikernel agent (implemented on the Rump unikernel). The
+ * handshake involves discovering each others' domain IDs, event
+ * channels, and sharing memory via grant references.
+ *
+ * The driver supports the usage of an underlying Xen ring buffer. The
+ * driver writes requests on to the ring buffer, and reads responses
+ * off the ring buffer. The driver cannot assume that a response
+ * following a request will correspond to that last request.
+ *
+ * The multithreading support works as follows:
+ *
+ * (1) A user-mode program writes a request to the driver. The driver
+ *     assigns an ID to that request and associates the caller's PID
+ *     with the request ID via a connection mapping.
+ *
+ * (2) The user-mode program reads a response from the driver. The
+ *     driver will cause that read() to block until it receives the
+ *     response with an ID that matches the ID of the request sent by
+ *     that program. This is implemented by a kernel thread that runs
+ *     the consume_response_worker() function.
+ *
+ * This model implies some strict standards:
+ *  - The remote side *must* send a response for every request it receives
+ *  - The programs that use this driver must be well-written: they must
+ *    always read a response for every request they write.
+ */
+
+
 #define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
 #define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
 
 #define pr_fmt(fmt)                             \
-    DEVICE_NAME " (%s) " fmt, __func__
+    DEVICE_NAME "P%d (%s) " fmt, current->pid, __func__
 
 #include <linux/init.h>           
 #include <linux/module.h>         
@@ -45,31 +81,8 @@
 #include <message_types.h>
 #include <xen_keystore_defs.h>
 
-
-// XXXX: ue definitions from xen_keystore_defs.h and remove these ones
-
-#define ROOT_NODE             "/unikernel/random"
-#define SERVER_ID_KEY         "server_id" 
-#define CLIENT_ID_KEY         "client_id" 
-#define GNT_REF_KEY           "gnt_ref" 
-
-#define MAX_GNT_REF_WIDTH     15
-#define MSG_LEN_KEY           "msg_len"
-#define PRIVATE_ID_PATH       "domid"
-
-#define VM_EVT_CHN_PATH       "vm_evt_chn_prt"
-#define VM_EVT_CHN_BOUND      "vm_evt_chn_is_bound"
-
-#define KEY_RESET_VAL      "0"
-#define TEST_MSG_SZ         64
-#define TEST_MSG_SZ_STR    "64"
-#define TEST_MSG           "The abyssal plain is flat.\n"
-#define MAX_MSG             1
-
-//#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
-//#define XENEVENT_GRANT_REF_ORDER  1 //(2^order == page count)
-//#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
-//#define XENEVENT_GRANT_REF_DELIM " "
+// Record performance metrics?
+#define MW_DO_PERFORMANCE_METRICS 0
 
 
 MODULE_LICENSE("GPL");
@@ -78,21 +91,22 @@ MODULE_DESCRIPTION("A driver to support MagicWand's INS");
 MODULE_VERSION("0.2");
 
 //
-// Used to map a thread to a connection that it manages. One thread
-// can manage multiple connections.
+// Used to map a thread to the (single) currently-outstanding
+// request. Assumption: no async IO!!
 //
 typedef struct _thread_conn_map {
-    //int sockfd;
     mt_id_t message_id;
     
     pid_t pid;
+    pid_t tgid; // thread group
     struct task_struct * task;
 
     // Worker thread writes the response here upone receipt, then
     // releases data_pending
     mt_response_generic_t response;
     
-    struct mutex data_pending;
+    // Use semaphore so we can lock/unlock in different process' contexts
+    struct semaphore data_pending;
     struct list_head list;
 } thread_conn_map_t;
 
@@ -105,9 +119,8 @@ static struct device* mwcharDevice = NULL;  //  The device-driver device struct 
 static grant_ref_t   foreign_grant_ref;
 static unsigned int  msg_counter;
 
-static unsigned int  is_msg_len_watch;
-static unsigned int  is_client_id_watch;
-static unsigned int  is_evtchn_bound_watch;
+static bool  client_id_watch_active;
+static bool  evtchn_bound_watch_active;
 
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
@@ -122,9 +135,13 @@ static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 static int          irqs_handled = 0;
 static int          irq = 0;
 
+#if MW_DO_PERFORMANCE_METRICS
+
 // Vars for performance tests
 ktime_t start, end;
 s64 actual_time;
+
+#endif // MW_DO_PERFORMANCE_METRICS
 
 static struct semaphore mw_sem;
 
@@ -138,7 +155,7 @@ static struct rw_semaphore thread_conn_lock;
 static struct completion   ring_ready;
 // Only this single thread reads from the ring buffer
 static struct task_struct * worker_thread;
-
+static bool pending_exit = false;
 
 // Defines:
 // mwevent_sring_t
@@ -150,8 +167,6 @@ struct mwevent_sring *shared_ring = NULL;
 struct mwevent_front_ring front_ring;
 size_t shared_mem_size = PAGE_SIZE * XENEVENT_GRANT_REF_COUNT;
 
-// Tracks the current request ID. Corresponds to mt_request_base_t.id
-static atomic64_t request_counter = ATOMIC64_INIT( 0 );
 
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
@@ -162,12 +177,25 @@ static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 //static void __exit mwchar_exit(void);
 static void mwchar_exit(void);
 
+// Tracks the current request ID. Corresponds to mt_request_base_t.id
+static mt_id_t
+get_next_id( void )
+{
+    static atomic64_t counter = ATOMIC64_INIT( 0 );
+
+    return (mt_id_t) atomic64_inc_return( &counter );
+}
+
 
 /**
  * @brief Helper function to find or create socket/pid mapping.
+ *
+ * Mappins are keyed by PID, not by thread group. This way there can
+ * be one mapping per thread.
  */
 static thread_conn_map_t *
-get_thread_conn_map_by_pid( pid_t pid )
+get_thread_conn_map_by_task( struct task_struct * task,
+                             bool create )
 {
     thread_conn_map_t * curr = NULL;
 
@@ -175,7 +203,7 @@ get_thread_conn_map_by_pid( pid_t pid )
     
     list_for_each_entry( curr, &thread_conn_head, list )
     {
-        if ( pid == curr->pid )
+        if ( task->pid == curr->pid )
         {
             up_read( &thread_conn_lock );
             goto ErrorExit;
@@ -185,6 +213,12 @@ get_thread_conn_map_by_pid( pid_t pid )
     // Not found; create a new one
     up_read( &thread_conn_lock );
 
+    if ( !create )
+    {
+        curr = NULL;
+        goto ErrorExit;
+    }
+    
     // XXXX: use SLAB instead ?
     curr = kmalloc( sizeof(thread_conn_map_t),
                     GFP_KERNEL | __GFP_ZERO );
@@ -194,8 +228,11 @@ get_thread_conn_map_by_pid( pid_t pid )
         goto ErrorExit;
     }
 
-    curr->pid = pid;
-    mutex_init( &curr->data_pending );
+    curr->pid  = task->pid;
+    curr->tgid = task->tgid;
+    curr->task = task;
+    
+    sema_init( &curr->data_pending, 0 );
 
     // Modify the global list
     down_write( &thread_conn_lock );
@@ -230,16 +267,19 @@ ErrorExit:
 }
 
 
+// Caller must hold thread_conn_lock for write
+
 static void
 destroy_thread_conn_map( thread_conn_map_t ** tcmap )
 {
-    down_write( &thread_conn_lock );
+    // Release the waiter
+    up( &( (*tcmap)->data_pending ) );
+    
+    pr_debug( "Removing mapping for PID %d TG %d (last message ID 0x%llx)\n",
+              (*tcmap)->pid, (*tcmap)->tgid, (*tcmap)->message_id );
 
-    mutex_destroy( &( (*tcmap)->data_pending ) );
     list_del( &( (*tcmap)->list ) );
 
-    up_write( &thread_conn_lock );
-    
     kfree( *tcmap );
     *tcmap = NULL;
 }
@@ -255,61 +295,80 @@ static struct file_operations fops =
    .release = dev_release,
 };
 
-static int write_to_key(const char *path, const char *value)
+static int write_to_key(const char * dir, const char * node, const char * value)
 {
    struct xenbus_transaction   txn;
    int                         err;
-
+   bool                  txnstarted = false;
+   int                   term = 0;
+   
+   pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
+   
    err = xenbus_transaction_start(&txn);
-   if (err) {
-       pr_info("Error starting xenbus transaction\n");
+   if (err)
+   {
+       pr_err("Error starting xenbus transaction\n");
        goto ErrorExit;
    }
 
-   err = xenbus_write(txn, ROOT_NODE, path, value);
-   if (err) {
-      pr_info("Could not write to XenStore Key\n");
-      xenbus_transaction_end(txn,1);
-      err = -EIO; // mask the original error
+   txnstarted = true;
+
+   err = xenbus_exists( txn, dir, "" );
+   // 1 ==> exists
+   if ( !err )
+   {
+       pr_err( "Xenstore directory %s does not exist.\n", dir );
+       err = -EIO;
+       term = 1;
+       goto ErrorExit;
+   }
+   
+   err = xenbus_write(txn, dir, node, value);
+   if (err)
+   {
+      pr_err("Could not write to XenStore Key\n");
       goto ErrorExit;
    }
 
-   err = xenbus_transaction_end(txn, 0);
-   if ( err ) {
-       pr_info("Failed to end transaction\n");
+ErrorExit:
+   if ( txnstarted )
+   {
+       if ( xenbus_transaction_end(txn, term) )
+       {
+           pr_err("Failed to end transaction\n");
+       }
    }
    
-ErrorExit:
    return err;
 }
 
 static char *
-read_from_key(const char *path)
+read_from_key( const char * dir, const char * node )
 {
    struct xenbus_transaction   txn;
    char                       *str;
    int                         err;
 
+   pr_debug( "Begin read %s/%s <== ?\n", dir, node );
+
    err = xenbus_transaction_start(&txn);
    if (err) {
-      pr_info("Error starting xenbus transaction\n");
+      pr_err("Error starting xenbus transaction\n");
       return NULL;
    }
 
-   if (path) {
-      str = (char *)xenbus_read(txn, ROOT_NODE, path, NULL);
-   } else {
-      str = (char *)xenbus_read(txn, PRIVATE_ID_PATH, "", NULL);
-   }
-
-   if (XENBUS_IS_ERR_READ(str)) {
-      pr_info("Could not read XenStore Key\n");
+   str = (char *)xenbus_read(txn, dir, node, NULL);
+   if (XENBUS_IS_ERR_READ(str))
+   {
+      pr_err("Could not read XenStore Key\n");
       xenbus_transaction_end(txn,1);
       return NULL;
    }
 
    err = xenbus_transaction_end(txn, 0);
 
+   pr_debug( "End read %s/%s <== %s\n", dir, node, str );
+   
    return str;
 }
 
@@ -319,17 +378,17 @@ static int write_server_id_to_key(void)
    int err = 0;
    
    // Get my domain id
-   dom_id_str = (const char *)read_from_key(NULL);
+   dom_id_str = (const char *)read_from_key( PRIVATE_ID_PATH, "" );
 
    if (!dom_id_str) {
-       pr_info("Error: Failed to read my Dom Id Key\n");
+       pr_err("Error: Failed to read my Dom Id Key\n");
        err = -EIO;
        goto ErrorExit;
    }
 
-   pr_info("Read my Dom Id Key: %s\n", dom_id_str);
+   pr_debug("Read my Dom Id Key: %s\n", dom_id_str);
 
-   err = write_to_key(SERVER_ID_KEY, dom_id_str);
+   err = write_to_key( XENEVENT_XENSTORE_ROOT, SERVER_ID_KEY, dom_id_str );
    if ( err )
    {
        goto ErrorExit;
@@ -366,16 +425,18 @@ static int create_unbound_evt_chn(void)
        goto ErrorExit;
    }
    
-   pr_info("Event Channel Port (%d <=> %d): %d\n",
+   pr_debug("Event Channel Port (%d <=> %d): %d\n",
           alloc_unbound.dom, client_dom_id, alloc_unbound.port);
 
    common_event_channel = alloc_unbound.port;
 
-   pr_info("Event channel's local port: %d\n", common_event_channel );
+   pr_debug("Event channel's local port: %d\n", common_event_channel );
    memset(common_event_channel_str, 0, MAX_GNT_REF_WIDTH);
    snprintf(common_event_channel_str, MAX_GNT_REF_WIDTH, "%u", common_event_channel);
 
-   err = write_to_key(VM_EVT_CHN_PATH,common_event_channel_str);
+   err = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_PORT_KEY,
+                       common_event_channel_str );
 
 ErrorExit:
    return err;
@@ -433,7 +494,7 @@ free_unbound_evt_chn(void)
    if (err) {
       pr_err("Failed to close event channel\n");
    } else {
-      pr_info("Closed Event Channel Port: %d\n", close.port);
+      pr_debug("Closed Event Channel Port: %d\n", close.port);
    }
 }
 
@@ -447,27 +508,37 @@ consume_response_worker( void * Data )
 
     pr_debug( "Worker thread spawned in process %d...\n",
              current->pid );
-
     do
     {
         rc = wait_for_completion_timeout( &ring_ready, 0x10 );
-        if ( rc > 0 ) break;
-        pr_debug( "Still waiting...\n" );
+        if ( rc > 0 )
+        {
+            break;
+        }
+        if ( pending_exit )
+        {
+            goto ErrorExit;
+        }
     } while ( true );
 
     pr_debug( "Waiting for responses on the ring buffer in process %d...\n",
              current->pid );
     
-//    asm("int $3");
     while( true )
     {
         do
         {
             available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+            if ( pending_exit )
+            {
+                pr_info( "Detected pending exit request\n" );
+                goto ErrorExit;
+            }
 
             if ( !available )
             {
-                down(&mw_sem);
+                // must be smarter -- infinite wait is bad
+                down_interruptible(&mw_sem);
             }
         } while (!available);
 
@@ -476,10 +547,20 @@ consume_response_worker( void * Data )
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
+        pr_debug( "Data available on ring at idx %d at %p\n",
+                  front_ring.rsp_cons, response );
+
+        // Hereafter: Advance index as soon as we're done with the
+        // item in the ring bufer.
+
         conn = find_thread_conn_map_by_message_id( response->base.id );
         if ( NULL == conn )
         {
-            pr_crit_once( "Received response for unknown request!!\n" );
+            // This can happen if the process dies between issuing a
+            // request and receiving the response.
+            pr_crit_once( "Received response for unknown request. "
+                          "Did the process die?\n" );
+            ++front_ring.rsp_cons;
             continue;
         }
         
@@ -487,117 +568,39 @@ consume_response_worker( void * Data )
         if (response->base.size > sizeof( conn->response ) )
         {
             pr_crit_once( "Received response that is too big" );
-            continue;
+            // Reduce the size that we send to user and fall through
+            response->base.size = sizeof( conn->response );
         }
 
-        // Put the reponse into the map struct and alert the waiting thread
+        // Put the reponse into the map struct
         memcpy( &conn->response, response, response->base.size );
-        mutex_unlock( &conn->data_pending );
-
-        // We're done with the item in ring buffer
         ++front_ring.rsp_cons;
-    }
 
-//ErrorExit:
-    do_exit( rc );
-}
-
-#if 0
-static int 
-receive_response(void *Response, size_t Size, size_t *BytesWritten)
-{
-   int rc = 0; 
-   bool available = false;
-   mt_response_generic_t * src = NULL;
-
-   //pr_info("receive_response() called\n");
-
-   //start = ktime_get();
-
-   //pr_info("In receive_response(). Entering while loop ... \n");
-
-//   mutex_lock( &mw_res_mutex );
-
-   do
-   {
-      available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
-
-      if ( !available ) {
-         //pr_info("down() called\n");
-         down(&mw_sem);
-      }
-   
-   } while (!available);
-
-   //pr_info("front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
-   //pr_info("front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
-   
-
-   //pr_info("down() called\n");
-   //down(&mw_sem);
-
-   //end = ktime_get();
-
-   //actual_time = ktime_to_ns(ktime_sub(end, start));
-
-   //pr_info("Time taken for receive_response() execution (ns): %lld\n",
-          //actual_time);
-
-   //pr_info("%d     %lld\n", irqs_handled, actual_time);
-
-   /*
-   actual_time = ktime_to_ms(ktime_sub(end, start));
-
-   pr_info("Time taken for receive_response() execution (ms): %lld\n",
-          actual_time);
-
-   available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
-
-   if ( !available ) {
-      pr_info("RING_HAS_UNCONSUMED_RESPONSES() returned false\n");
-   }
-   else
-   {
-      pr_info("RING_HAS_UNCONSUMED_RESPONSES() returned true\n");
-   }
-   */
-
-   src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
-
-   // Compare size of Response to Size. 
-   // If larger, then set rc to EINVAL and go to ErrorExit
-
-   if (src->base.size > Size) {
-      rc = EINVAL;
-      goto ErrorExit;
-   }
-
-   //memcpy(Response, src, src->base.size);
-   memcpy(Response, src, sizeof(*src));
-
-   //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
-
-   ++front_ring.rsp_cons;
-
-   //pr_info("front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
-   //pr_info("front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
-
-//   mutex_unlock( &mw_res_mutex );
-
+        up( &conn->data_pending );
+    } // while
 
 ErrorExit:
-   return rc;
+    do_exit( rc );
 }
-#endif // 0
 
 static int
 send_request(mt_request_generic_t * Request, size_t Size)
 {
     int rc = 0;
-    bool notify = false;  
     void * dest = NULL;
     thread_conn_map_t * connmap = NULL;
-   
+    mt_id_t id = get_next_id();
+
+    Request->base.id = id;
+    pr_debug( "Attempting to send request %ld\n", (unsigned long)id );
+
+    // Hold the lock for the duration of this function. All of these
+    // must be done with no interleaving:
+    //
+    // * Write the request to the ring buffer
+    // * Map the requesting process to the request, to match with the response
+    // * Flush our private indices to the shared ring
+
     mutex_lock(&mw_req_mutex);
 
     if ( RING_FULL(&front_ring) )
@@ -608,53 +611,47 @@ send_request(mt_request_generic_t * Request, size_t Size)
     }
 
     dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
-    if (!dest) 
+    if ( !dest ) 
     {
-        pr_info("destination buffer is NULL\n");
+        pr_err("destination buffer is NULL\n");
         rc = -EIO;
         goto ErrorExit;
     }
 
-    connmap = get_thread_conn_map_by_pid( current->pid );
+    pr_debug( "Sending request %ld to idx %x at %p\n",
+              (long int) id, front_ring.req_prod_pvt, dest );
+    
+    memcpy( dest, Request, Size );
+
+    // Done writing to ring buffers, now update indices
+    ++front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &front_ring );
+
+    // Now get this task's mapping to associate the message with the 
+    connmap = get_thread_conn_map_by_task( current, true );
     if ( NULL == connmap )
     {
         rc = -ENOMEM;
         goto ErrorExit;
     }
 
-    // The mutex starts off locked. read_request() attempts to locks
-    // it and blocks until the worker thread unlocks it upon receipt of
-    // response.
-    mutex_lock( &connmap->data_pending );
-    connmap->pid = current->pid;
-    connmap->task = current;
+    // The semaphore 'data_pending' starts off locked. read_request()
+    // attempts to acquire it and blocks until the worker thread
+    // releases it upon receipt of a response.
 
     // Map this process' connection map to this message ID
-    connmap->message_id = 
-        Request->base.id =
-        atomic64_inc_return( &request_counter );
+    connmap->message_id = id;
 
-    pr_debug( "Sending request %ld\n", (long int)Request->base.id );
-    memcpy(dest, Request, Size);
-
-    //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
-
-    //pr_info("send_request(). Copied %lu bytes to destination buffer\n", Size);
-
-    ++front_ring.req_prod_pvt;
-    //pr_info("front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
-
-    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
-
-    if (notify || !notify)
-    {
-        send_evt(common_event_channel);
-        //pr_info("send_request(). Sent %lu bytes to UK\n", Size);
-        //pr_info("send_request(). notify = %u \n", notify);
-    }
-
+    pr_debug("front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
+    
 ErrorExit:
     mutex_unlock(&mw_req_mutex);
+
+    if ( 0 == rc )
+    {
+        // Inform remote side, only if everything went right
+        send_evt( common_event_channel );
+    }
     return rc;
 }
 
@@ -663,7 +660,7 @@ init_shared_ring(void)
 {
    if (!server_region)
    {
-      pr_info("server_region is NULL\n");
+      pr_err("server_region is NULL\n");
       return;
    }
 
@@ -685,8 +682,8 @@ offer_grant(domid_t domu_client_id)
    server_region = (uint8_t *) __get_free_pages( GFP_KERNEL, XENEVENT_GRANT_REF_ORDER );
    if (!server_region)
    {
-       pr_info("Error allocating memory (0x%x pages)\n",
-              XENEVENT_GRANT_REF_COUNT);
+       pr_err( "Error allocating memory (0x%x pages)\n",
+               XENEVENT_GRANT_REF_COUNT);
       return 1;
    }
 
@@ -702,7 +699,7 @@ offer_grant(domid_t domu_client_id)
 
        ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
        if (ret < 0) {
-           pr_info("Error obtaining Grant\n");
+           pr_err("Error obtaining Grant\n");
            return 1;
        }
 
@@ -712,6 +709,7 @@ offer_grant(domid_t domu_client_id)
 
    return 0;
 }
+
 
 static int write_grant_refs_to_key( void )
 {
@@ -724,91 +722,43 @@ static int write_grant_refs_to_key( void )
     {
         if ( snprintf( one_ref, sizeof(one_ref), "%x ", grant_refs[i] ) >= sizeof(one_ref))
         {
-            pr_info("Insufficient space to write grant ref.\n");
+            pr_err("Insufficient space to write grant ref.\n");
             rc = 1;
             goto ErrorExit;
         }
         if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >= gnt_refs + sizeof(gnt_refs) )
         {
-            pr_info("Insufficient space to write all grant refs.\n");
+            pr_err("Insufficient space to write all grant refs.\n");
             rc = 2;
             goto ErrorExit;
         }
     }
 
-    rc = write_to_key( GNT_REF_KEY, gnt_refs );
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT, GNT_REF_KEY, gnt_refs );
 
 ErrorExit:
     return rc;
 }
 
-static void 
-msg_len_state_changed(struct xenbus_watch *w,
-                      const char **v,
-                      unsigned int l)
-{
-   char *msg_len_str;
-
-   if (msg_counter > MAX_MSG)
-      return;
-
-   msg_len_str = (char *)read_from_key(MSG_LEN_KEY);
-
-   if(XENBUS_IS_ERR_READ(msg_len_str)) {
-      pr_info("Error reading  Message Length Key!!!\n");
-      return;
-   }
-
-   if (strcmp(msg_len_str,"0") != 0) {
-      kfree(msg_len_str);
-      return;
-   }
-
-   //
-   // Get the message length 
-   // 
-   pr_info("Message length changed value:\n");
-   pr_info("\tRead Message Length Key: %s\n", msg_len_str);
-
-   if (!server_region) {
-      kfree(msg_len_str);
-      pr_info("Error allocating memory\n");
-      return;
-   }
-
-   memset(server_region, 0, shared_mem_size);
-   memcpy(server_region, TEST_MSG, TEST_MSG_SZ);
-
-   // Write Msg Len to key XXXX: process error code
-   (void) write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
-
-   kfree(msg_len_str);
-   msg_counter++;
-
-}
-
-static struct xenbus_watch msg_len_watch = {
-
-    .node = "/unikernel/random/msg_len",
-    .callback = msg_len_state_changed
-};
 
 static void
-client_id_state_changed(struct xenbus_watch *w,
-                        const char **v,
-                        unsigned int l)
+client_id_state_changed( struct xenbus_watch *w,
+                         const char **v,
+                         unsigned int l )
 {
     char     *client_id_str = NULL;
     int       err = 0;
 
-    client_id_str = (char *)read_from_key(CLIENT_ID_KEY);
-
-    if (XENBUS_IS_ERR_READ(client_id_str)) {
-        pr_info("Error reading client id key!!!\n");
+    client_id_str = (char *)read_from_key( XENEVENT_XENSTORE_ROOT,
+                                           CLIENT_ID_KEY );
+    if ( !client_id_str )
+    {
+        pr_err("Error reading client id key!!!\n");
         return;
     }
 
-    if (strcmp(client_id_str,"0") == 0) {
+    if (strcmp(client_id_str, "0") == 0)
+    {
         kfree(client_id_str);
         return;
     }
@@ -816,12 +766,12 @@ client_id_state_changed(struct xenbus_watch *w,
     //
     // Get the client Id 
     // 
-    pr_info("Client Id changed value:\n");
-    pr_info("\tRead Client Id Key: %s\n", client_id_str);
+    pr_debug("Client Id changed value:\n");
+    pr_debug("\tRead Client Id Key: %s\n", client_id_str);
 
     client_dom_id = simple_strtol(client_id_str, NULL, 10);
 
-    pr_info("\t\tuint form: %u\n", client_dom_id);
+    pr_debug("\t\tuint form: %u\n", client_dom_id);
 
     kfree(client_id_str);
 
@@ -829,16 +779,11 @@ client_id_state_changed(struct xenbus_watch *w,
     err = create_unbound_evt_chn();
     if ( err ) return;
    
-    // Write Msg Len to key
-
-    err = write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
-    if ( err ) return;
-
     // Offer Grant to Client  
     offer_grant((domid_t)client_dom_id);
 
     // Reset Client Id Xenstore Key
-    err = write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
+    err = write_to_key( XENEVENT_XENSTORE_ROOT, CLIENT_ID_KEY, KEY_RESET_VAL );
     if ( err )
     {
         // XXXX: There's more cleanup if we failed here
@@ -847,39 +792,28 @@ client_id_state_changed(struct xenbus_watch *w,
 
     // Write Grant Ref to key 
     err = write_grant_refs_to_key();
-    if ( err ) return;
-
-    // XXXX: crash here?
-    err = register_xenbus_watch(&msg_len_watch);
-    if (err) {
-        pr_err("Failed to set Message Length watcher\n");
-        // XXXX: fall-through?
+    if ( err )
+    {
         return;
-    } else {
-        is_msg_len_watch = 1;
     }
- 
+
     init_shared_ring();
 }
 
 static struct xenbus_watch client_id_watch = {
 
-   .node = "/unikernel/random/client_id",
-   .callback = client_id_state_changed
+    .node = CLIENT_ID_PATH,
+    .callback = client_id_state_changed
 };
 
 static irqreturn_t irq_event_handler( int port, void * data )
 {
     //unsigned long flags;
-
     //local_irq_save( flags );
-    //pr_info("irq_event_handler executing: port=%d data=%p call#=%d\n",
-           //port, data, irqs_handled);
    
     ++irqs_handled;
 
     //xen_clear_irq_pending(irq);
-
     //local_irq_restore( flags );
 
     up(&mw_sem);
@@ -894,62 +828,69 @@ static void vm_port_is_bound(struct xenbus_watch *w,
    char     *is_bound_str; 
    int       i;
 
-   pr_info("Checking whether %s is asserted\n",
-          VM_EVT_CHN_BOUND);
+   pr_debug("Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH);
 
-   is_bound_str = (char *) read_from_key( VM_EVT_CHN_BOUND );
-
-   if(XENBUS_IS_ERR_READ(is_bound_str)) {
-      pr_info("Error reading evtchn bound key!!\n");
+   is_bound_str = (char *) read_from_key( XENEVENT_XENSTORE_ROOT,
+                                          VM_EVT_CHN_BOUND_KEY );
+   if ( !is_bound_str )
+   {
       return;
    }
 
-   if (strcmp(is_bound_str,"0") == 0) {
+   if ( 0 == strcmp( is_bound_str, "0" ) )
+   {
       kfree(is_bound_str);
       return;
    }
 
-   pr_info("The remote event channel is bound\n");
+   pr_debug("The remote event channel is bound\n");
 
    irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
 
-   printk( KERN_INFO "Bound event channel %d to irq: %d\n",
-           common_event_channel, irq );
+   pr_debug( "Bound event channel %d to irq: %d\n",
+             common_event_channel, irq );
 
    for ( i = 0; i < 1; i++ )
    {
-      printk( KERN_INFO "NOT Sending event via IRQ %d\n", irq );
+       pr_debug( "NOT Sending event via IRQ %d\n", irq );
    }
 }
 
 static struct xenbus_watch evtchn_bound_watch = {
 
-   .node = ROOT_NODE "/" VM_EVT_CHN_BOUND,
-   .callback = vm_port_is_bound
+    .node = VM_EVT_CHN_BOUND_PATH,
+    .callback = vm_port_is_bound
 };
 
 static int initialize_keys(void)
 {
     int rc = 0;
     
-    rc = write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       CLIENT_ID_KEY,
+                       KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
     
-    rc = write_to_key(SERVER_ID_KEY, KEY_RESET_VAL);
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       SERVER_ID_KEY,
+                       KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
     
-    rc = write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       GNT_REF_KEY,
+                       KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
     
-    rc = write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_PORT_KEY,
+                       KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
     
-    rc = write_to_key(VM_EVT_CHN_PATH, KEY_RESET_VAL);
-    if ( rc ) goto ErrorExit;
-    
-    rc = write_to_key(VM_EVT_CHN_BOUND, KEY_RESET_VAL);
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_BOUND_KEY,
+                       KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
 
 ErrorExit:
@@ -970,16 +911,16 @@ mwchar_init(void)
    client_dom_id = 0;
    common_event_channel = 0;
    
-   is_msg_len_watch = 0;
-   is_client_id_watch = 0;
-   is_evtchn_bound_watch = 0;
+   client_id_watch_active = false;
+   evtchn_bound_watch_active = false;
 
+#if MW_DO_PERFORMANCE_METRICS
    start = ktime_set(0,0);;
    end = ktime_set(0,0);;
+#endif // MW_DO_PERFORMANCE_METRICS
+   pr_debug("Initializing\n");
 
-   pr_info("Initializing\n");
-
-#if 1
+#if 0
    struct module * mod = (struct module *) THIS_MODULE;
    // gdb> add-symbol-file char_driver.ko $eax/$rax
    asm( "int $3" // module base in *ax
@@ -1008,53 +949,44 @@ mwchar_init(void)
 
    pr_info("Created process %d to consume messages on the ring buffer\n",
            worker_thread->pid);
-   
-   //pr_info( "Created worker thread PID %d\n", worker_thread->pid );
 
    // Try to dynamically allocate a major number for the device --
    // more difficult but worth it
    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
    if (majorNumber < 0)
    {
-       //printk(KERN_ALERT "MWChar failed to register a major number\n");
-       //return majorNumber;
        err = majorNumber;
+       pr_err( "register_chrdev failed: %d\n", err );
        goto ErrorExit;
    }
-   pr_info("registered correctly with major number %d\n", majorNumber);
 
    // Register the device class
    mwcharClass = class_create(THIS_MODULE, CLASS_NAME);
-   if (IS_ERR(mwcharClass)) {
-       //unregister_chrdev(majorNumber, DEVICE_NAME);
-       //printk(KERN_ALERT "Failed to register mwcharClass device class\n");
-       //return PTR_ERR(mwcharClass);
+   if (IS_ERR(mwcharClass))
+   {
        err = PTR_ERR(mwcharClass);
+       pr_err( "class_create failed: %d\n", err );
        goto ErrorExit;
    }
-   pr_info("device class registered correctly\n");
 
    // Register the device driver
-   mwcharDevice = device_create(mwcharClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
-   if (IS_ERR(mwcharDevice)) {
-       //class_destroy(mwcharClass);
-       //unregister_chrdev(majorNumber, DEVICE_NAME);
-      pr_alert("Failed to create the device\n");
-      //return PTR_ERR(mwcharDevice);
+   mwcharDevice = device_create(mwcharClass,
+                                NULL,
+                                MKDEV(majorNumber, 0),
+                                NULL,
+                                DEVICE_NAME);
+   if (IS_ERR(mwcharDevice))
+   {
       err = PTR_ERR(mwcharDevice);
+      pr_err( "device_create failed: %d\n", err );
       goto ErrorExit;
    }
-
-   pr_info("device class created correctly\n");
 
    // Set all protocol keys to zero
    err = initialize_keys();
    if ( err )
    {
-       pr_alert("Key initialization failed: %d\n", err );
-       //class_destroy(mwcharClass);
-       //unregister_chrdev(majorNumber, DEVICE_NAME);
-       //return err;
+       pr_err("Key initialization failed: %d\n", err );
        goto ErrorExit;
    }
    
@@ -1062,29 +994,30 @@ mwchar_init(void)
    err = write_server_id_to_key();
    if ( err )
    {
-       //class_destroy(mwcharClass);
-       //unregister_chrdev(majorNumber, DEVICE_NAME);
-       //return err;
        goto ErrorExit;
    }
 
    // 2. Watch Client Id XenStore Key
    err = register_xenbus_watch(&client_id_watch);
-   if (err) {
+   if (err)
+   {
       pr_err("Failed to set client id watcher\n");
-   } else {
-      is_client_id_watch = 1;
+   }
+   else
+   {
+      client_id_watch_active = true;
    }
 
    // 3. Watch for our port being bound
    err = register_xenbus_watch(&evtchn_bound_watch);
-   if (err) {
+   if (err)
+   {
       pr_err("Failed to set client local port watcher\n");
-   } else {
-      is_evtchn_bound_watch = 1;
    }
-
-//   mutex_init( &mw_res_mutex );
+   else
+   {
+      evtchn_bound_watch_active = true;
+   }
 
 ErrorExit:
    if ( err )
@@ -1096,15 +1029,18 @@ ErrorExit:
 
 /** @brief The driver cleanup function
  */
-//static void __exit mwchar_exit(void)
 static void mwchar_exit(void)
 {
     thread_conn_map_t * curr = NULL;
     thread_conn_map_t * next = NULL;
 
-    // XXXX: cleaner to assert a global indicating that system is going down
+    pending_exit = true;
+
     if ( NULL != worker_thread )
     {
+        // Kick the thread to make it resume
+        up( &mw_sem );
+        
         kthread_stop( worker_thread );
         worker_thread = NULL;
     }
@@ -1129,7 +1065,7 @@ static void mwchar_exit(void)
    {
        if ( 0 != grant_refs[ i ] )
        {
-           pr_info("Ending access to grant ref 0x%x\n", grant_refs[i]);
+           pr_debug("Ending access to grant ref 0x%x\n", grant_refs[i]);
            gnttab_end_foreign_access_ref( grant_refs[i], 0 );
        }
    }
@@ -1139,20 +1075,17 @@ static void mwchar_exit(void)
        free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
    }
 
-   if (is_client_id_watch) {
+   if (client_id_watch_active)
+   {
       unregister_xenbus_watch(&client_id_watch);
    }
 
-   if (is_evtchn_bound_watch) {
+   if (evtchn_bound_watch_active)
+   {
       unregister_xenbus_watch(&evtchn_bound_watch);
    }
 
    initialize_keys();
-
-   if (is_msg_len_watch)
-   {
-      unregister_xenbus_watch(&msg_len_watch);
-   }
 
    if (irq)
    {
@@ -1165,16 +1098,18 @@ static void mwchar_exit(void)
    }
 
    mutex_destroy( &mw_req_mutex );
-//   mutex_destroy( &mw_res_mutex );
+
+   // Destroy all the remaining mappings. Lock the list.
+   down_write( &thread_conn_lock );
 
    list_for_each_entry_safe( curr, next, &thread_conn_head, list )
    {
-       pr_warning( "Removing mapping for PID %d (message ID 0x%llx)\n",
-                   curr->pid, curr->message_id );
        destroy_thread_conn_map( &curr );
    }
 
-   pr_info("cleanup is complete\n");
+   up_write( &thread_conn_lock );
+
+   pr_debug("cleanup is complete\n");
 }
 
 /** @brief The device open function that is called each time the device is opened
@@ -1186,7 +1121,7 @@ static int
 dev_open(struct inode *inodep, struct file *filep)
 {
    numberOpens++;
-   pr_info("Device has been opened %d time(s)\n", numberOpens);
+   pr_debug("Device has been opened %d time(s)\n", numberOpens);
    return 0;
 }
 
@@ -1204,18 +1139,29 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    int rc = 0; 
    thread_conn_map_t * connmap = NULL;
 
-   connmap = get_thread_conn_map_by_pid( current->pid );
+   pr_debug( "Attempting to read from device\n" );
+   
+   connmap = get_thread_conn_map_by_task( current, false );
    if ( NULL == connmap )
    {
        pr_crit( "read() called from thread that hasn't issued write()\n" );
        rc = -EPERM;
        goto ErrorExit;
    }
+
+   pr_debug( "Waiting for data to arrive\n" );
    
    // Now we have the mapping for this thread. Wait for data to
    // arrive. This may block the calling process.
-   mutex_lock( &connmap->data_pending );
+   down_interruptible( &connmap->data_pending );
 
+   if ( pending_exit )
+   {
+       pr_err( "Driver is unloading\n" );
+       rc = -EINTR;
+       goto ErrorExit;
+   }
+   
    // An item is available and is in connmap. Process it.
 
    if ( len < connmap->response.base.size )
@@ -1244,9 +1190,8 @@ ErrorExit:
    return rc;
 }
 
-/** @brief This function is called whenever the device is being written to from user space i.e.
- *  data is sent to the device from the user. The data is copied to the message[] array in this
- *  LKM using the sprintf() function along with the length of the string.
+/** @brief Writes a request to the shared ring buffer.
+ *
  *  @param filep A pointer to a file object
  *  @param buffer The buffer to that contains the string to write to the device
  *  @param len The length of the array of data that is being passed in the const char buffer
@@ -1255,28 +1200,12 @@ ErrorExit:
 static ssize_t 
 dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
-    /*
-      sprintf(message, "%s(%u letters)", buffer, (unsigned int)len);   // appending received string with its length
-      size_of_message = strlen(message);                 // store the length of the stored message
-      pr_info("Received %u characters from the user\n", (unsigned int)len);
-
-      send_request(message, size_of_message); 
-      //send_evt(common_event_channel);
-      */
     int rc = 0;
-    int effective_number; 
-    mt_request_generic_t *req;
+    mt_request_generic_t *req = (mt_request_generic_t *)buffer;
 
-    req = (mt_request_generic_t *)buffer;
-   
-    //pr_info("Sending %lu bytes through send_request()\n", sizeof(*req));
-    if ( req->base.size > len )
-    {
-        pr_alert( "Received request that's larger than length passed in!\n" );
-        rc = -EINVAL;
-        goto ErrorExit;
-    }
-   
+#if MW_DO_PERFORMANCE_METRICS
+
+    int effective_number; 
     if (ktime_to_ns(start) == 0)
     {
         start = ktime_get();
@@ -1286,10 +1215,18 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
         end = ktime_get();
         actual_time = ktime_to_ns(ktime_sub(end, start));
         effective_number = (irqs_handled + 1)/2;
-        pr_info("%d     %lld\n", effective_number, actual_time);
+        pr_debug("%d     %lld\n", effective_number, actual_time);
         start = ktime_set(0,0);
     }
-   
+#endif // MW_DO_PERFORMANCE_METRICS
+
+    if ( req->base.size > len )
+    {
+        pr_alert( "Received request that's larger than length passed in!\n" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
     //send_request(req, sizeof(*req));
     rc = send_request( req, req->base.size );
     if ( rc )
@@ -1315,19 +1252,39 @@ ErrorExit:
     return rc;
 }
 
-/** @brief The device release function that is called whenever the device is closed/released by
- *  the userspace program
+/** @brief Handle close() request.
+ *
  *  @param inodep A pointer to an inode object (defined in linux/fs.h)
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
-static int dev_release(struct inode *inodep, struct file *filep){
-   pr_info("Device successfully closed\n");
-   return 0;
+static int dev_release(struct inode *inodep, struct file *filep)
+{
+    thread_conn_map_t * currtc = NULL;
+    thread_conn_map_t * nexttc = NULL;
+    
+    // Release all the mappings associated with current's thread
+    // group.
+    
+    down_write( &thread_conn_lock );
+
+    list_for_each_entry_safe( currtc, nexttc, &thread_conn_head, list )
+    {
+        if ( currtc->tgid == current->tgid )
+        {
+            destroy_thread_conn_map( &currtc );
+        }
+    }
+
+    up_write( &thread_conn_lock );
+
+    pr_debug("Device successfully closed\n");
+
+    return 0;
 }
 
-/** @brief A module must use the module_init() module_exit() macros from linux/init.h, which
- *  identify the initialization function at insertion time and the cleanup function (as
- *  listed above)
+/** @brief A module must use the module_init() module_exit() macros
+ *  from linux/init.h, which identify the initialization function at
+ *  insertion time and the cleanup function (as listed above)
  */
 module_init(mwchar_init);
 module_exit(mwchar_exit);
