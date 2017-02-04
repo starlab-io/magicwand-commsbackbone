@@ -4,7 +4,10 @@
 *.ko
 *.mod.[co]
 *modules.order
-mw_setaddrs.sh
 *.bin
 *.run
 *.swp
+mw_setaddrs.sh
+run_tcp_ip_app.sh
+debug.sh
+run.sh

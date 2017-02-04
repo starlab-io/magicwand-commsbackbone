@@ -92,7 +92,7 @@ typedef uint32_t mt_addrlen_t;
 
 typedef uint16_t mt_port_t;
 
-// maps to errno; 0 == success; must be signed
+// maps to -errno; non-negative value typically means success; must be signed
 typedef int64_t mt_status_t;
 
 #define CRITICAL_ERROR(x) (0xc0000000 | (x))
@@ -322,8 +322,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recvfrom
     uint8_t                 bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 } mt_response_socket_recvfrom_t;
 
-#define MT_RESPONSE_SOCKET_RECVFROM_SIZE ( sizeof( mt_response_base_t ) \
-        + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
+#define MT_RESPONSE_SOCKET_RECVFROM_SIZE                        \
+    ( sizeof( mt_response_base_t )                              \
+      + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
 
 
 //

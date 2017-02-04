@@ -7,8 +7,8 @@ CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99
 CFLAGS += -I.. -I../../../common
 CFLAGS += -ggdb
-#CFLAGS += -DMYDEBUG
-#CFLAGS += -DMYTRAP
+CFLAGS += -DMYDEBUG
+CFLAGS += -DMYTRAP
 
 LD = ld
 LDFLAGS = -ggdb -shared

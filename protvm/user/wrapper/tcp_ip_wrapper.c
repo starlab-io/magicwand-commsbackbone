@@ -123,7 +123,7 @@ fini_open_sockets( void )
 static int
 insert_open_socket( mw_socket_fd_t NewSock )
 {
-    int rc = 0;
+    ssize_t rc = 0;
 
     for( int i = 0; i < MAX_SOCKETS; ++i )
     {
@@ -301,6 +301,7 @@ socket( int domain,
 {
    mt_request_generic_t  request;
    mt_response_generic_t response;
+   ssize_t rc = 0;
    
    // XXXX: args ignored
    build_create_socket( &request );
@@ -310,8 +311,10 @@ socket( int domain,
    //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request)); 
-   read( devfd, &response, sizeof(response));
+   rc = write( devfd, &request, sizeof(request));
+   MYASSERT( rc > 0 );
+   rc = read( devfd, &response, sizeof(response));
+   MYASSERT( rc > 0 );
 #endif
 
    //DEBUG_PRINT("Create-socket response returned\n");
@@ -342,9 +345,10 @@ socket( int domain,
 int
 close( int SockFd )
 {
-   mt_request_generic_t  request;
-   mt_response_generic_t response;
-
+    mt_request_generic_t  request;
+    mt_response_generic_t response;
+    ssize_t rc = 0;
+    
     if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
        return libc_close( SockFd );
@@ -358,11 +362,14 @@ close( int SockFd )
     //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request)); 
-    read( devfd, &response, sizeof(response));
+    rc = write( devfd, &request, sizeof(request));
+    MYASSERT( rc > 0 );
+    rc = read( devfd, &response, sizeof(response));
+    MYASSERT( rc > 0 );
 #endif
 
-    //DEBUG_PRINT("Close-socket response returned\n");
+    //DEBUG_PRINT("Close-socket response returned %d\n",
+    //(int)response.base.status );
     //DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
     //DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
 
@@ -389,7 +396,8 @@ bind( int SockFd,
     mt_request_generic_t request;
     mt_response_generic_t response;
     struct sockaddr_in * sockaddr_in;
-
+    ssize_t rc = 0;
+    
     if ( !MW_SOCKET_IS_FD(SockFd) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
@@ -409,8 +417,10 @@ bind( int SockFd,
     build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
 
 #ifndef NODEVICE    
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    rc = write( devfd, &request, sizeof(request) );
+    MYASSERT( rc > 0 );
+    rc = read( devfd, &response, sizeof(response) );
+    MYASSERT( rc > 0 );
 #endif
 
     return response.base.status;
@@ -422,7 +432,8 @@ listen( int SockFd, int backlog )
 {
     mt_request_generic_t request;
     mt_response_generic_t response;
-
+    ssize_t rc = 0;
+    
     if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
@@ -433,8 +444,10 @@ listen( int SockFd, int backlog )
     build_listen_socket( &request, SockFd, &backlog);
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    rc = write( devfd, &request, sizeof(request) );
+    MYASSERT( rc > 0 );
+    rc = read( devfd, &response, sizeof(response) );
+    MYASSERT( rc > 0 );
 #endif
 
     if ( response.base.status < 0 )
@@ -453,7 +466,8 @@ accept( int SockFd,
 {
     mt_request_generic_t request;
     mt_response_generic_t response;
-
+    ssize_t rc = 0;
+    
     if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid");
@@ -466,8 +480,10 @@ accept( int SockFd,
                           &response.socket_accept.sockaddr);
     
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    rc = write( devfd, &request, sizeof(request) );
+    MYASSERT( rc > 0 );
+    rc = read( devfd, &response, sizeof(response) );
+    MYASSERT( rc > 0 );
 #endif
 
     if ( response.base.status < 0 )
@@ -538,8 +554,10 @@ recvfrom( int    SockFd,
     build_recv_socket( SockFd, Len, Flags, SrcAddr, AddrLen, &request );
 
 #ifndef NODEVICE
-    write( devfd, &request, sizeof(request) );
-    read( devfd, &response, sizeof(response) );
+    rc = write( devfd, &request, sizeof(request) );
+    MYASSERT( rc > 0 );
+    rc = read( devfd, &response, sizeof(response) );
+    MYASSERT( rc > 0 );
 #endif
     
     rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
@@ -589,7 +607,8 @@ connect( int SockFd,
 {
    mt_request_generic_t request;
    mt_response_generic_t response;
-
+   ssize_t rc = 0;
+   
    if ( !MW_SOCKET_IS_FD( SockFd ) )
    {
        DEBUG_PRINT("Socket file discriptor value invalid\n");
@@ -603,15 +622,18 @@ connect( int SockFd,
    DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request)); 
-   read( devfd, &response, sizeof(response));
+   rc = write( devfd, &request, sizeof(request));
+   MYASSERT( rc > 0 );
+   rc = read( devfd, &response, sizeof(response));
+   MYASSERT( rc > 0 );
 #endif
 
-   DEBUG_PRINT("Connect-socket response returned\n");
+   DEBUG_PRINT("Connect-socket response returned %d\n",
+               (int) response.base.status );
    DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
    DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
 
-   if ( response.base.status < 0 )
+   if ( (int)response.base.status < 0 )
    {
        DEBUG_PRINT( "\t\tError connecting. Error Number: %d\n",
                (int)response.base.status );
@@ -630,7 +652,8 @@ send( int         SockFd,
 {
    mt_request_generic_t request;
    mt_response_socket_send_t response;
-
+   ssize_t rc = 0;
+   
    if ( !MW_SOCKET_IS_FD( SockFd ) )
    {
        DEBUG_PRINT( "send() received invalid FD 0x%x\n", SockFd );
@@ -645,15 +668,18 @@ send( int         SockFd,
    DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   write( devfd, &request, sizeof(request) ); 
-   read( devfd, &response, sizeof(response) );
+   rc = write( devfd, &request, sizeof(request) ); 
+   MYASSERT( rc > 0 );
+   rc = read( devfd, &response, sizeof(response) );
+   MYASSERT( rc > 0 );
 #endif
 
-   DEBUG_PRINT("Write-socket response returned\n");
+   DEBUG_PRINT("Write-socket response returned %d\n",
+               (int)response.base.status );
    DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
    DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
    
-   if ( response.base.status < 0 )
+   if ( (int)response.base.status < 0 )
    {
        errno = -response.base.status;
    }
@@ -668,7 +694,10 @@ _init( void )
 #ifdef NODEVICE
     devfd = open("/dev/null", O_RDWR);
 #else
-    devfd = open( DEV_FILE, O_RDWR);
+    if ( devfd < 0 )
+    {
+        devfd = open( DEV_FILE, O_RDWR);
+    }
 #endif
 
     if (devfd < 0)

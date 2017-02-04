@@ -30,14 +30,21 @@
 #include "message_types.h" // real program should not use this!!
 
 
-// XXXX: get these from environment
-//#define REMOTE_IP   "10.15.32.101"
-#define REMOTE_IP   "192.168.0.9"
-#define REMOTE_PORT 21845
-
 #define THREAD_COUNT    15
 #define OPEN_CLOSE_CNT  4 
 #define MESSAGE_COUNT   5
+
+// These are provided by the environment
+static char              *server_ip   = NULL;
+static int                server_port_num = 0;
+
+
+int count = 0;
+int get_counter()
+{
+    return __sync_fetch_and_add( &count, 1 );
+}
+
 
 static void *
 thread_open_write_close( void * Ignored )
@@ -46,9 +53,10 @@ thread_open_write_close( void * Ignored )
     struct sockaddr_in server = {0};
     char               msg[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 
-    server.sin_addr.s_addr = inet_addr( REMOTE_IP );
+
+    server.sin_addr.s_addr = inet_addr( server_ip );
     server.sin_family      = AF_INET;
-    server.sin_port        = htons( REMOTE_PORT );
+    server.sin_port        = htons( server_port_num );
 
     for ( int i = 0; i < OPEN_CLOSE_CNT; i++ )
     {
@@ -104,10 +112,8 @@ thread_write( void * SockFd )
     for ( int i = 0; i < MESSAGE_COUNT; i++ )
     {
         snprintf( msg, sizeof(msg),
-                  "Hello from thread %lx message %d\n",
-                  pthread_self(), i );
-
-        //printf( "Sending message: %s\n", msg );
+                  "Hello from thread %lx message %d #%x\n",
+                  pthread_self(), i, get_counter() );
 
         if ( send( fd, msg, strlen(msg) + 1, 0 ) < 0 )
         {
@@ -119,6 +125,50 @@ ErrorExit:
     return NULL;
 }
 
+
+void *
+thread_write_echo( void * SockFd )
+{
+    int fd = *(int *)SockFd;
+    char sendmsg[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
+    char recvmsg[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
+
+    //printf( "Hello from thread %lx PID %d\n",
+    //pthread_self(), getpid() );
+    
+    for ( int i = 0; i < MESSAGE_COUNT; i++ )
+    {
+        snprintf( sendmsg, sizeof(sendmsg),
+                  "Hello from thread %lx message %d #%x\n",
+                  pthread_self(), i, get_counter() );
+
+        //printf( "Sending message: %s\n", msg );
+
+        if ( send( fd, sendmsg, strlen(sendmsg) + 1, 0 ) < 0 )
+        {
+            printf( "send failed: %d\n", errno );
+            goto ErrorExit;
+        }
+
+        if ( recv( fd, recvmsg, sizeof(recvmsg), 0 ) < 0 )
+        {
+            printf( "recv failed: %d\n", errno );
+            goto ErrorExit;
+        }
+
+        if ( 0 != strcmp( sendmsg, recvmsg ) )
+        {
+            printf( "Mismatch: %s AND %s\n", sendmsg, recvmsg );
+            goto ErrorExit;
+        }
+    }
+    
+ErrorExit:
+    return NULL;
+}
+
+
+
 int
 run_writer_threads()
 {
@@ -128,9 +178,9 @@ run_writer_threads()
     pthread_t threads[ THREAD_COUNT ];
     int i = 0;
 
-    server.sin_addr.s_addr = inet_addr( REMOTE_IP );
+    server.sin_addr.s_addr = inet_addr( server_ip );
     server.sin_family      = AF_INET;
-    server.sin_port        = htons( REMOTE_PORT );
+    server.sin_port        = htons( server_port_num );
 
     fd = socket( AF_INET, SOCK_STREAM, 0 );
     if ( fd < 0 )
@@ -150,6 +200,7 @@ run_writer_threads()
     for( i = 0; i < THREAD_COUNT; ++i )
     {
         if ( pthread_create( &threads[i], NULL, thread_write, &fd ) )
+//        if ( pthread_create( &threads[i], NULL, thread_write_echo, &fd ) )
         {
             exit( 1 );
         }
@@ -163,9 +214,6 @@ run_writer_threads()
 ErrorExit:
     return rc;
 }
-
-
-
 
 
 void *
@@ -199,6 +247,7 @@ ErrorExit:
     return NULL;
 }
 
+
 void *
 thread_func_2( void *data )
 {
@@ -207,7 +256,6 @@ thread_func_2( void *data )
 
     for(cnt = 0;cnt < OPEN_CLOSE_CNT; ++cnt)
     {
-
         printf("Thread number %ld\n", pthread_self());
         // 1> Call Socket
         socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
@@ -257,8 +305,39 @@ run_open_write_close_threads()
 
 int main(int argc , char *argv[])
 {
+    int err = 0;
+    char * server_port = NULL;
+
+    // Get the remote IP and port from the commmand line if provided;
+    // otherwise get from the environment
+    if ( argc == 3 )
+    {
+        server_ip = argv[1];
+        server_port_num = atoi( argv[2] );
+    }
+    else
+    {
+        server_ip = getenv( "SERVER_IP" );
+        if ( !server_ip )
+        {
+            printf( "SERVER_IP env var must be set to the server's IP\n" );
+            err = 1;
+            goto ErrorExit;
+        }
+        server_port = getenv( "SERVER_PORT" );
+        if ( !server_port )
+        {
+            printf( "SERVER_PORT env var must be set to the server's port\n" );
+            err = 1;
+            goto ErrorExit;
+        }
+        server_port_num = atoi( server_port );
+    }
+    printf( "Server is %s:%d\n", server_ip, server_port_num );
+        
     run_writer_threads();
     // run_open_write_close_threads();
 
-    return 0;
+ErrorExit:
+    return err;
 }
