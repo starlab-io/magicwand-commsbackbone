@@ -29,7 +29,6 @@
 
 #include "message_types.h" // real program should not use this!!
 
-
 #define THREAD_COUNT    15
 #define OPEN_CLOSE_CNT  4 
 #define MESSAGE_COUNT   5
@@ -71,7 +70,7 @@ thread_open_write_close( void * Ignored )
 
         if ( connect( fd, (struct sockaddr *) &server, sizeof(server) ) )
         {
-            printf( "socket failed: %d\n", errno );
+            printf( "connect failed: %d\n", errno );
             goto ErrorExit;
         }
 
@@ -210,6 +209,8 @@ run_writer_threads()
     {
         pthread_join( threads[ i ], NULL );
     }
+
+    // Do not call close - test the wrapper
 
 ErrorExit:
     return rc;

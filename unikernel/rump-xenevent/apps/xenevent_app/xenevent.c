@@ -554,6 +554,9 @@ process_buffer_item( buffer_item_t * BufferItem )
         }
     }
 
+    DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
+                 response.base.id, response.base.size );
+
     size_t written = write( g_state.output_fd,
                             &response,
                             sizeof(response) );

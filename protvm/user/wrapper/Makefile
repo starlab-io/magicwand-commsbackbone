@@ -7,8 +7,8 @@ CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99
 CFLAGS += -I.. -I../../../common
 CFLAGS += -ggdb
-CFLAGS += -DMYDEBUG
-CFLAGS += -DMYTRAP
+#CFLAGS += -DMYDEBUG
+#CFLAGS += -DMYTRAP
 
 LD = ld
 LDFLAGS = -ggdb -shared
@@ -25,7 +25,6 @@ list: $(LIST_SRCS)
 
 $(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_NAME).c
 	$(CC) $(CFLAGS) -c $^ -o $@
-	#$(CC) $(CFLAGS) -o $@ $?
 
 $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ)
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl

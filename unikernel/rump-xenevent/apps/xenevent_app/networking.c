@@ -45,7 +45,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                       OUT thread_item_t               * WorkerThread )
 {
     int sockfd = 0;
-
+    mw_socket_fd_t extsock = 0;
+    
     int native_fam  = xe_net_get_native_protocol_family( Request->sock_fam );
     int native_type = xe_net_get_native_sock_type( Request->sock_type );
     int native_proto = Request->sock_protocol;
@@ -65,14 +66,14 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     sockfd = socket( native_fam,
                      native_type,
                      native_proto );
-
     if ( sockfd < 0 )
     {
         Response->base.status = -errno;
     }
     else
     {
-        Response->base.status = MW_SOCKET_CREATE( client_id, sockfd );
+        //Response->base.status = MW_SOCKET_CREATE( client_id, sockfd );
+        extsock = MW_SOCKET_CREATE( client_id, sockfd );
     }
 
     // Set up Response; clobbers base.sockfd
@@ -83,13 +84,13 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     // Set up BufferItem->assigned_thread for future reference during
     // this session
 
-    Response->base.sockfd        = Response->base.status;
-    WorkerThread->sock_fd        = Response->base.status;
+    Response->base.sockfd        = extsock;
+    WorkerThread->sock_fd        = extsock;
     WorkerThread->native_sock_fd = sockfd;
     WorkerThread->sock_domain    = native_fam;
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
-    
+
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->sock_fd, sockfd );
     return 0;
