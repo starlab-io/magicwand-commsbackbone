@@ -107,6 +107,8 @@ typedef struct _thread_conn_map {
     pid_t tgid; // thread group
     struct task_struct * task;
 
+    bool awaiting_read;
+    
     // Worker thread writes the response here upone receipt, then
     // releases data_pending
     mt_response_generic_t response;
@@ -225,18 +227,20 @@ get_thread_conn_map_by_task( struct task_struct * task,
         goto ErrorExit;
     }
     
-    // XXXX: use SLAB instead ?
+    // XXXX: use SLAB instead
     curr = kmalloc( sizeof(thread_conn_map_t),
                     GFP_KERNEL | __GFP_ZERO );
     if ( NULL == curr )
     {
-        pr_crit( "kmalloc failed\n" );
+        pr_err( "kmalloc failed\n" );
         goto ErrorExit;
     }
 
     curr->pid  = task->pid;
     curr->tgid = task->tgid;
     curr->task = task;
+
+    curr->awaiting_read = false;
     
     sema_init( &curr->data_pending, 0 );
 
@@ -553,8 +557,17 @@ consume_response_worker( void * Data )
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
-        pr_debug( "Response ID %lx on ring at idx %d\n",
+        if ( !MT_IS_RESPONSE( response ) )
+        {
+            // Fatal: The ring is corrupted.
+            pr_crit( "Received data that is not a response\n" );
+            rc = -EIO;
+            goto ErrorExit;
+        }
+
+        pr_debug( "Response ID %lx size %x on ring at idx %d\n",
                   (unsigned long)response->base.id,
+                  response->base.size,
                   front_ring.rsp_cons );
 
         // Hereafter: Advance index as soon as we're done with the
@@ -565,26 +578,21 @@ consume_response_worker( void * Data )
         {
             // This can happen if the process dies between issuing a
             // request and receiving the response.
-            pr_crit( "Received response for unknown request. "
+            pr_err( "Received response for unknown request. "
                      "Did the process die?\n" );
             ++front_ring.rsp_cons;
             continue;
         }
         
         // Compare size of response to permitted size.
-        if (response->base.size > sizeof( conn->response ) )
+        if ( response->base.size > sizeof( conn->response ) )
         {
-            pr_crit( "Received response that is too big\n" );
+            pr_err( "Received response that is too big\n" );
             // Reduce the size that we send to user and fall through
             response->base.size = sizeof( conn->response );
         }
 
-        if ( response->base.size < sizeof(mt_response_base_t) )
-        {
-            pr_crit( "Received response that is too small\n" );
-        }
-        
-        // Put the reponse into the map struct
+        // Put the response into the connection map struct
         memcpy( &conn->response, response, response->base.size );
         ++front_ring.rsp_cons;
 
@@ -596,14 +604,13 @@ ErrorExit:
 }
 
 static int
-send_request(mt_request_generic_t * Request, size_t Size)
+send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
 {
     int rc = 0;
     void * dest = NULL;
     thread_conn_map_t * connmap = NULL;
     mt_id_t id = get_next_id();
-
-    Request->base.id = id;
+    
     pr_debug( "Attempting to send request %lx\n", (unsigned long)id );
 
     // Hold the lock for the duration of this function. All of these
@@ -614,6 +621,29 @@ send_request(mt_request_generic_t * Request, size_t Size)
     // * Flush our private indices to the shared ring
 
     mutex_lock(&mw_req_mutex);
+
+    // Now get this task's mapping to associate the message with the 
+    connmap = get_thread_conn_map_by_task( current, true );
+    if ( NULL == connmap )
+    {
+        rc = -ENOMEM;
+        goto ErrorExit;
+    }
+
+    // The semaphore 'data_pending' starts off locked. read_request()
+    // attempts to acquire it and blocks until the worker thread
+    // releases it upon receipt of a response.
+
+    // Map this process' connection map to this message ID
+    connmap->message_id = id;
+
+    // If we are awaiting a read, then we cannot write!
+    if ( connmap->awaiting_read )
+    {
+        pr_err( "Caller already called write() and must call read() next\n" );
+        rc = -EPERM;
+        goto ErrorExit;
+    }
 
     if ( RING_FULL(&front_ring) )
     {
@@ -632,24 +662,30 @@ send_request(mt_request_generic_t * Request, size_t Size)
 
     pr_debug( "Sending request %lx to idx %x\n",
               (long int) id, front_ring.req_prod_pvt );
-    
-    memcpy( dest, Request, Size );
 
-    // Now get this task's mapping to associate the message with the 
-    connmap = get_thread_conn_map_by_task( current, true );
-    if ( NULL == connmap )
+    // Copy only the request's claimed size into the ring buffer
+    rc = copy_from_user( dest, Request, RequestSize );
+    if ( rc )
     {
-        rc = -ENOMEM;
+        pr_err( "copy_from_user failed: %d\n", rc );
+        rc = -EFAULT;
         goto ErrorExit;
     }
 
-    // The semaphore 'data_pending' starts off locked. read_request()
-    // attempts to acquire it and blocks until the worker thread
-    // releases it upon receipt of a response.
+    // Update the ID in the ring buffer
+    ((mt_request_generic_t *)dest)->base.id = id;
 
-    // Map this process' connection map to this message ID
-    connmap->message_id = id;
-
+    // Validate the request in the ring buffer ...
+    if ( !MT_IS_REQUEST( (mt_request_generic_t *)dest ) )
+    {
+        pr_err( "Invalid request given\n" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+    
+    // We've written to the ring; now we are awaiting a response
+    connmap->awaiting_read = true;
+    
     // Update the ring buffer only *after* the mapping is in place!
     ++front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &front_ring );
@@ -657,13 +693,13 @@ send_request(mt_request_generic_t * Request, size_t Size)
     pr_debug("front_ring.req_prod_pvt: %x\n", front_ring.req_prod_pvt);
     
 ErrorExit:
+#if 0 // Rump is polling and not using the event channel
     if ( 0 == rc )
     {
-
         // Inform remote side, only if everything went right
         send_evt( common_event_channel );
     }
-
+#endif
     mutex_unlock(&mw_req_mutex);
 
     return rc;
@@ -956,7 +992,7 @@ mwchar_init(void)
                                 "MwMsgConsumer" );
    if ( NULL == worker_thread )
    {
-       pr_crit( "kthread_run() failed\n" );
+       pr_err( "kthread_run() failed\n" );
        err = -ESRCH;
        goto ErrorExit;
    }
@@ -1152,11 +1188,12 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
 {
    int rc = 0; 
    thread_conn_map_t * connmap = NULL;
-
+   mt_size_t resp_size = 0;
+   
    connmap = get_thread_conn_map_by_task( current, false );
    if ( NULL == connmap )
    {
-       pr_crit( "read() called from thread that hasn't issued write()\n" );
+       pr_err( "read() called from thread that hasn't issued write()\n" );
        rc = -EPERM;
        goto ErrorExit;
    }
@@ -1166,10 +1203,29 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    
    // Now we have the mapping for this thread. Wait for data to
    // arrive. This may block the calling process.
-   SEM_DOWN( &connmap->data_pending );
 
-   pr_debug( "Response %lx has arrived\n",
-             (unsigned long) connmap->message_id );
+   if ( down_interruptible( &connmap->data_pending ) )
+   {
+       // Signal encountered, semaphore not acquired. The caller must try again.
+       pr_err( "read() was interrupted\n" );
+       rc = -EINTR;
+       goto ErrorExit;
+   }
+
+   if ( !connmap->awaiting_read )
+   {
+       pr_err( "Caller hasn't called write() prior to this read()\n" );
+       rc = -EPERM;
+       goto ErrorExit;
+   }
+
+   connmap->awaiting_read = false;
+   
+   resp_size = connmap->response.base.size;
+
+   pr_debug( "Response %lx (size %x) has arrived\n",
+             (unsigned long) connmap->message_id,
+             resp_size );
 
    if ( pending_exit )
    {
@@ -1179,10 +1235,9 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    }
    
    // An item is available and is in connmap. Process it.
-
-   if ( len < connmap->response.base.size )
+   if ( len < resp_size )
    {
-       pr_crit( "User buffer too small for response.\n" );
+       pr_err( "User buffer too small for response.\n" );
        rc = -EINVAL;
        goto ErrorExit;
    }
@@ -1190,17 +1245,16 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    // Data has been received. Write it to the user buffer.
    rc = copy_to_user( buffer,
                       &connmap->response,
-                      connmap->response.base.size );
+                      resp_size );
    if ( rc )
    {
-       // Some bytes could not be copied
-       pr_crit( "copy_to_user() failed\n" );
-       rc = -EIO;
+       pr_err( "copy_to_user() failed: %d\n", rc );
+       rc = -EFAULT;
        goto ErrorExit;
    }
 
    // Success
-   rc = connmap->response.base.size;
+   rc = resp_size;
 
 ErrorExit:
    pr_debug( "Returning %d\n", rc );
@@ -1219,10 +1273,10 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
     int rc = 0;
     mt_request_generic_t *req = (mt_request_generic_t *)buffer;
-
+    mt_size_t req_size = 0;
+    
 #if MW_DO_PERFORMANCE_METRICS
-
-    int effective_number; 
+    int effective_number;
     if (ktime_to_ns(start) == 0)
     {
         start = ktime_get();
@@ -1237,33 +1291,43 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
     }
 #endif // MW_DO_PERFORMANCE_METRICS
 
-    if ( req->base.size > len )
+    rc = get_user( req_size, &req->base.size );
+    if ( rc )
     {
-        pr_alert( "Received request that's larger than length passed in!\n" );
+        pr_err( "get_user failed: %d\n", rc );
+        rc = -EFAULT;
+        goto ErrorExit;
+    }
+    
+    if ( req_size > len || 0 == req_size )
+    {
+        pr_err( "Received request with invalid size\n" );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
-    rc = send_request( req, req->base.size );
+    rc = send_request( req, req_size );
     if ( rc )
     {
         goto ErrorExit;
     }
 
     // Success
-    rc = req->base.size;
+    rc = req_size;
 
-    //end = ktime_get();
+#if MW_DO_PERFORMANCE_METRICS
+    end = ktime_get();
 
-    //actual_time = ktime_to_ns(ktime_sub(end, start));
-    //pr_info("Time taken for send_request() execution (ns): %lld\n",
-    //actual_time);
+    actual_time = ktime_to_ns(ktime_sub(end, start));
+    pr_info("Time taken for send_request() execution (ns): %lld\n",
+            actual_time);
 
-    //actual_time = ktime_to_ms(ktime_sub(end, start));
+    actual_time = ktime_to_ms(ktime_sub(end, start));
 
-    //pr_info("Time taken for send_request() execution (ms): %lld\n",
-    //actual_time);
-
+    pr_info("Time taken for send_request() execution (ms): %lld\n",
+            actual_time);
+#endif // MW_DO_PERFORMANCE_METRICS
+    
 ErrorExit:
     return rc;
 }

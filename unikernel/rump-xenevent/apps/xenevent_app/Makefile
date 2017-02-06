@@ -12,7 +12,7 @@ CFLAGS += -I../../../../common
 CFLAGS += -I../platform/xen/xen/include 
 
 #CFLAGS+= -DMYDEBUG
-CFLAGS+= -DMYTRAP
+#CFLAGS+= -DMYTRAP
 #CFLAGS+= -DNODEVICE
 
 BAKE=rumprun-bake

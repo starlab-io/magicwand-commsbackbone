@@ -410,13 +410,14 @@ typedef union _mt_request_generic
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
 #define MT_REQUEST_GET_TYPE(rq) ((rq)->base.type)
 #define MT_IS_REQUEST(x)                                                \
-    ((MT_SIGNATURE_REQUEST == (x)->base.sig) &&                         \
-     (0 == (MT_RESPONSE_MASK & (x)->base.type)))
+    ( (MT_SIGNATURE_REQUEST == (x)->base.sig) &&                        \
+      (0 == (MT_RESPONSE_MASK & (x)->base.type)) &&                     \
+      ((x)->base.size >= sizeof(mt_request_base_t)) )
 
 
 typedef union _mt_response_generic
 {
-    mt_response_base_t           base;
+    mt_response_base_t              base;
     mt_response_socket_create_t     socket_create;
     mt_response_socket_connect_t    socket_connect;
     mt_response_socket_close_t      socket_close;
@@ -434,7 +435,7 @@ typedef union _mt_response_generic
 
 #define MT_IS_RESPONSE(x)                                               \
     ((MT_SIGNATURE_RESPONSE == (x)->base.sig) &&                        \
-     (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)))
-
+     (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)) &&       \
+     ((x)->base.size >= sizeof(mt_response_base_t)) )
 
 #endif // message_types_h
