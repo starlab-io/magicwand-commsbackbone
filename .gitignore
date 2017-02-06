@@ -12,3 +12,5 @@ mw_setaddrs.sh
 run_tcp_ip_app.sh
 debug.sh
 run.sh
+cscope.out
+tags

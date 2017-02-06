@@ -455,10 +455,10 @@ listen( int SockFd, int backlog )
 
 #ifndef NODEVICE
 
-    libc_write( devfd, &request, sizeof(request) );
+    rc = libc_write( devfd, &request, sizeof(request) );
     MYASSERT( rc > 0 );
 
-    libc_read( devfd, &response, sizeof(response) );
+    rc = libc_read( devfd, &response, sizeof(response) );
     MYASSERT( rc > 0 );
 
 #endif
@@ -522,7 +522,7 @@ build_recv_socket( mt_request_generic_t * Request,
 {
    mt_request_socket_recv_t * recieve = &(Request->socket_recv);
 
-    bzero( Request, sizeof(*Request) );
+    bzero( Request, sizeof( *Request ) );
     
     recieve->base.sig  = MT_SIGNATURE_REQUEST;
     recieve->base.id = MT_ID_UNSET_VALUE;
@@ -558,6 +558,9 @@ recvfrom( int    SockFd,
 {
     mt_request_generic_t request;
     mt_response_generic_t response;
+    
+    bzero( &response, sizeof(response) );
+
     ssize_t rc = 0;
 
     if ( !MW_SOCKET_IS_FD(SockFd) )
