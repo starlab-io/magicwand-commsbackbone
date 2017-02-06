@@ -323,18 +323,16 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
                            Request->flags,
                            ( struct sockaddr * ) &src_addr,
                            &addrlen );
-   
 
-    if( Response->base.status < 0 )
+    if( bytes_read < 0 )
     {
         Response->base.status = -errno;
         bytes_read = 0;
-
-    }else{
-
+    }
+    else
+    {
         Response->base.status = bytes_read;
     }
-
     
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
@@ -343,7 +341,6 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     xe_net_set_base_response( ( mt_request_generic_t * ) Request,
                               MT_RESPONSE_SOCKET_RECVFROM_SIZE + bytes_read,
                               ( mt_response_generic_t * ) Response );
-
     return 0;
 }
 

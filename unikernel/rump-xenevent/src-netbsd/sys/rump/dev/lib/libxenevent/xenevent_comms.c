@@ -275,10 +275,6 @@ send_event(evtchn_port_t port)
 
     int  err;
 
-    //minios_mask_evtchn( port );
-    //minios_clear_evtchn( port );
-    //minios_unmask_evtchn( port );
-
     DEBUG_PRINT( "Sending event to (local) port %d\n", port );
     err = minios_notify_remote_via_evtchn( port );
 
@@ -325,9 +321,6 @@ xe_comms_read_item( void * Memory,
 
     *BytesRead = 0;
     
-    //DEBUG_PRINT( "Sending event on port %d\n", g_state.local_event_port );
-    //send_event( g_state.local_event_port );
-
     do
     {
         available = RING_HAS_UNCONSUMED_REQUESTS( &g_state.back_ring );

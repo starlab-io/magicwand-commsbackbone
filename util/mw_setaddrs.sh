@@ -6,9 +6,11 @@
 ## This sets env variables that are used by other scripts.
 ##
 
+_NET=10.15.32
 setmwaddr() {                                                              
-    export PVM_IP=192.168.0.14
-    export RUMP_IP=192.168.0.15
+    export HOST_IP=$_NET.101
+    export  PVM_IP=$_NET.102
+    export RUMP_IP=$_NET.109
 }
 
 setmwaddr

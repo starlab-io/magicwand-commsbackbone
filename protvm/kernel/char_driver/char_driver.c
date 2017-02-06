@@ -84,6 +84,12 @@
 // Record performance metrics?
 #define MW_DO_PERFORMANCE_METRICS 0
 
+// down() blocks and triggers kernel warning message (good for debugging)
+//
+// down_interruptible() blocks until interrupt and does not trigger message
+//#define SEM_DOWN(x) down((x))
+#define SEM_DOWN(x) down_interruptible((x))
+
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Mason");
@@ -143,7 +149,7 @@ s64 actual_time;
 
 #endif // MW_DO_PERFORMANCE_METRICS
 
-static struct semaphore mw_sem;
+static struct semaphore event_channel_sem;
 
 // Enforce only one writer to ring buffer at a time
 static struct mutex mw_req_mutex;
@@ -523,7 +529,7 @@ consume_response_worker( void * Data )
 
     pr_debug( "Waiting for responses on the ring buffer in process %d...\n",
              current->pid );
-    
+
     while( true )
     {
         do
@@ -538,7 +544,7 @@ consume_response_worker( void * Data )
             if ( !available )
             {
                 // must be smarter -- infinite wait is bad
-                down_interruptible(&mw_sem);
+                SEM_DOWN(&event_channel_sem);
             }
         } while (!available);
 
@@ -547,8 +553,9 @@ consume_response_worker( void * Data )
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
-        pr_debug( "Data available on ring at idx %d at %p\n",
-                  front_ring.rsp_cons, response );
+        pr_debug( "Response ID %lx on ring at idx %d\n",
+                  (unsigned long)response->base.id,
+                  front_ring.rsp_cons );
 
         // Hereafter: Advance index as soon as we're done with the
         // item in the ring bufer.
@@ -558,8 +565,8 @@ consume_response_worker( void * Data )
         {
             // This can happen if the process dies between issuing a
             // request and receiving the response.
-            pr_crit_once( "Received response for unknown request. "
-                          "Did the process die?\n" );
+            pr_crit( "Received response for unknown request. "
+                     "Did the process die?\n" );
             ++front_ring.rsp_cons;
             continue;
         }
@@ -567,11 +574,16 @@ consume_response_worker( void * Data )
         // Compare size of response to permitted size.
         if (response->base.size > sizeof( conn->response ) )
         {
-            pr_crit_once( "Received response that is too big" );
+            pr_crit( "Received response that is too big\n" );
             // Reduce the size that we send to user and fall through
             response->base.size = sizeof( conn->response );
         }
 
+        if ( response->base.size < sizeof(mt_response_base_t) )
+        {
+            pr_crit( "Received response that is too small\n" );
+        }
+        
         // Put the reponse into the map struct
         memcpy( &conn->response, response, response->base.size );
         ++front_ring.rsp_cons;
@@ -592,7 +604,7 @@ send_request(mt_request_generic_t * Request, size_t Size)
     mt_id_t id = get_next_id();
 
     Request->base.id = id;
-    pr_debug( "Attempting to send request %ld\n", (unsigned long)id );
+    pr_debug( "Attempting to send request %lx\n", (unsigned long)id );
 
     // Hold the lock for the duration of this function. All of these
     // must be done with no interleaving:
@@ -605,7 +617,7 @@ send_request(mt_request_generic_t * Request, size_t Size)
 
     if ( RING_FULL(&front_ring) )
     {
-        pr_alert_once("Front Ring is full\n");
+        pr_alert("Front ring is full\n");
         rc = -EAGAIN;
         goto ErrorExit;
     }
@@ -618,14 +630,10 @@ send_request(mt_request_generic_t * Request, size_t Size)
         goto ErrorExit;
     }
 
-    pr_debug( "Sending request %ld to idx %x at %p\n",
-              (long int) id, front_ring.req_prod_pvt, dest );
+    pr_debug( "Sending request %lx to idx %x\n",
+              (long int) id, front_ring.req_prod_pvt );
     
     memcpy( dest, Request, Size );
-
-    // Done writing to ring buffers, now update indices
-    ++front_ring.req_prod_pvt;
-    RING_PUSH_REQUESTS( &front_ring );
 
     // Now get this task's mapping to associate the message with the 
     connmap = get_thread_conn_map_by_task( current, true );
@@ -642,16 +650,22 @@ send_request(mt_request_generic_t * Request, size_t Size)
     // Map this process' connection map to this message ID
     connmap->message_id = id;
 
-    pr_debug("front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
+    // Update the ring buffer only *after* the mapping is in place!
+    ++front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &front_ring );
+
+    pr_debug("front_ring.req_prod_pvt: %x\n", front_ring.req_prod_pvt);
     
 ErrorExit:
-    mutex_unlock(&mw_req_mutex);
-
     if ( 0 == rc )
     {
+
         // Inform remote side, only if everything went right
         send_evt( common_event_channel );
     }
+
+    mutex_unlock(&mw_req_mutex);
+
     return rc;
 }
 
@@ -816,7 +830,7 @@ static irqreturn_t irq_event_handler( int port, void * data )
     //xen_clear_irq_pending(irq);
     //local_irq_restore( flags );
 
-    up(&mw_sem);
+    up(&event_channel_sem);
 
     return IRQ_HANDLED;
 }
@@ -933,7 +947,7 @@ mwchar_init(void)
    init_rwsem( &thread_conn_lock );
    init_completion( &ring_ready );
    
-   sema_init( &mw_sem, 0 );
+   sema_init( &event_channel_sem, 0 );
    mutex_init( &mw_req_mutex );
 
    // Create worker thread that reads items from the ring buffer
@@ -1039,7 +1053,7 @@ static void mwchar_exit(void)
     if ( NULL != worker_thread )
     {
         // Kick the thread to make it resume
-        up( &mw_sem );
+        up( &event_channel_sem );
         
         kthread_stop( worker_thread );
         worker_thread = NULL;
@@ -1139,8 +1153,6 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    int rc = 0; 
    thread_conn_map_t * connmap = NULL;
 
-   pr_debug( "Attempting to read from device\n" );
-   
    connmap = get_thread_conn_map_by_task( current, false );
    if ( NULL == connmap )
    {
@@ -1149,11 +1161,15 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
        goto ErrorExit;
    }
 
-   pr_debug( "Waiting for data to arrive\n" );
+   pr_debug( "Waiting for response %lx to arrive\n",
+             (unsigned long) connmap->message_id );
    
    // Now we have the mapping for this thread. Wait for data to
    // arrive. This may block the calling process.
-   down_interruptible( &connmap->data_pending );
+   SEM_DOWN( &connmap->data_pending );
+
+   pr_debug( "Response %lx has arrived\n",
+             (unsigned long) connmap->message_id );
 
    if ( pending_exit )
    {
@@ -1184,9 +1200,10 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    }
 
    // Success
-   rc = 0;
+   rc = connmap->response.base.size;
 
 ErrorExit:
+   pr_debug( "Returning %d\n", rc );
    return rc;
 }
 
@@ -1227,7 +1244,6 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
         goto ErrorExit;
     }
 
-    //send_request(req, sizeof(*req));
     rc = send_request( req, req->base.size );
     if ( rc )
     {
