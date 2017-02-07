@@ -95,8 +95,9 @@ typedef uint16_t mt_port_t;
 // maps to -errno; non-negative value typically means success; must be signed
 typedef int64_t mt_status_t;
 
-#define CRITICAL_ERROR(x) (0xc0000000 | (x))
-
+#define _CRITICAL_ERROR_MASK 0xc0000000
+#define CRITICAL_ERROR(x) (_CRITICAL_ERROR_MASK | (x))
+#define IS_CRITICAL_ERROR(x) ( (x) & _CRITICAL_ERROR_MASK )
 
 typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_REQUEST  0xff11
@@ -210,6 +211,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
 
 } mt_response_base_t;
 
+#define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
+#define MT_RESPONSE_BASE_SIZE sizeof(mt_response_base_t)
 
 //
 // Socket creation

@@ -27,14 +27,17 @@
 
 #include <dlfcn.h>
 
+#include <signal.h>
+
 #include <message_types.h>
 #include <translate.h>
 #include <app_common.h>
 
+#include <pthread.h>
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
-
+#define REGISTER_SIGNAL_HANDLER 0
 
 
 static int devfd = -1; // FD to MW device
@@ -93,6 +96,7 @@ get_libc_symbol( void ** Addr, const char * Symbol )
 //
 #define MAX_SOCKETS 1024
 static mw_socket_fd_t g_open_sockets[ MAX_SOCKETS ];
+static pthread_mutex_t socket_mtx;
 
 static void
 init_open_sockets( void )
@@ -106,6 +110,8 @@ init_open_sockets( void )
 static void
 fini_open_sockets( void )
 {
+    pthread_mutex_lock( &socket_mtx );
+
     for( int i = 0; i < MAX_SOCKETS; ++i )
     {
         if (  MT_INVALID_SOCKET_FD == g_open_sockets[ i ] )
@@ -113,10 +119,11 @@ fini_open_sockets( void )
             continue;
         }
 
-        // XXXX: twice the work necessary, since close does this work too
+        // Close invalidates the array entry
         close( g_open_sockets[ i ] );
-        g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
     }
+
+    pthread_mutex_unlock( &socket_mtx );
 }
 
 
@@ -171,6 +178,13 @@ read_response( mt_response_generic_t * Response )
 
         // Otherwise, give up
         break;
+    }
+
+    if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
+    {
+        DEBUG_PRINT( "Remote side encountered critical error\n" );
+        rc = -1;
+        Response->base.status = -EIO;
     }
 
     return rc;
@@ -337,7 +351,7 @@ socket( int domain,
    rc = write( devfd, &request, sizeof(request));
    MYASSERT( rc > 0 );
 
-rc = read_response( (mt_response_generic_t *) &response );
+   rc = read_response( (mt_response_generic_t *) &response );
    MYASSERT( rc > 0 );
 #endif
 
@@ -350,8 +364,8 @@ rc = read_response( (mt_response_generic_t *) &response );
                     (int)response.base.status, (int)response.base.status );
        errno = -response.base.status;
        BARE_DEBUG_BREAK();
-      // Returns -1 on error
-      return -1;
+       // Returns -1 on error
+       return -1;
    }
 
    // Returns socket number on success
@@ -372,15 +386,17 @@ close( int SockFd )
     mt_request_generic_t  request;
     mt_response_generic_t response;
     ssize_t rc = 0;
-    
+
+    //BARE_DEBUG_BREAK();
     if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
-       return libc_close( SockFd );
+        DEBUG_PRINT( "Closing local socket %x\n", SockFd );
+        return libc_close( SockFd );
     }
     
     build_close_socket( &request, SockFd );
 
-    DEBUG_PRINT( "Closing socket %x\n", SockFd );
+    DEBUG_PRINT( "Closing MW Socket %x\n", SockFd );
     
     //DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
     //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
@@ -710,10 +726,125 @@ send( int         SockFd,
    return ( response.base.status < 0 ? -1 : response.sent );
 }
 
+static void
+cleanup( void )
+{
+    // In case of process crash, the kernel will close all the open
+    // FDs for us. However, the FDs from Rump are not registered with
+    // the kernel. We should have an easy way to do this, e.g. tell
+    // Rump to close all sockets associated with this PID.
+
+    fini_open_sockets();
+
+    if ( g_dlh_libc )
+    {
+        dlclose( g_dlh_libc );
+        g_dlh_libc = NULL;
+    }
+}
+
+#if REGISTER_SIGNAL_HANDLER
+
+static void
+sighandler( int SigNo )
+{
+    struct sigaction sa;
+    sa.sa_handler = SIG_DFL;
+    sa.sa_flags = 0;
+
+    DEBUG_PRINT( "Received signal %d\n", SigNo );
+    cleanup();
+    DEBUG_PRINT( "Quitting due to signal %d\n", SigNo );
+
+    pthread_kill( pthread_self(), SIGPIPE );
+    /*
+    // Block every signal during the handler
+    sigfillset( &sa.sa_mask );
+    if (sigaction(SIGHUP, &sa, NULL) == -1)
+    {
+        // Unsafe call
+        perror("Error: cannot handle SIGUP");
+        }
+    */
+}
+
+static int
+register_sighandlers( void )
+{
+    int rc = 0;
+    struct sigaction sa;
+
+    // Setup the sighub handler
+    sa.sa_handler = &sighandler;
+
+    // Restart the system call, if at all possible
+    sa.sa_flags = 0; //SA_RESTART;
+
+    // Block every signal during the handler
+    sigfillset( &sa.sa_mask );
+
+    // Intercept these signals
+    if (sigaction(SIGHUP, &sa, NULL) == -1)
+    {
+        perror("Error: cannot handle SIGUP");
+        rc = errno;
+        goto ErrorExit;
+    }
+
+    if (sigaction(SIGINT, &sa, NULL) == -1)
+    {
+        perror("Error: cannot handle SIGINT");
+        rc = errno;
+        goto ErrorExit;
+    }
+
+
+    /*
+    if ( SIG_ERR == signal( SIGINT, sighandler ) )
+    {
+        rc = errno;
+        goto ErrorExit;
+    }
+
+    if ( SIG_ERR == signal( SIGSEGV, sighandler ) )
+    {
+        rc = errno;
+        goto ErrorExit;
+    }
+
+    if ( SIG_ERR == signal( SIGILL, sighandler ) )
+    {
+        rc = errno;
+        goto ErrorExit;
+    }
+
+    if ( SIG_ERR == signal( SIGPIPE, sighandler ) )
+    {
+        rc = errno;
+        goto ErrorExit;
+    }
+    */
+ErrorExit:
+    return rc;
+}
+#endif
+
+
 void 
 _init( void )
 {
+    int rc = 0;
     DEBUG_PRINT("Intercept module loaded\n");
+
+    pthread_mutex_init( &socket_mtx, NULL );
+
+#if REGISTER_SIGNAL_HANDLER
+    rc = register_sighandlers();
+    if ( rc )
+    {
+        exit(1);
+    }
+#endif
 
 #ifdef NODEVICE
     devfd = open("/dev/null", O_RDWR);
@@ -748,21 +879,14 @@ _init( void )
     get_libc_symbol( (void **) &libc_recvfrom, "recvfrom" );
 }
 
+
+
 void
 _fini( void )
 {
-    // In case of process crash, the kernel will close all the open
-    // FDs for us. However, the FDs from Rump are not registered with
-    // the kernel. We should have an easy way to do this, e.g. tell
-    // Rump to close all sockets associated with this PID.
-
-    fini_open_sockets();
-    
-    if ( g_dlh_libc )
-    {
-        dlclose( g_dlh_libc );
-        g_dlh_libc = NULL;
-    }
-
-   DEBUG_PRINT("Intercept module unloaded\n");
+    cleanup();
+    pthread_mutex_destroy( &socket_mtx );
+    DEBUG_PRINT("Intercept module unloaded\n");
 }
+
+

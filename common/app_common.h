@@ -14,7 +14,7 @@
 // MYDEBUG enables DEBUG_PRINT()
 //
 
-#if (defined MYDEBUG) || (defined MYTRAP)
+#if (defined MYDEBUG)
 static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
@@ -52,28 +52,26 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_EMIT_META() ((void)0)
 #endif
 
+#ifdef MYTRAP
+#  define DEBUG_EMIT_BREAKPOINT() _DEBUG_EMIT_BREAKPOINT()
+#else
+#  define DEBUG_EMIT_BREAKPOINT() ((void)0)
+#endif
+
+// Unconditionally emits breakpoint
+#define BARE_DEBUG_BREAK() _DEBUG_EMIT_BREAKPOINT()
 
 #ifdef MYTRAP
-#  define BARE_DEBUG_BREAK() asm("int $3")
 
 #  define DEBUG_BREAK()                                                 \
     _DEBUG_EMIT_META();                                                 \
     DEBUG_PRINT_FUNCTION( "At breakpoint\n" );                          \
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     _DEBUG_EMIT_BREAKPOINT()
-
-#  define MYASSERT(x)                                                   \
-    if(!(x)) {                                                          \
-        pthread_mutex_lock( &__debug_mutex );                           \
-        _DEBUG_EMIT_META();                                             \
-        DEBUG_PRINT_FUNCTION( "Assertion failure: %s\n", #x );          \
-        _DEBUG_EMIT_BREAKPOINT();                                       \
-        pthread_mutex_unlock( &__debug_mutex );                         \
-    }
 #else
-#  define BARE_DEBUG_BREAK() ((void)0)
+
 #  define DEBUG_BREAK()      ((void)0)
-#  define MYASSERT(...)      ((void)0)
+
 #endif
 
 
@@ -84,8 +82,21 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     pthread_mutex_unlock( &__debug_mutex )
+
+// MYASSERT emits breakpoint only if MYTRAP is defined.
+// If MYDEBUG is defined it will print out the message
+#  define MYASSERT(x)                                                   \
+    if(!(x)) {                                                          \
+        pthread_mutex_lock( &__debug_mutex );                           \
+        _DEBUG_EMIT_META();                                             \
+        DEBUG_PRINT_FUNCTION( "Assertion failure: %s\n", #x );          \
+        DEBUG_EMIT_BREAKPOINT();                                       \
+        pthread_mutex_unlock( &__debug_mutex );                         \
+    }
+
 #else
 #  define DEBUG_PRINT(...) ((void)0)
+#  define MYASSERT(x)      ((void)0)
 #endif // MYDEBUG
 
 

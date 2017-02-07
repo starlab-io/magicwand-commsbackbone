@@ -293,9 +293,6 @@ xe_comms_event_callback( evtchn_port_t port,
                          void *data )
 {
     DEBUG_PRINT("Event Channel %u\n", port );
-    //bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
-
-    //send_event(port);
 
     //
     // Release xe_comms_read_item() to check for another item
@@ -339,35 +336,27 @@ xe_comms_read_item( void * Memory,
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    DEBUG_PRINT( "Reading item idx %d from %p\n",
-                 g_state.back_ring.req_cons, request );
+    DEBUG_PRINT( "Processing item idx %d, ID=%lx size=%d\n",
+                 g_state.back_ring.req_cons,
+                 (unsigned long)request->base.id, request->base.size );
     
     if ( !MT_IS_REQUEST( request ) ||
-         request->base.size > Size ||
-         0 == request->base.size         )
+         request->base.size > Size  )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Programming error: there's a problem with the request" );
-        BARE_DEBUG_BREAK();
         goto ErrorExit;
     }
 
     // Total size: header + payload sizes. Do a direct memory copy,
     // since Rump has no division between user and kernel memory.
-
-    //*BytesRead = sizeof(request->base) + request->base.size;
     *BytesRead = request->base.size;
-
     bmk_memcpy( Memory, request, *BytesRead );
 
-    DEBUG_PRINT("Bytes Read used for memcpy: %lu\n", *BytesRead);
-
 ErrorExit:
-
     // Advance the counter for the next request
     ++g_state.back_ring.req_cons;
-
-    DEBUG_PRINT("g_state.back_ring.req_cons: %u\n", g_state.back_ring.req_cons);
+    RING_FINAL_CHECK_FOR_REQUESTS( &g_state.back_ring, available );
 
     return rc;
 }
@@ -416,7 +405,6 @@ xe_comms_write_item( void * Memory,
     
 /*
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
-
     if ( do_event || !do_event )
     {
         (void) send_event( g_state.local_event_port );
@@ -632,13 +620,6 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
         goto ErrorExit;
     }
 
-    // Map in the page offered by the remote side
-    //rc = xe_comms_accept_grant( remoteId, client_grant_ref );
-    //if ( rc )
-    //{
-    //goto ErrorExit;
-    //}
-
     // Get the event port and bind to it
     rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PORT_PATH,
                                               &vm_evt_chn_prt_nmbr );
@@ -658,13 +639,6 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     BACK_RING_INIT( &g_state.back_ring,
                     g_state.shared_ring,
                     g_state.shared_ring_size );
-
-    /*
-    for ( int i = 0; i < 3; i++ )
-    {
-        send_event(g_state.local_event_port);
-    }
-    */
     
 ErrorExit:
     return rc;

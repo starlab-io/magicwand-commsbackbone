@@ -11,7 +11,7 @@
 *   24 (3) |   16 (2) | 8 (1)    | 0 (0)    |
 * 76543210 | 76543210 | 76543210 | 76543210 |
 * -------------------------------------------
-* 01100111 | (rump ID)| (rump-specific fd)  |
+* 01100111 | (     rump ID      )| (sock ID)|
 *
 * The MSB evaluates to 'C' in ascii, its hex value is 0x67.
 *
@@ -25,24 +25,21 @@ typedef int32_t mw_socket_fd_t;
 
 #define MW_SOCKET_PREFIX_MASK   0x7f000000
 #define MW_SOCKET_PREFIX_SHIFT  24
-#define MW_SOCKET_PREFIX        (uint8_t) 'C'
-#define MW_SOCKET_PREFIX_VAL    0x67000000
-#define MW_SOCKET_CLIENT_MASK   0x00ff0000
-#define MW_SOCKET_LOCAL_FD_MASK 0x0000ffff
+#define _MW_SOCKET_PREFIX       (uint8_t) 'C' // 0x43 = 67
+#define MW_SOCKET_PREFIX_VAL    (_MW_SOCKET_PREFIX << 24)
+#define MW_SOCKET_CLIENT_MASK   0x00ffff00
+#define MW_SOCKET_LOCAL_ID_MASK 0x000000ff
 
 // A value is deemed an MW socket fd if it is positive and it has the
 // right prefix
 
-#define MW_SOCKET_IS_FD(x)                                              \
-    (((int)(x) > 0) &&                                                  \
-     (MW_SOCKET_PREFIX_VAL == ( (int32_t)(x) & MW_SOCKET_PREFIX_MASK)) )
+#define MW_SOCKET_IS_FD(x)                                      \
+    ( ((x) >> MW_SOCKET_PREFIX_SHIFT) == _MW_SOCKET_PREFIX )
 
+#define MW_SOCKET_CREATE(rumpid, sockfd)                                \
+    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)rumpid) << 8) | (sockfd) )
 
-#define MW_SOCKET_CREATE(rumpid, sockfd)                        \
-    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)rumpid) << 16) | (sockfd) )
-
-
-#define MW_SOCKET_GET_FD(x)                     \
-    ((x) & MW_SOCKET_LOCAL_FD_MASK )
+#define MW_SOCKET_GET_ID(x)                     \
+    ((x) & MW_SOCKET_LOCAL_ID_MASK )
 
 #endif // mwsockets_h

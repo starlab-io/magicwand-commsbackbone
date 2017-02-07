@@ -30,7 +30,7 @@
 #include "message_types.h" // real program should not use this!!
 
 #define THREAD_COUNT    15
-#define OPEN_CLOSE_CNT  4 
+#define OPEN_CLOSE_CNT  2
 #define MESSAGE_COUNT   5
 
 // These are provided by the environment
@@ -64,10 +64,10 @@ thread_open_write_close( void * Ignored )
         fd = socket( AF_INET, SOCK_STREAM, 0 );
         if ( fd < 0 )
         {
-            printf( "socket failed: %d\n", errno );
-            goto ErrorExit;
+            printf( "socket failed: %x\n", errno );
+            //continue;
         }
-
+/*
         if ( connect( fd, (struct sockaddr *) &server, sizeof(server) ) )
         {
             printf( "connect failed: %d\n", errno );
@@ -83,7 +83,7 @@ thread_open_write_close( void * Ignored )
             printf( "send failed: %d\n", errno );
             goto ErrorExit;
         }
-
+*/
         close( fd );
         fd = -1;
         

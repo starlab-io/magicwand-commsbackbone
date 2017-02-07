@@ -17,6 +17,9 @@
 #include "threadpool.h"
 #include "translate.h"
 
+extern uint16_t client_id;
+
+
 //
 // Upon recv(), should we attempt to receive the entire buffer given?
 //
@@ -50,7 +53,6 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     int native_fam  = xe_net_get_native_protocol_family( Request->sock_fam );
     int native_type = xe_net_get_native_sock_type( Request->sock_type );
     int native_proto = Request->sock_protocol;
-    uint16_t client_id = 1;
     
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -72,8 +74,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     }
     else
     {
-        //Response->base.status = MW_SOCKET_CREATE( client_id, sockfd );
-        extsock = MW_SOCKET_CREATE( client_id, sockfd );
+        extsock = MW_SOCKET_CREATE( client_id, WorkerThread->idx );
     }
 
     // Set up Response; clobbers base.sockfd
@@ -260,8 +261,9 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 {
     MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
     MYASSERT( 1 == WorkerThread->in_use );
-    uint16_t client_id = 1; // FIXME
     struct sockaddr_in sockaddr;
+    int sockfd = 0;
+
     bzero( &sockaddr, sizeof(sockaddr));
     
     int addrlen = sizeof(sockaddr);
@@ -270,19 +272,19 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
-    Response->base.status =
-        accept( WorkerThread->native_sock_fd,
-                (struct sockaddr*)&sockaddr,
-                (socklen_t*)&addrlen );
+    sockfd = accept( WorkerThread->native_sock_fd,
+                     (struct sockaddr*)&sockaddr,
+                     (socklen_t*)&addrlen );
 
-    if( Response->base.status < 0 )
+    if ( Response->base.status < 0 )
     {
         Response->base.status = -errno;
     }
     else
     {
-        Response->base.status =
-            MW_SOCKET_CREATE( client_id, Response->base.status);
+        // Caller must fix up the socket assignments
+        Response->base.status = sockfd;
+
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted connection\n",
                       WorkerThread->idx,
                       WorkerThread->sock_fd, WorkerThread->native_sock_fd );
@@ -293,7 +295,6 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
                               (mt_response_generic_t *) Response );
-
     return 0;
 }
 
@@ -330,7 +331,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     {
         Response->base.status = bytes_read;
     }
-    
+
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
     Response->addrlen  = addrlen;
