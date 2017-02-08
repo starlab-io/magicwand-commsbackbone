@@ -45,6 +45,12 @@ typedef uint16_t mt_size_t;
 // protected VM for matching requests and responses. The unikernel
 // copies a request's message ID into the corresponding response.
 //
+typedef uint64_t mt_id_t;
+
+#define MT_ID_UNSET_VALUE (mt_id_t)-3
+
+
+
 //
 // Possible message types - Request and Response values must run in parallel
 //
@@ -80,19 +86,18 @@ typedef enum
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
 } mt_response_id_t;
 
-typedef uint64_t mt_id_t;
-
 typedef uint32_t mt_addrlen_t;
 
 #define MT_INVALID_SOCKET_FD (mw_socket_fd_t)-1
 
 typedef uint16_t mt_port_t;
 
-// maps to errno; 0 == success
+// maps to -errno; non-negative value typically means success; must be signed
 typedef int64_t mt_status_t;
 
-#define CRITICAL_ERROR(x) (0xc0000000 | (x))
-
+#define _CRITICAL_ERROR_MASK 0xc0000000
+#define CRITICAL_ERROR(x) (_CRITICAL_ERROR_MASK | (x))
+#define IS_CRITICAL_ERROR(x) ( (x) & _CRITICAL_ERROR_MASK )
 
 typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_REQUEST  0xff11
@@ -206,6 +211,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
 
 } mt_response_base_t;
 
+#define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
+#define MT_RESPONSE_BASE_SIZE sizeof(mt_response_base_t)
 
 //
 // Socket creation
@@ -318,8 +325,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recvfrom
     uint8_t                 bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 } mt_response_socket_recvfrom_t;
 
-#define MT_RESPONSE_SOCKET_RECVFROM_SIZE ( sizeof( mt_response_base_t ) \
-        + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
+#define MT_RESPONSE_SOCKET_RECVFROM_SIZE                        \
+    ( sizeof( mt_response_base_t )                              \
+      + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
 
 
 //
@@ -405,13 +413,14 @@ typedef union _mt_request_generic
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
 #define MT_REQUEST_GET_TYPE(rq) ((rq)->base.type)
 #define MT_IS_REQUEST(x)                                                \
-    ((MT_SIGNATURE_REQUEST == (x)->base.sig) &&                         \
-     (0 == (MT_RESPONSE_MASK & (x)->base.type)))
+    ( (MT_SIGNATURE_REQUEST == (x)->base.sig) &&                        \
+      (0 == (MT_RESPONSE_MASK & (x)->base.type)) &&                     \
+      ((x)->base.size >= sizeof(mt_request_base_t)) )
 
 
 typedef union _mt_response_generic
 {
-    mt_response_base_t           base;
+    mt_response_base_t              base;
     mt_response_socket_create_t     socket_create;
     mt_response_socket_connect_t    socket_connect;
     mt_response_socket_close_t      socket_close;
@@ -429,7 +438,7 @@ typedef union _mt_response_generic
 
 #define MT_IS_RESPONSE(x)                                               \
     ((MT_SIGNATURE_RESPONSE == (x)->base.sig) &&                        \
-     (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)))
-
+     (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)) &&       \
+     ((x)->base.size >= sizeof(mt_response_base_t)) )
 
 #endif // message_types_h

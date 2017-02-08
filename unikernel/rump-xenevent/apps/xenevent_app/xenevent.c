@@ -125,6 +125,11 @@ typedef struct _xenevent_globals
 
 static xenevent_globals_t g_state;
 
+// XXXX: put this in globals and share globals
+// What's my domid? Needed by networking.c
+uint16_t   client_id;
+
+
 /*
 static struct timespec 
 diff(struct timespec start, struct timespec end)
@@ -181,8 +186,10 @@ debug_print_state( void )
         
         (void) sem_getvalue( &curr->awaiting_work_sem, &pending );
         
-        printf("  %d: used %d sock %d, pending items %d\n",
-               curr->idx, curr->in_use, curr->sock_fd, pending );
+        printf("  %d: used %d sock %x/%d, pending items %d\n",
+               curr->idx, curr->in_use,
+               curr->sock_fd, curr->native_sock_fd,
+               pending );
 
         if ( curr->in_use )
         {
@@ -329,17 +336,17 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %d\n", Socket );
-    
-    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Socket );
+
+    if ( MT_INVALID_SOCKET_FD == Socket )
     {
-        curr = &g_state.worker_threads[i];
-
-        DEBUG_PRINT( "Worker thread %d: busy %d sock %d\n",
-                     i, curr->in_use, curr->sock_fd );
-
-        if ( MT_INVALID_SOCKET_FD == Socket )
+        for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
         {
+            curr = &g_state.worker_threads[i];
+
+            DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
+                         i, curr->in_use, curr->sock_fd );
+
             // Look for any available thread and secure ownership of it.
             if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
             {
@@ -347,35 +354,46 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
                 break;
             }
         }
-        else
+    }
+    else
+    {
+        // This socket has already been assigned a thread. It's LSB is
+        // the index into the thread array of its servicer. The code
+        // below verifies this claim.
+        int idx = MW_SOCKET_GET_ID( Socket );
+
+        if ( idx >= MAX_THREAD_COUNT )
         {
-            // Look for the busy thread that is working on the socket we want
-            if ( 1 == atomic_cas_32( &(curr->in_use), 1, 1 ) &&
-                 ( Socket == curr->sock_fd ) )
-            {
-                found = true;
-                break;
-            }
+            MYASSERT( !"Error: socket's ID is too high\n" );
+            rc = EINVAL;
+            goto ErrorExit;
         }
-    } // for
+
+        curr = &g_state.worker_threads[ idx ];
+        if ( 0 == curr->in_use )
+        {
+            MYASSERT( !"Error: socket's thread is not busy\n" );
+            rc = EINVAL;
+            goto ErrorExit;
+        }
+
+        if ( Socket != curr->sock_fd )
+        {
+            MYASSERT( !"Internal error: socket's ID mismatches internal one\n" );
+            rc = EINVAL;
+            goto ErrorExit;
+        }
+
+        found = true;
+    }
 
     if ( found )
     {
         rc = 0;
         *WorkerThread = curr;
     }
-    else
-    {
-        if ( MT_INVALID_SOCKET_FD == Socket )
-        {
-            DEBUG_PRINT( "No thread is available to process this new socket\n" );
-        }
-        else
-        {
-            MYASSERT( !"Programming error: cannot find thread that is processing established socket" );
-        }
-    }
-    
+
+ErrorExit:
     return rc;
 }
 
@@ -409,6 +427,7 @@ set_response_to_internal_error( IN  mt_request_generic_t * Request,
 
     Response->base.sig    = MT_SIGNATURE_RESPONSE;
     Response->base.type   = MT_RESPONSE( Request->base.type );
+    Response->base.size   = MT_RESPONSE_BASE_SIZE;
     Response->base.id     = Request->base.id;
     Response->base.sockfd = Request->base.sockfd;
 
@@ -428,8 +447,8 @@ send_dispatch_error_response( mt_request_generic_t * Request )
     
     set_response_to_internal_error( Request, &response );
     
-    ssize_t written = write( g_state.output_fd, &response, Request->base.size );
-    if ( written != Request->base.size )
+    ssize_t written = write( g_state.output_fd, &response, response.base.size );
+    if ( written != response.base.size )
     {
         rc = errno;
         MYASSERT( !"Failed to send response" );
@@ -457,7 +476,8 @@ process_buffer_item( buffer_item_t * BufferItem )
         
     MYASSERT( NULL != worker );
     
-    DEBUG_PRINT( "Processing buffer item %d\n", BufferItem->idx );
+    DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
+                 BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
     switch( request->base.type )
@@ -538,7 +558,6 @@ process_buffer_item( buffer_item_t * BufferItem )
         rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, &accept_thread );
         if ( rc )
         {
-            MYASSERT( !"Failed to find thread to service accepted socket" );
             // Destroy the new socket and fail the request
             close( response.base.status );
             response.base.status = -1;
@@ -546,11 +565,17 @@ process_buffer_item( buffer_item_t * BufferItem )
         else
         {
             // A thread was available - record the assignment now
-            accept_thread->sock_fd = response.base.status;
-            accept_thread->native_sock_fd =
-                MW_SOCKET_GET_FD( response.base.status );
+            accept_thread->sock_fd =
+                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+            accept_thread->native_sock_fd = response.base.status;
+
+            // Mask the native FD with the exported one
+            response.base.status = accept_thread->sock_fd;
         }
     }
+
+    DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
+                 response.base.id, response.base.size );
 
     size_t written = write( g_state.output_fd,
                             &response,
@@ -607,7 +632,6 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // Typically the caller needs to do more work on this buffer
     *ProcessFurther = true;
     
-    DEBUG_BREAK();
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
@@ -658,11 +682,9 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     {
         // This request is for an existing connection. Find the thread
         // that services the connection and assign it.
-        //DEBUG_BREAK();
         rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
         if ( rc )
         {
-            MYASSERT( !"Unable to find thread for this socket" );
             goto ErrorExit;
         }
 
@@ -724,11 +746,8 @@ worker_thread_func( void * Arg )
         
         // Block until work arrives
         DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
-
         sem_wait( &myitem->awaiting_work_sem );
-        
         DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
-        DEBUG_BREAK();
 
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
@@ -742,7 +761,7 @@ worker_thread_func( void * Arg )
         }
 
         DEBUG_PRINT( "Thread %d is working on buffer %d\n", myitem->idx, buf_idx );
-        
+
         currbuf = &g_state.buffer_items[buf_idx];
         rc = process_buffer_item( currbuf );
         if ( rc )
@@ -838,31 +857,9 @@ init_state( void )
         goto ErrorExit;
     }
 
-    /*
-    rc = pthread_attr_init(&g_state.attr);
-
-    if ( rc )
-    {
-        MYASSERT( !"pthread_attr_init" );
-        goto ErrorExit;
-    }
-
-    rc = pthread_attr_setdetachstate(&g_state.attr, PTHREAD_CREATE_DETACHED);
-
-    if ( rc )
-    {
-        MYASSERT( !"pthread_attr_setdetachstate" );
-        goto ErrorExit;
-    }
-
-    g_state.schedparam.sched_priority = 20;
-
-    //pthread_attr_setinheritsched(&g_state.attr, PTHREAD_EXPLICIT_SCHED);
-    pthread_attr_setinheritsched(&g_state.attr, PTHREAD_INHERIT_SCHED);
-    //pthread_attr_setschedpolicy(&g_state.attr, SCHED_RR);
-    pthread_attr_setschedpolicy(&g_state.attr, SCHED_FIFO);
-    pthread_attr_setschedparam(&g_state.attr, &g_state.schedparam);
-    */
+    // XXXX: use IOCTL to get domid
+    client_id = 1;
+    
     //
     // Start up the threads
     //
@@ -1010,7 +1007,8 @@ message_dispatcher( void )
 
         // Remember: we'll yield next...
         request_type = MT_RESPONSE_GET_TYPE( myitem->request );
-        if ( request_type == MtRequestSocketConnect || request_type == MtRequestSocketAccept)
+        if ( request_type == MtRequestSocketConnect
+             || request_type == MtRequestSocketAccept)
         {
             xe_yield();
         } else 

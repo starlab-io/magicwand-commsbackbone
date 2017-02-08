@@ -12,6 +12,48 @@
  * @brief   A character driver to support comms.
  */
 
+/**
+ * This is the Magic Wand driver for the protected virtual machine
+ * (PVM). It supports multithreading/multiprocessing - e.g a
+ * multi-threaded application above it can read/write to its device,
+ * and each request (write) can expect to receive the corresponding
+ * response (from read).
+ *
+ * The driver supports a handshake with another Xen virtual machine,
+ * the unikernel agent (implemented on the Rump unikernel). The
+ * handshake involves discovering each others' domain IDs, event
+ * channels, and sharing memory via grant references.
+ *
+ * The driver supports the usage of an underlying Xen ring buffer. The
+ * driver writes requests on to the ring buffer, and reads responses
+ * off the ring buffer. The driver cannot assume that a response
+ * following a request will correspond to that last request.
+ *
+ * The multithreading support works as follows:
+ *
+ * (1) A user-mode program writes a request to the driver. The driver
+ *     assigns an ID to that request and associates the caller's PID
+ *     with the request ID via a connection mapping.
+ *
+ * (2) The user-mode program reads a response from the driver. The
+ *     driver will cause that read() to block until it receives the
+ *     response with an ID that matches the ID of the request sent by
+ *     that program. This is implemented by a kernel thread that runs
+ *     the consume_response_worker() function.
+ *
+ * This model implies some strict standards:
+ *  - The remote side *must* send a response for every request it receives
+ *  - The programs that use this driver must be well-written: they must
+ *    always read a response for every request they write.
+ */
+
+
+#define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
+#define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
+
+#define pr_fmt(fmt)                             \
+    DEVICE_NAME "P%d (%s) " fmt, current->pid, __func__
+
 #include <linux/init.h>           
 #include <linux/module.h>         
 #include <linux/device.h>         
@@ -20,10 +62,14 @@
 #include <linux/fs.h>             
 #include <linux/semaphore.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
+#include <linux/kthread.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>          
 #include <linux/time.h>
+
+#include <linux/list.h>
 
 #include <xen/grant_table.h>
 #include <xen/page.h>
@@ -35,38 +81,38 @@
 #include <message_types.h>
 #include <xen_keystore_defs.h>
 
-#define ROOT_NODE             "/unikernel/random"
-#define SERVER_ID_KEY         "server_id" 
-#define CLIENT_ID_KEY         "client_id" 
-#define GNT_REF_KEY           "gnt_ref" 
-
-#define MAX_GNT_REF_WIDTH     15
-#define MSG_LEN_KEY           "msg_len"
-#define PRIVATE_ID_PATH       "domid"
-
-#define VM_EVT_CHN_PATH       "vm_evt_chn_prt"
-#define VM_EVT_CHN_BOUND      "vm_evt_chn_is_bound"
-
-#define KEY_RESET_VAL      "0"
-#define TEST_MSG_SZ         64
-#define TEST_MSG_SZ_STR    "64"
-#define TEST_MSG           "The abyssal plain is flat.\n"
-#define MAX_MSG             1
-
-//#define XENEVENT_GRANT_REF_ORDER  6 //(2^order == page count)
-//#define XENEVENT_GRANT_REF_ORDER  1 //(2^order == page count)
-//#define XENEVENT_GRANT_REF_COUNT (1 << XENEVENT_GRANT_REF_ORDER)
-//#define XENEVENT_GRANT_REF_DELIM " "
-
-#define  DEVICE_NAME "mwchar"    // The device will appear at /dev/mwchar using this value
-#define  CLASS_NAME  "mw"        // The device class -- this is a character device driver
+// Record performance metrics?
+#define MW_DO_PERFORMANCE_METRICS 0
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Mason");
-MODULE_DESCRIPTION("A Linux char driver to do comms and to read/write to user space MW component");
+MODULE_DESCRIPTION("A driver to support MagicWand's INS");
 MODULE_VERSION("0.2");
 
-static int    majorNumber;                  //  Device number -- determined automatically
+//
+// Used to map a thread to the (single) currently-outstanding
+// request. Assumption: no async IO!!
+//
+typedef struct _thread_conn_map {
+    mt_id_t message_id;
+    
+    pid_t pid;
+    pid_t tgid; // thread group
+    struct task_struct * task;
+
+    bool awaiting_read;
+    
+    // Worker thread writes the response here upone receipt, then
+    // releases data_pending
+    mt_response_generic_t response;
+    
+    // Use semaphore so we can lock/unlock in different process' contexts
+    struct semaphore data_pending;
+    struct list_head list;
+} thread_conn_map_t;
+
+
+static int    majorNumber = -1;             //  Device number -- determined automatically
 static int    numberOpens = 0;              //  Counts the number of times the device is opened
 static struct class*  mwcharClass  = NULL;  //  The device-driver class struct pointer
 static struct device* mwcharDevice = NULL;  //  The device-driver device struct pointer
@@ -74,9 +120,8 @@ static struct device* mwcharDevice = NULL;  //  The device-driver device struct 
 static grant_ref_t   foreign_grant_ref;
 static unsigned int  msg_counter;
 
-static unsigned int  is_msg_len_watch;
-static unsigned int  is_client_id_watch;
-static unsigned int  is_evtchn_bound_watch;
+static bool  client_id_watch_active;
+static bool  evtchn_bound_watch_active;
 
 static domid_t       client_dom_id;
 static domid_t       srvr_dom_id;
@@ -91,14 +136,29 @@ static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 static int          irqs_handled = 0;
 static int          irq = 0;
 
+#if MW_DO_PERFORMANCE_METRICS
+
 // Vars for performance tests
 ktime_t start, end;
 s64 actual_time;
 
-static struct semaphore mw_sem;
+#endif // MW_DO_PERFORMANCE_METRICS
 
+static struct semaphore event_channel_sem;
+
+// Enforce only one writer to ring buffer at a time
 static struct mutex mw_req_mutex;
-static struct mutex mw_res_mutex;
+
+//static struct mutex mw_res_mutex;
+
+static struct list_head    thread_conn_head;
+static struct rw_semaphore thread_conn_lock;
+static struct completion   ring_ready;
+static bool                ring_prepared;
+
+// Only this single thread reads from the ring buffer
+static struct task_struct * worker_thread;
+static bool pending_exit = false;
 
 // Defines:
 // mwevent_sring_t
@@ -110,129 +170,285 @@ struct mwevent_sring *shared_ring = NULL;
 struct mwevent_front_ring front_ring;
 size_t shared_mem_size = PAGE_SIZE * XENEVENT_GRANT_REF_COUNT;
 
+
 // The prototype functions for the character driver
 static int     dev_open(struct inode *, struct file *);
 static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
+//static void __exit mwchar_exit(void);
+static void mwchar_exit(void);
+
+// Tracks the current request ID. Corresponds to mt_request_base_t.id
+static mt_id_t
+get_next_id( void )
+{
+    static atomic64_t counter = ATOMIC64_INIT( 0 );
+
+    return (mt_id_t) atomic64_inc_return( &counter );
+}
+
+
+/**
+ * @brief Helper function to find or create socket/pid mapping.
+ *
+ * Mappins are keyed by PID, not by thread group. This way there can
+ * be one mapping per thread.
+ */
+static thread_conn_map_t *
+get_thread_conn_map_by_task( struct task_struct * task,
+                             bool create )
+{
+    thread_conn_map_t * curr = NULL;
+
+    down_read( &thread_conn_lock );
+    
+    list_for_each_entry( curr, &thread_conn_head, list )
+    {
+        if ( task->pid == curr->pid )
+        {
+            up_read( &thread_conn_lock );
+            goto ErrorExit;
+        }
+    } // for
+
+    // Not found; create a new one
+    up_read( &thread_conn_lock );
+
+    if ( !create )
+    {
+        curr = NULL;
+        goto ErrorExit;
+    }
+    
+    // XXXX: use SLAB instead
+    curr = kmalloc( sizeof(thread_conn_map_t),
+                    GFP_KERNEL | __GFP_ZERO );
+    if ( NULL == curr )
+    {
+        pr_err( "kmalloc failed\n" );
+        goto ErrorExit;
+    }
+
+    curr->pid  = task->pid;
+    curr->tgid = task->tgid;
+    curr->task = task;
+
+    curr->awaiting_read = false;
+    
+    sema_init( &curr->data_pending, 0 );
+
+    // Modify the global list
+    down_write( &thread_conn_lock );
+    list_add( &curr->list, &thread_conn_head );
+    up_write( &thread_conn_lock );
+
+ErrorExit:
+    return curr;
+}
+
+static thread_conn_map_t *
+find_thread_conn_map_by_message_id( mt_id_t id )
+{
+    thread_conn_map_t * curr = NULL;
+    
+    down_read( &thread_conn_lock );
+    
+    list_for_each_entry( curr, &thread_conn_head, list )
+    {
+        if ( id == curr->message_id )
+        {
+            goto ErrorExit;
+        }
+    } // for
+
+    // Not found
+    curr = NULL;
+
+ErrorExit:
+    up_read( &thread_conn_lock );
+    return curr;
+}
+
+
+// Caller must hold thread_conn_lock for write
+
+static void
+destroy_thread_conn_map( thread_conn_map_t ** tcmap )
+{
+    // Release the waiter
+    up( &( (*tcmap)->data_pending ) );
+    
+    pr_debug( "Removing mapping for PID %d TG %d (last message ID 0x%llx)\n",
+              (*tcmap)->pid, (*tcmap)->tgid, (*tcmap)->message_id );
+
+    list_del( &( (*tcmap)->list ) );
+
+    kfree( *tcmap );
+    *tcmap = NULL;
+}
+
+
 /** @brief Set the callback functions for the file_operations struct
  */
 static struct file_operations fops =
 {
-   .open = dev_open,
-   .read = dev_read,
-   .write = dev_write,
+   .open    = dev_open,
+   .read    = dev_read,
+   .write   = dev_write,
    .release = dev_release,
 };
 
-static int write_to_key(const char *path, const char *value)
+static int write_to_key(const char * dir, const char * node, const char * value)
 {
    struct xenbus_transaction   txn;
    int                         err;
-
+   bool                  txnstarted = false;
+   int                   term = 0;
+   
+   pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
+   
    err = xenbus_transaction_start(&txn);
-   if (err) {
-      printk(KERN_INFO "MWChar: Error starting xenbus transaction\n");
-      return 1;
+   if (err)
+   {
+       pr_err("Error starting xenbus transaction\n");
+       goto ErrorExit;
    }
 
-   err = xenbus_write(txn, ROOT_NODE, path, value);
+   txnstarted = true;
 
-   if (err) {
-      printk(KERN_INFO "MWChar: Could not write to XenStore Key\n");
-      xenbus_transaction_end(txn,1);
-      return 1;
+   err = xenbus_exists( txn, dir, "" );
+   // 1 ==> exists
+   if ( !err )
+   {
+       pr_err( "Xenstore directory %s does not exist.\n", dir );
+       err = -EIO;
+       term = 1;
+       goto ErrorExit;
+   }
+   
+   err = xenbus_write(txn, dir, node, value);
+   if (err)
+   {
+      pr_err("Could not write to XenStore Key\n");
+      goto ErrorExit;
    }
 
-   err = xenbus_transaction_end(txn, 0);
-
-   return 0;
+ErrorExit:
+   if ( txnstarted )
+   {
+       if ( xenbus_transaction_end(txn, term) )
+       {
+           pr_err("Failed to end transaction\n");
+       }
+   }
+   
+   return err;
 }
 
-static char *read_from_key(const char *path)
+static char *
+read_from_key( const char * dir, const char * node )
 {
    struct xenbus_transaction   txn;
    char                       *str;
    int                         err;
 
+   pr_debug( "Begin read %s/%s <== ?\n", dir, node );
+
    err = xenbus_transaction_start(&txn);
    if (err) {
-      printk(KERN_INFO "MWChar: Error starting xenbus transaction\n");
+      pr_err("Error starting xenbus transaction\n");
       return NULL;
    }
 
-   if (path) {
-      str = (char *)xenbus_read(txn, ROOT_NODE, path, NULL);
-   } else {
-      str = (char *)xenbus_read(txn, PRIVATE_ID_PATH, "", NULL);
-   }
-
-   if (XENBUS_IS_ERR_READ(str)) {
-      printk(KERN_INFO "MWChar: Could not read XenStore Key\n");
+   str = (char *)xenbus_read(txn, dir, node, NULL);
+   if (XENBUS_IS_ERR_READ(str))
+   {
+      pr_err("Could not read XenStore Key\n");
       xenbus_transaction_end(txn,1);
       return NULL;
    }
 
    err = xenbus_transaction_end(txn, 0);
 
+   pr_debug( "End read %s/%s <== %s\n", dir, node, str );
+   
    return str;
 }
 
-static void write_server_id_to_key(void) 
+static int write_server_id_to_key(void) 
 {
    const char  *dom_id_str;
-
+   int err = 0;
+   
    // Get my domain id
-   dom_id_str = (const char *)read_from_key(NULL);
+   dom_id_str = (const char *)read_from_key( PRIVATE_ID_PATH, "" );
 
    if (!dom_id_str) {
-      printk(KERN_INFO "Error: Failed to read my Dom Id Key\n");
-      return;
+       pr_err("Error: Failed to read my Dom Id Key\n");
+       err = -EIO;
+       goto ErrorExit;
    }
 
-   printk(KERN_INFO "MWChar: Read my Dom Id Key: %s\n", dom_id_str);
+   pr_debug("Read my Dom Id Key: %s\n", dom_id_str);
 
-   write_to_key(SERVER_ID_KEY, dom_id_str);
+   err = write_to_key( XENEVENT_XENSTORE_ROOT, SERVER_ID_KEY, dom_id_str );
+   if ( err )
+   {
+       goto ErrorExit;
+   }
 
    srvr_dom_id = simple_strtol(dom_id_str, NULL, 10);
 
-   kfree(dom_id_str);
+ErrorExit:
+   if ( dom_id_str )
+   {
+       kfree(dom_id_str);
+   }
+   return err;
 }
 
-static void create_unbound_evt_chn(void) 
+static int create_unbound_evt_chn(void) 
 {
    struct evtchn_alloc_unbound alloc_unbound; 
    char                        common_event_channel_str[MAX_GNT_REF_WIDTH]; 
-   int                         err;
+   int                         err = 0;
 
-   if (!client_dom_id)
-      return;
+   if ( !client_dom_id )
+   {
+       goto ErrorExit;
+   }
 
    //alloc_unbound.dom = DOMID_SELF;
    alloc_unbound.dom = srvr_dom_id;
    alloc_unbound.remote_dom = client_dom_id; 
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
-
    if (err) {
-      pr_err("Failed to set up event channel\n");
-   } else {
-      printk(KERN_INFO "Event Channel Port (%d <=> %d): %d\n", alloc_unbound.dom, client_dom_id, alloc_unbound.port);
+       pr_err("Failed to set up event channel\n");
+       goto ErrorExit;
    }
+   
+   pr_debug("Event Channel Port (%d <=> %d): %d\n",
+          alloc_unbound.dom, client_dom_id, alloc_unbound.port);
 
    common_event_channel = alloc_unbound.port;
 
-   printk(KERN_INFO "Event channel's local port: %d\n", common_event_channel );
+   pr_debug("Event channel's local port: %d\n", common_event_channel );
    memset(common_event_channel_str, 0, MAX_GNT_REF_WIDTH);
    snprintf(common_event_channel_str, MAX_GNT_REF_WIDTH, "%u", common_event_channel);
 
-   write_to_key(VM_EVT_CHN_PATH,common_event_channel_str);
+   err = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_PORT_KEY,
+                       common_event_channel_str );
+
+ErrorExit:
+   return err;
 }
 
 static void send_evt(int evtchn_prt)
 {
-
    struct evtchn_send send;
 
    send.port = evtchn_prt;
@@ -242,14 +458,13 @@ static void send_evt(int evtchn_prt)
    if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send)) {
       pr_err("Failed to send event\n");
    } /*else {
-      printk(KERN_INFO "Sent Event. Port: %u\n", send.port);
+      pr_info("Sent Event. Port: %u\n", send.port);
    }*/
 }
 
 static int 
 is_evt_chn_closed(void)
 {
-   
    struct evtchn_status status;
    int                  rc;
 
@@ -284,141 +499,230 @@ free_unbound_evt_chn(void)
    if (err) {
       pr_err("Failed to close event channel\n");
    } else {
-      printk(KERN_INFO "Closed Event Channel Port: %d\n", close.port);
+      pr_debug("Closed Event Channel Port: %d\n", close.port);
    }
 }
 
-static int 
-receive_response(void *Response, size_t Size, size_t *BytesWritten)
+static int
+consume_response_worker( void * Data )
 {
-   int rc = 0; 
-   bool available = false;
-   mt_response_generic_t * src = NULL;
+    int rc = 0;
+    bool available = false;
+    mt_response_generic_t * response = NULL;
+    thread_conn_map_t * conn = NULL;
 
-   //printk(KERN_INFO "MWChar: receive_response() called\n");
+    pr_info( "Process %d created to consume messages on the ring buffer\n",
+             current->pid );
 
-   //start = ktime_get();
+    // Wait for the ring buffer's initialization to complete
+    rc = wait_for_completion_interruptible( &ring_ready );
+    if ( rc < 0 )
+    {
+        pr_info( "Received interrupt before ring ready\n" );
+        goto ErrorExit;
+    }
 
-   //printk(KERN_INFO "In receive_response(). Entering while loop ... \n");
+    // Completion succeeded
+    if ( pending_exit )
+    {
+        pr_info( "Detecting pending exit. Worker thread exiting.\n" );
+        goto ErrorExit;
+    }
 
-   mutex_lock( &mw_res_mutex );
+    pr_info( "Proc %d awaiting responses from ring buffer (0x%x slots).\n",
+             current->pid, RING_SIZE( &front_ring ) );
 
-   do
-   {
+    // Consume responses until the module is unloaded. When it is
+    // unloaded, consume whatever is still on the ring, then quit.
+    while( true )
+    {
+        do
+        {
+            available = RING_HAS_UNCONSUMED_RESPONSES( &front_ring );
+            if ( !available )
+            {
+                if ( pending_exit )
+                {
+                    // Nothing available and waiting on exit
+                    goto ErrorExit;
+                }
 
-      available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
+                if ( down_interruptible( &event_channel_sem) )
+                {
+                    pr_info( "Received interrupt in worker thread\n" );
+                    goto ErrorExit;
+                }
+            }
+        } while (!available);
 
-      if ( !available ) {
-         //printk(KERN_INFO "MWChar: down() called\n");
-         down(&mw_sem);
-      }
-   
-   } while (!available);
+        // An item is available. Consume it.
+        // Policy: continue upon error.
+        // Policy: in case of pending exit, keep consuming the requests until
+        //         there are no more
+        response = (mt_response_generic_t *)
+            RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
-   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
-   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
-   
+        pr_debug( "Response ID %lx size %x type %d on ring at idx %d\n",
+                  (unsigned long)response->base.id,
+                  response->base.size, response->base.type,
+                  front_ring.rsp_cons );
 
-   //printk(KERN_INFO "MWChar: down() called\n");
-   //down(&mw_sem);
+        if ( !MT_IS_RESPONSE( response ) )
+        {
+            // Fatal: The ring is corrupted.
+            pr_crit( "Received data that is not a response at idx %d\n",
+                     front_ring.rsp_cons );
+            rc = -EIO;
+            goto ErrorExit;
+        }
 
-   //end = ktime_get();
+        // Hereafter: Advance index as soon as we're done with the
+        // item in the ring bufer.
 
-   //actual_time = ktime_to_ns(ktime_sub(end, start));
+        conn = find_thread_conn_map_by_message_id( response->base.id );
+        if ( NULL == conn )
+        {
+            // This can happen if the process dies between issuing a
+            // request and receiving the response.
+            pr_err( "Received response for unknown request. "
+                     "Did the process die?\n" );
+            ++front_ring.rsp_cons;
+            continue;
+        }
+        
+        // Compare size of response to permitted size.
+        if ( response->base.size > sizeof( conn->response ) )
+        {
+            pr_err( "Received response that is too big\n" );
+            // Reduce the size that we send to user and fall through
+            response->base.size = sizeof( conn->response );
+        }
 
-   //printk(KERN_INFO "Time taken for receive_response() execution (ns): %lld\n",
-          //actual_time);
+        // Put the response into the connection map struct
+        memcpy( &conn->response, response, response->base.size );
 
-   //printk(KERN_INFO "%d     %lld\n", irqs_handled, actual_time);
+        // Update index and share it
+        ++front_ring.rsp_cons;
+        //RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
 
-   /*
-   actual_time = ktime_to_ms(ktime_sub(end, start));
-
-   printk(KERN_INFO "Time taken for receive_response() execution (ms): %lld\n",
-          actual_time);
-
-   available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
-
-   if ( !available ) {
-      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned false\n");
-   }
-   else
-   {
-      printk(KERN_INFO "RING_HAS_UNCONSUMED_RESPONSES() returned true\n");
-   }
-   */
-
-   src = (mt_response_generic_t *)RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
-
-   // Compare size of Response to Size. 
-   // If larger, then set rc to EINVAL and go to ErrorExit
-
-   if (src->base.size > Size) {
-      rc = EINVAL;
-      goto ErrorExit;
-   }
-
-   //memcpy(Response, src, src->base.size);
-   memcpy(Response, src, sizeof(*src));
-
-   //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, src, Size, true);
-
-   ++front_ring.rsp_cons;
-
-   //printk(KERN_INFO "front_ring.rsp_cons: %u\n", front_ring.rsp_cons);
-   //printk(KERN_INFO "front_ring.sring.rsp_prod: %u\n", front_ring.sring->rsp_prod);
-
-   mutex_unlock( &mw_res_mutex );
-
+        up( &conn->data_pending );
+    } // while
 
 ErrorExit:
-   return rc;
-
+    if ( ring_prepared )
+    {
+        // Push our front_ring data to shared ring
+        RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
+    }
+    do_exit( rc );
 }
 
-static void
-send_request(void *Request, size_t Size)
+static int
+send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
 {
+    int rc = 0;
+    void * dest = NULL;
+    thread_conn_map_t * connmap = NULL;
+    mt_id_t id = get_next_id();
+    
+    pr_debug( "Attempting to send request %lx\n", (unsigned long)id );
 
-   bool notify = false;  
-   void * dest = NULL;
+    if ( !ring_prepared )
+    {
+        pr_err( "Ring has not been initialized\n" );
+        rc = -ENODEV;
+        goto ErrorExit;
+    }
 
-   mutex_lock(&mw_req_mutex);
+    // Hold the lock for the duration of this function. All of these
+    // must be done with no interleaving:
+    //
+    // * Write the request to the ring buffer
+    // * Map the requesting process to the request, to match with the response
+    // * Flush our private indices to the shared ring
 
-   if (RING_FULL(&front_ring)) {
+    mutex_lock(&mw_req_mutex);
 
-      // Do something drastic
-      printk(KERN_INFO "MWChar: Front Ring is full\n");
-      return;
-   }
+    // Now get this task's mapping to associate the message with the 
+    connmap = get_thread_conn_map_by_task( current, true );
+    if ( NULL == connmap )
+    {
+        rc = -ENOMEM;
+        goto ErrorExit;
+    }
 
-   dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
-   
-   if (!dest) 
-   {
-      printk(KERN_INFO "MWChar: send_request(). destination buffer is NULL\n");
-      return;
-   }
+    // The semaphore 'data_pending' starts off locked. read_request()
+    // attempts to acquire it and blocks until the worker thread
+    // releases it upon receipt of a response.
 
-   memcpy(dest, Request, Size);
+    // Map this process' connection map to this message ID
+    connmap->message_id = id;
 
-   //print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 1, dest, Size, true);
+    // If we are awaiting a read, then we cannot write!
+    if ( connmap->awaiting_read )
+    {
+        pr_err( "Caller already called write() and must call read() next\n" );
+        rc = -EPERM;
+        goto ErrorExit;
+    }
 
-   //printk(KERN_INFO "MWChar: send_request(). Copied %lu bytes to destination buffer\n", Size);
+    if ( RING_FULL(&front_ring) )
+    {
+        pr_alert("Front ring is full. Is remote side up?\n");
+        rc = -EAGAIN;
+        goto ErrorExit;
+    }
 
-   ++front_ring.req_prod_pvt;
-   //printk(KERN_INFO "front_ring.req_prod_pvt: %u\n", front_ring.req_prod_pvt);
+    dest = RING_GET_REQUEST(&front_ring, front_ring.req_prod_pvt);
+    if ( !dest ) 
+    {
+        pr_err("destination buffer is NULL\n");
+        rc = -EIO;
+        goto ErrorExit;
+    }
 
-   RING_PUSH_REQUESTS_AND_CHECK_NOTIFY(&front_ring, notify);
+    pr_debug( "Sending request %lx to idx %x\n",
+              (long int) id, front_ring.req_prod_pvt );
 
-   if (notify || !notify) {
-      send_evt(common_event_channel);
-      //printk(KERN_INFO "MWChar: send_request(). Sent %lu bytes to UK\n", Size);
-      //printk(KERN_INFO "MWChar: send_request(). notify = %u \n", notify);
-      
-   }
+    // Copy only the request's claimed size into the ring
+    // buffer. Hereafter work with copy in ring buffer.
+    rc = copy_from_user( dest, Request, RequestSize );
+    if ( rc )
+    {
+        pr_err( "copy_from_user failed: %d\n", rc );
+        rc = -EFAULT;
+        goto ErrorExit;
+    }
 
-   mutex_unlock(&mw_req_mutex);
+    ((mt_request_generic_t *)dest)->base.id = id;
+
+    if ( !MT_IS_REQUEST( (mt_request_generic_t *)dest ) )
+    {
+        pr_err( "Invalid request given\n" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+    
+    // We've written to the ring; now we are awaiting a response
+    connmap->awaiting_read = true;
+    
+    // Update the ring buffer only *after* the mapping is in place!
+    ++front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &front_ring );
+
+    pr_debug("front_ring.req_prod_pvt: %x\n", front_ring.req_prod_pvt);
+    
+ErrorExit:
+#if 0 // Rump is polling and not using the event channel
+    if ( 0 == rc )
+    {
+        // Inform remote side, only if everything went right
+        send_evt( common_event_channel );
+    }
+#endif
+    mutex_unlock(&mw_req_mutex);
+
+    return rc;
 }
 
 static void
@@ -426,13 +730,16 @@ init_shared_ring(void)
 {
    if (!server_region)
    {
-      printk(KERN_INFO "MWChar: init_shared_ring(). server_region is NULL\n");
+      pr_err("server_region is NULL\n");
       return;
    }
 
    shared_ring = (struct mwevent_sring *)server_region;
    SHARED_RING_INIT(shared_ring);
    FRONT_RING_INIT(&front_ring, shared_ring, shared_mem_size);
+
+   ring_prepared = true;
+   complete( &ring_ready );
 }
 
 static int 
@@ -446,8 +753,8 @@ offer_grant(domid_t domu_client_id)
    server_region = (uint8_t *) __get_free_pages( GFP_KERNEL, XENEVENT_GRANT_REF_ORDER );
    if (!server_region)
    {
-       printk(KERN_INFO "MWChar: Error allocating memory (0x%x pages)\n",
-              XENEVENT_GRANT_REF_COUNT);
+       pr_err( "Error allocating memory (0x%x pages)\n",
+               XENEVENT_GRANT_REF_COUNT);
       return 1;
    }
 
@@ -463,16 +770,17 @@ offer_grant(domid_t domu_client_id)
 
        ret = gnttab_grant_foreign_access(domu_client_id, mfn, 0);
        if (ret < 0) {
-           printk(KERN_INFO "MWChar: Error obtaining Grant\n");
+           pr_err("Error obtaining Grant\n");
            return 1;
        }
 
        grant_refs[ i ] = ret;
-       //printk(KERN_INFO "MWChar: VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
+       //pr_info("VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
    }
 
    return 0;
 }
+
 
 static int write_grant_refs_to_key( void )
 {
@@ -485,153 +793,101 @@ static int write_grant_refs_to_key( void )
     {
         if ( snprintf( one_ref, sizeof(one_ref), "%x ", grant_refs[i] ) >= sizeof(one_ref))
         {
-            printk(KERN_INFO "MWChar: Insufficient space to write grant ref.\n");
+            pr_err("Insufficient space to write grant ref.\n");
             rc = 1;
             goto ErrorExit;
         }
         if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >= gnt_refs + sizeof(gnt_refs) )
         {
-            printk(KERN_INFO "MWChar: Insufficient space to write all grant refs.\n");
+            pr_err("Insufficient space to write all grant refs.\n");
             rc = 2;
             goto ErrorExit;
         }
     }
 
-    write_to_key( GNT_REF_KEY, gnt_refs );
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT, GNT_REF_KEY, gnt_refs );
 
 ErrorExit:
     return rc;
 }
 
-static void 
-msg_len_state_changed(struct xenbus_watch *w,
-                      const char **v,
-                      unsigned int l)
+
+static void
+client_id_state_changed( struct xenbus_watch *w,
+                         const char **v,
+                         unsigned int l )
 {
-   char *msg_len_str;
+    char     *client_id_str = NULL;
+    int       err = 0;
 
-   if (msg_counter > MAX_MSG)
-      return;
+    client_id_str = (char *)read_from_key( XENEVENT_XENSTORE_ROOT,
+                                           CLIENT_ID_KEY );
+    if ( !client_id_str )
+    {
+        pr_err("Error reading client id key!!!\n");
+        return;
+    }
 
-   msg_len_str = (char *)read_from_key(MSG_LEN_KEY);
+    if (strcmp(client_id_str, "0") == 0)
+    {
+        kfree(client_id_str);
+        return;
+    }
 
-   if(XENBUS_IS_ERR_READ(msg_len_str)) {
-      printk(KERN_INFO "Error reading  Message Length Key!!!\n");
-      return;
-   }
+    //
+    // Get the client Id 
+    // 
+    pr_debug("Client Id changed value:\n");
+    pr_debug("\tRead Client Id Key: %s\n", client_id_str);
 
-   if (strcmp(msg_len_str,"0") != 0) {
-      kfree(msg_len_str);
-      return;
-   }
+    client_dom_id = simple_strtol(client_id_str, NULL, 10);
 
-   //
-   // Get the message length 
-   // 
-   printk(KERN_INFO "Message length changed value:\n");
-   printk(KERN_INFO "\tRead Message Length Key: %s\n", msg_len_str);
+    pr_debug("\t\tuint form: %u\n", client_dom_id);
 
-   if (!server_region) {
-      kfree(msg_len_str);
-      printk(KERN_INFO "MWChar: Error allocating memory\n");
-      return;
-   }
+    kfree(client_id_str);
 
-   memset(server_region, 0, shared_mem_size);
-   memcpy(server_region, TEST_MSG, TEST_MSG_SZ);
+    // Create unbound event channel with client
+    err = create_unbound_evt_chn();
+    if ( err ) return;
+   
+    // Offer Grant to Client  
+    offer_grant((domid_t)client_dom_id);
 
-   // Write Msg Len to key
-   write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
+    // Reset Client Id Xenstore Key
+    err = write_to_key( XENEVENT_XENSTORE_ROOT, CLIENT_ID_KEY, KEY_RESET_VAL );
+    if ( err )
+    {
+        // XXXX: There's more cleanup if we failed here
+        return;
+    }
 
-   kfree(msg_len_str);
-   msg_counter++;
+    // Write Grant Ref to key 
+    err = write_grant_refs_to_key();
+    if ( err )
+    {
+        return;
+    }
 
-}
-
-static struct xenbus_watch msg_len_watch = {
-
-   .node = "/unikernel/random/msg_len",
-   .callback = msg_len_state_changed
-};
-
-static void client_id_state_changed(struct xenbus_watch *w,
-                                    const char **v,
-                                    unsigned int l)
-{
-   char     *client_id_str;
-   int       err;
-
-   client_id_str = (char *)read_from_key(CLIENT_ID_KEY);
-
-   if(XENBUS_IS_ERR_READ(client_id_str)) {
-      printk(KERN_INFO "Error reading  Client Id Key!!!\n");
-      return;
-   }
-
-   if (strcmp(client_id_str,"0") == 0) {
-      kfree(client_id_str);
-      return;
-   }
-
-   //
-   // Get the client Id 
-   // 
-   printk(KERN_INFO "Client Id changed value:\n");
-   printk(KERN_INFO "\tRead Client Id Key: %s\n", client_id_str);
-
-   client_dom_id = simple_strtol(client_id_str, NULL, 10);
-
-   printk(KERN_INFO "\t\tuint form: %u\n", client_dom_id);
-
-   kfree(client_id_str);
-
-   // Create unbound event channel with client
-   create_unbound_evt_chn();
-
-   // Write Msg Len to key
-
-   write_to_key(MSG_LEN_KEY, TEST_MSG_SZ_STR);
-
-   // Offer Grant to Client  
-   offer_grant((domid_t)client_dom_id);
-
-   // Reset Client Id Xenstore Key
-   write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
-
-   // Write Grant Ref to key 
-   write_grant_refs_to_key();
-
-   err = register_xenbus_watch(&msg_len_watch);
-   if (err) {
-      pr_err("Failed to set Message Length watcher\n");
-   } else {
-      is_msg_len_watch = 1;
-   }
- 
-   init_shared_ring();
+    init_shared_ring();
 }
 
 static struct xenbus_watch client_id_watch = {
 
-   .node = "/unikernel/random/client_id",
-   .callback = client_id_state_changed
+    .node = CLIENT_ID_PATH,
+    .callback = client_id_state_changed
 };
 
 static irqreturn_t irq_event_handler( int port, void * data )
 {
     //unsigned long flags;
-
     //local_irq_save( flags );
-    //printk(KERN_INFO "irq_event_handler executing: port=%d data=%p call#=%d\n",
-           //port, data, irqs_handled);
    
     ++irqs_handled;
 
     //xen_clear_irq_pending(irq);
-
     //local_irq_restore( flags );
 
-    up(&mw_sem);
+    up(&event_channel_sem);
 
     return IRQ_HANDLED;
 }
@@ -643,57 +899,76 @@ static void vm_port_is_bound(struct xenbus_watch *w,
    char     *is_bound_str; 
    int       i;
 
-   printk(KERN_INFO "Checking whether %s is asserted\n",
-          VM_EVT_CHN_BOUND);
+   pr_debug("Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH);
 
-   is_bound_str = (char *) read_from_key( VM_EVT_CHN_BOUND );
-
-   if(XENBUS_IS_ERR_READ(is_bound_str)) {
-      printk(KERN_INFO "Error reading evtchn bound key!!\n");
+   is_bound_str = (char *) read_from_key( XENEVENT_XENSTORE_ROOT,
+                                          VM_EVT_CHN_BOUND_KEY );
+   if ( !is_bound_str )
+   {
       return;
    }
 
-   if (strcmp(is_bound_str,"0") == 0) {
+   if ( 0 == strcmp( is_bound_str, "0" ) )
+   {
       kfree(is_bound_str);
       return;
    }
 
-   printk(KERN_INFO "The remote event channel is bound\n");
+   pr_debug("The remote event channel is bound\n");
 
    irq = bind_evtchn_to_irqhandler( common_event_channel,
                                     irq_event_handler,
                                     0, NULL, NULL );
 
-   printk( KERN_INFO "Bound event channel %d to irq: %d\n",
-           common_event_channel, irq );
-
-   for ( i = 0; i < 1; i++ )
-   {
-      printk( KERN_INFO "NOT Sending event via IRQ %d\n", irq );
-   }
+   pr_debug( "Bound event channel %d to irq: %d\n",
+             common_event_channel, irq );
 }
 
 static struct xenbus_watch evtchn_bound_watch = {
 
-   .node = ROOT_NODE "/" VM_EVT_CHN_BOUND,
-   .callback = vm_port_is_bound
+    .node = VM_EVT_CHN_BOUND_PATH,
+    .callback = vm_port_is_bound
 };
 
-static void initialize_keys(void)
+static int initialize_keys(void)
 {
-   write_to_key(CLIENT_ID_KEY, KEY_RESET_VAL);
-   write_to_key(SERVER_ID_KEY, KEY_RESET_VAL);
-   write_to_key(MSG_LEN_KEY, KEY_RESET_VAL);
-   write_to_key(GNT_REF_KEY, KEY_RESET_VAL);
-   write_to_key(VM_EVT_CHN_PATH, KEY_RESET_VAL);
-   write_to_key(VM_EVT_CHN_BOUND, KEY_RESET_VAL);
+    int rc = 0;
+    
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       CLIENT_ID_KEY,
+                       KEY_RESET_VAL );
+    if ( rc ) goto ErrorExit;
+    
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       SERVER_ID_KEY,
+                       KEY_RESET_VAL );
+    if ( rc ) goto ErrorExit;
+    
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       GNT_REF_KEY,
+                       KEY_RESET_VAL );
+    if ( rc ) goto ErrorExit;
+    
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_PORT_KEY,
+                       KEY_RESET_VAL );
+    if ( rc ) goto ErrorExit;
+    
+    rc = write_to_key( XENEVENT_XENSTORE_ROOT,
+                       VM_EVT_CHN_BOUND_KEY,
+                       KEY_RESET_VAL );
+    if ( rc ) goto ErrorExit;
+
+ErrorExit:
+    return rc;
 }
 
 /** @brief The LKM initialization function
  *  @return returns 0 if successful
  */
-static int __init mwchar_init(void) {
-
+static int __init
+mwchar_init(void)
+{
    int   err;
 
    foreign_grant_ref = 0;
@@ -702,87 +977,161 @@ static int __init mwchar_init(void) {
    client_dom_id = 0;
    common_event_channel = 0;
    
-   is_msg_len_watch = 0;
-   is_client_id_watch = 0;
-   is_evtchn_bound_watch = 0;
+   client_id_watch_active = false;
+   evtchn_bound_watch_active = false;
 
+#if MW_DO_PERFORMANCE_METRICS
    start = ktime_set(0,0);;
    end = ktime_set(0,0);;
+#endif // MW_DO_PERFORMANCE_METRICS
+   pr_debug("Initializing\n");
 
-   printk(KERN_INFO "MWChar: Initializing the MWChar LKM\n");
+#if 0
+   struct module * mod = (struct module *) THIS_MODULE;
+   // gdb> add-symbol-file char_driver.ko $eax/$rax
+   asm( "int $3" // module base in *ax
+        //:: "a" ((THIS_MODULE)->module_core));
+        :: "a" ((THIS_MODULE)->init_layout.base)
+        , "c" (mod) );
+#endif
+   // Set up the structs for the thread-connection mapping
+   INIT_LIST_HEAD( &thread_conn_head );
+   init_rwsem( &thread_conn_lock );
+   init_completion( &ring_ready );
+   
+   sema_init( &event_channel_sem, 0 );
+   mutex_init( &mw_req_mutex );
 
-   // Try to dynamically allocate a major number for the device -- more difficult but worth it
-   majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
-   if (majorNumber<0){
-      printk(KERN_ALERT "MWChar failed to register a major number\n");
-      return majorNumber;
+   // Create worker thread that reads items from the ring buffer
+   worker_thread = kthread_run( &consume_response_worker,
+                                NULL,
+                                "MwMsgConsumer" );
+   if ( NULL == worker_thread )
+   {
+       pr_err( "kthread_run() failed\n" );
+       err = -ESRCH;
+       goto ErrorExit;
    }
-   printk(KERN_INFO "MWChar: registered correctly with major number %d\n", majorNumber);
+
+   // Try to dynamically allocate a major number for the device --
+   // more difficult but worth it
+   majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
+   if (majorNumber < 0)
+   {
+       err = majorNumber;
+       pr_err( "register_chrdev failed: %d\n", err );
+       goto ErrorExit;
+   }
 
    // Register the device class
    mwcharClass = class_create(THIS_MODULE, CLASS_NAME);
-   if (IS_ERR(mwcharClass)){
-      unregister_chrdev(majorNumber, DEVICE_NAME);
-      printk(KERN_ALERT "Failed to register mwcharClass device class\n");
-      return PTR_ERR(mwcharClass);
+   if (IS_ERR(mwcharClass))
+   {
+       err = PTR_ERR(mwcharClass);
+       pr_err( "class_create failed: %d\n", err );
+       goto ErrorExit;
    }
-   printk(KERN_INFO "MWChar: device class registered correctly\n");
 
    // Register the device driver
-   mwcharDevice = device_create(mwcharClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
-   if (IS_ERR(mwcharDevice)){
-      class_destroy(mwcharClass);
-      unregister_chrdev(majorNumber, DEVICE_NAME);
-      printk(KERN_ALERT "Failed to create the device\n");
-      return PTR_ERR(mwcharDevice);
+   mwcharDevice = device_create(mwcharClass,
+                                NULL,
+                                MKDEV(majorNumber, 0),
+                                NULL,
+                                DEVICE_NAME);
+   if (IS_ERR(mwcharDevice))
+   {
+      err = PTR_ERR(mwcharDevice);
+      pr_err( "device_create failed: %d\n", err );
+      goto ErrorExit;
    }
 
-   printk(KERN_INFO "MWChar: device class created correctly\n");
-
    // Set all protocol keys to zero
-   initialize_keys();
-
+   err = initialize_keys();
+   if ( err )
+   {
+       pr_err("Key initialization failed: %d\n", err );
+       goto ErrorExit;
+   }
+   
    // 1. Write Dom Id for Server to Key
-   write_server_id_to_key();
+   err = write_server_id_to_key();
+   if ( err )
+   {
+       goto ErrorExit;
+   }
 
    // 2. Watch Client Id XenStore Key
    err = register_xenbus_watch(&client_id_watch);
-   if (err) {
+   if (err)
+   {
       pr_err("Failed to set client id watcher\n");
-   } else {
-      is_client_id_watch = 1;
+   }
+   else
+   {
+      client_id_watch_active = true;
    }
 
    // 3. Watch for our port being bound
    err = register_xenbus_watch(&evtchn_bound_watch);
-   if (err) {
+   if (err)
+   {
       pr_err("Failed to set client local port watcher\n");
-   } else {
-      is_evtchn_bound_watch = 1;
+   }
+   else
+   {
+      evtchn_bound_watch_active = true;
    }
 
-   sema_init(&mw_sem,0);
-
-   mutex_init( &mw_req_mutex );
-   mutex_init( &mw_res_mutex );
-   
-   return 0;
+ErrorExit:
+   if ( err )
+   {
+       mwchar_exit();
+   }
+   return err;
 }
 
 /** @brief The driver cleanup function
  */
-static void __exit mwchar_exit(void){
+static void mwchar_exit(void)
+{
+    thread_conn_map_t * curr = NULL;
+    thread_conn_map_t * next = NULL;
 
-   device_destroy(mwcharClass, MKDEV(majorNumber, 0));     // remove the device
-   class_unregister(mwcharClass);                          // unregister the device class
-   class_destroy(mwcharClass);                             // remove the device class
-   unregister_chrdev(majorNumber, DEVICE_NAME);            // unregister the major number
+    pending_exit = true;
+
+    // Kick the worker thread. It might be waiting for the ring to
+    // become ready, or it might be waiting for responses to arrive on
+    // the ring.
+    complete( &ring_ready );
+    up( &event_channel_sem );
+
+    if ( NULL != worker_thread )
+    {
+        //kthread_stop( worker_thread );
+        //worker_thread = NULL;
+    }
+
+    if ( majorNumber >= 0 )
+    {
+        device_destroy(mwcharClass, MKDEV(majorNumber, 0)); // remove the device
+    }
+
+    if ( NULL != mwcharClass )
+    {
+        class_destroy(mwcharClass); // remove the device class
+        class_unregister(mwcharClass); // unregister the device class
+    }
+    
+    if ( NULL != mwcharDevice )
+    {
+        unregister_chrdev(majorNumber, DEVICE_NAME); // unregister the major number
+    }
 
    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
    {
        if ( 0 != grant_refs[ i ] )
        {
-           printk(KERN_INFO "MWChar: Ending access to grant ref 0x%x\n", grant_refs[i]);
+           pr_debug("Ending access to grant ref 0x%x\n", grant_refs[i]);
            gnttab_end_foreign_access_ref( grant_refs[i], 0 );
        }
    }
@@ -792,34 +1141,41 @@ static void __exit mwchar_exit(void){
        free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
    }
 
-   if (is_client_id_watch) {
+   if (client_id_watch_active)
+   {
       unregister_xenbus_watch(&client_id_watch);
    }
 
-   if (is_evtchn_bound_watch) {
+   if (evtchn_bound_watch_active)
+   {
       unregister_xenbus_watch(&evtchn_bound_watch);
    }
 
    initialize_keys();
 
-   if (is_msg_len_watch) {
-      unregister_xenbus_watch(&msg_len_watch);
-   }
-
-   if (irq) {
+   if (irq)
+   {
       unbind_from_irqhandler(irq, NULL);
    }
 
-   if (!is_evt_chn_closed()) {
+   if (!is_evt_chn_closed())
+   {
       free_unbound_evt_chn();
    }
 
    mutex_destroy( &mw_req_mutex );
-   mutex_destroy( &mw_res_mutex );
-   
 
-   printk(KERN_INFO "MWChar: Unloading gnt_srvr LKM\n");
-   printk(KERN_INFO "MWChar: Goodbye from the LKM!\n");
+   // Destroy all the remaining mappings. Lock the list.
+   down_write( &thread_conn_lock );
+
+   list_for_each_entry_safe( curr, next, &thread_conn_head, list )
+   {
+       destroy_thread_conn_map( &curr );
+   }
+
+   up_write( &thread_conn_lock );
+
+   pr_debug("cleanup is complete\n");
 }
 
 /** @brief The device open function that is called each time the device is opened
@@ -827,9 +1183,11 @@ static void __exit mwchar_exit(void){
  *  @param inodep A pointer to an inode object (defined in linux/fs.h)
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
-static int dev_open(struct inode *inodep, struct file *filep){
+static int
+dev_open(struct inode *inodep, struct file *filep)
+{
    numberOpens++;
-   printk(KERN_INFO "MWChar: Device has been opened %d time(s)\n", numberOpens);
+   pr_debug("Device has been opened %d time(s)\n", numberOpens);
    return 0;
 }
 
@@ -841,60 +1199,95 @@ static int dev_open(struct inode *inodep, struct file *filep){
  *  @param len The length of the buffer
  *  @param offset The offset if required
  */
-static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
-
-   int error_count = 0;
+static ssize_t
+dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
+{
    int rc = 0; 
-   mt_response_generic_t *res = NULL;
+   thread_conn_map_t * connmap = NULL;
+   mt_size_t resp_size = 0;
 
-   //printk(KERN_INFO "MWChar: dev_read() called\n");
+   if ( !ring_prepared )
+    {
+        pr_err( "Ring has not been initialized\n" );
+        rc = -ENODEV;
+        goto ErrorExit;
+    }
 
-   res = kmalloc(sizeof(mt_response_generic_t), GFP_KERNEL);
-
-   if (!res)
+   connmap = get_thread_conn_map_by_task( current, false );
+   if ( NULL == connmap )
    {
-      printk(KERN_INFO "MWChar: Could not alloc memory\n");
-      rc =  -EFAULT;
-      goto ErrorExit;
+       pr_err( "read() called from thread that hasn't issued write()\n" );
+       rc = -EPERM;
+       goto ErrorExit;
    }
 
-   memset(res, 0, sizeof(mt_response_generic_t));
+   pr_debug( "Waiting for response %lx to arrive\n",
+             (unsigned long) connmap->message_id );
+   
+   // Now we have the mapping for this thread. Wait for data to
+   // arrive. This may block the calling process.
 
-   rc = receive_response(res,  sizeof(mt_response_generic_t), NULL);
-
-
-   if (rc) 
+   if ( down_interruptible( &connmap->data_pending ) )
    {
-      printk(KERN_INFO "MWChar: Error on call to receive_response(). Err Code: %d\n", rc);
-      goto ErrorExit;
+       // Signal encountered, semaphore not acquired. The caller must try again.
+       pr_err( "read() was interrupted\n" );
+       rc = -EINTR;
+       goto ErrorExit;
    }
 
-   error_count = copy_to_user(buffer, res, sizeof(mt_response_generic_t));
-
-   //receive_response(message,  size_of_message, NULL);
-   //copy_to_user has the format ( * to, *from, size) and returns 0 on success
-   //error_count = copy_to_user(buffer, message, size_of_message);
-
-
-   if (error_count==0){
-      //printk(KERN_INFO "MWChar: Sent %lu characters to the user\n", sizeof(mt_response_generic_t));
-      goto ErrorExit;
-
-   } else {
-      printk(KERN_INFO "MWChar: Failed to send %d characters to the user\n", error_count);
-      rc = -EFAULT;
-      goto ErrorExit;
+   if ( !connmap->awaiting_read )
+   {
+       pr_err( "Caller hasn't called write() prior to this read()\n" );
+       rc = -EPERM;
+       goto ErrorExit;
    }
+
+   connmap->awaiting_read = false;
+   
+   resp_size = connmap->response.base.size;
+
+   pr_debug( "Response %lx (size %x) has arrived\n",
+             (unsigned long) connmap->message_id,
+             resp_size );
+
+   // An item is available and is in connmap. Process it.
+   if ( len < resp_size )
+   {
+       pr_err( "User buffer too small for response.\n" );
+       rc = -EINVAL;
+       goto ErrorExit;
+   }
+   
+   // Data has been received. Write it to the user buffer.
+   rc = copy_to_user( buffer,
+                      &connmap->response,
+                      resp_size );
+   if ( rc )
+   {
+       pr_err( "copy_to_user() failed: %d\n", rc );
+       rc = -EFAULT;
+       goto ErrorExit;
+   }
+
+/*
+  if ( pending_exit )
+  {
+  pr_err( "Driver is unloading\n" );
+  rc = -EINTR;
+  goto ErrorExit;
+  }
+*/
+
+   // Success
+   rc = resp_size;
 
 ErrorExit:
-
-   kfree(res);
+   pr_debug( "Returning %d\n", rc );
    return rc;
 }
 
-/** @brief This function is called whenever the device is being written to from user space i.e.
- *  data is sent to the device from the user. The data is copied to the message[] array in this
- *  LKM using the sprintf() function along with the length of the string.
+/** @brief Writes a request to the shared ring buffer.
+ *
  *  @param filep A pointer to a file object
  *  @param buffer The buffer to that contains the string to write to the device
  *  @param len The length of the array of data that is being passed in the const char buffer
@@ -903,65 +1296,100 @@ ErrorExit:
 static ssize_t 
 dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
 {
+    int rc = 0;
+    mt_request_generic_t *req = (mt_request_generic_t *)buffer;
+    mt_size_t req_size = 0;
+    
+#if MW_DO_PERFORMANCE_METRICS
+    int effective_number;
+    if (ktime_to_ns(start) == 0)
+    {
+        start = ktime_get();
+    }
+    else
+    {
+        end = ktime_get();
+        actual_time = ktime_to_ns(ktime_sub(end, start));
+        effective_number = (irqs_handled + 1)/2;
+        pr_debug("%d     %lld\n", effective_number, actual_time);
+        start = ktime_set(0,0);
+    }
+#endif // MW_DO_PERFORMANCE_METRICS
 
-   /*
-   sprintf(message, "%s(%u letters)", buffer, (unsigned int)len);   // appending received string with its length
-   size_of_message = strlen(message);                 // store the length of the stored message
-   printk(KERN_INFO "MWChar: Received %u characters from the user\n", (unsigned int)len);
+    rc = get_user( req_size, &req->base.size );
+    if ( rc )
+    {
+        pr_err( "get_user failed: %d\n", rc );
+        rc = -EFAULT;
+        goto ErrorExit;
+    }
+    
+    if ( req_size > len || 0 == req_size )
+    {
+        pr_err( "Received request with invalid size\n" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
 
-   send_request(message, size_of_message); 
-   //send_evt(common_event_channel);
-   */
+    rc = send_request( req, req_size );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
-   int effective_number; 
-   mt_request_generic_t *req;
+    // Success
+    rc = req_size;
 
-   req = (mt_request_generic_t *)buffer;
+#if MW_DO_PERFORMANCE_METRICS
+    end = ktime_get();
 
+    actual_time = ktime_to_ns(ktime_sub(end, start));
+    pr_info("Time taken for send_request() execution (ns): %lld\n",
+            actual_time);
 
-   //printk(KERN_INFO "MWChar: Sending %lu bytes through send_request()\n", sizeof(*req));
+    actual_time = ktime_to_ms(ktime_sub(end, start));
 
-   if (ktime_to_ns(start) == 0)
-   {
-      start = ktime_get();
-   }
-   else
-   {
-      end = ktime_get();
-      actual_time = ktime_to_ns(ktime_sub(end, start));
-      effective_number = (irqs_handled + 1)/2;
-      printk(KERN_INFO "%d     %lld\n", effective_number, actual_time);
-      start = ktime_set(0,0);
-   }
-   send_request(req, sizeof(*req));
-
-   //end = ktime_get();
-
-   //actual_time = ktime_to_ns(ktime_sub(end, start));
-   //printk(KERN_INFO "Time taken for send_request() execution (ns): %lld\n",
-          //actual_time);
-
-   //actual_time = ktime_to_ms(ktime_sub(end, start));
-
-   //printk(KERN_INFO "Time taken for send_request() execution (ms): %lld\n",
-          //actual_time);
-
-   return len;
+    pr_info("Time taken for send_request() execution (ms): %lld\n",
+            actual_time);
+#endif // MW_DO_PERFORMANCE_METRICS
+    
+ErrorExit:
+    return rc;
 }
 
-/** @brief The device release function that is called whenever the device is closed/released by
- *  the userspace program
+/** @brief Handle close() request.
+ *
  *  @param inodep A pointer to an inode object (defined in linux/fs.h)
  *  @param filep A pointer to a file object (defined in linux/fs.h)
  */
-static int dev_release(struct inode *inodep, struct file *filep){
-   printk(KERN_INFO "MWChar: Device successfully closed\n");
-   return 0;
+static int dev_release(struct inode *inodep, struct file *filep)
+{
+    thread_conn_map_t * currtc = NULL;
+    thread_conn_map_t * nexttc = NULL;
+    
+    // Release all the mappings associated with current's thread
+    // group.
+    
+    down_write( &thread_conn_lock );
+
+    list_for_each_entry_safe( currtc, nexttc, &thread_conn_head, list )
+    {
+        if ( currtc->tgid == current->tgid )
+        {
+            destroy_thread_conn_map( &currtc );
+        }
+    }
+
+    up_write( &thread_conn_lock );
+
+    pr_debug("Device successfully closed\n");
+
+    return 0;
 }
 
-/** @brief A module must use the module_init() module_exit() macros from linux/init.h, which
- *  identify the initialization function at insertion time and the cleanup function (as
- *  listed above)
+/** @brief A module must use the module_init() module_exit() macros
+ *  from linux/init.h, which identify the initialization function at
+ *  insertion time and the cleanup function (as listed above)
  */
 module_init(mwchar_init);
 module_exit(mwchar_exit);
