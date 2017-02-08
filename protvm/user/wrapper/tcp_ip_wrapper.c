@@ -863,6 +863,31 @@ write( int Fd, const void *Buf, size_t count )
     return send( Fd, Buf, count, 0 );
 }
 
+int
+setsockopt( int Fd,
+            int Level,
+            int OptName,
+            const void * OptVal,
+            socklen_t OptLen )
+{
+    DEBUG_PRINT( "setsockopt( 0x%x, %d, %d, %p, %d )\n",
+                 Fd, Level, OptName, OptVal, OptLen );
+    return 0;
+}
+
+
+int
+getsockopt( int Fd,
+            int Level,
+            int OptName,
+            const void * OptVal,
+            socklen_t  *OptLen )
+{
+    DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p )\n",
+                 Fd, Level, OptName, OptVal, OptLen );
+    return 0;
+}
+
 
 void 
 _init( void )
