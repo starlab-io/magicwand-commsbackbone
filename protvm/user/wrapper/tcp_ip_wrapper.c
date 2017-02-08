@@ -880,7 +880,7 @@ int
 getsockopt( int Fd,
             int Level,
             int OptName,
-            const void * OptVal,
+            void * OptVal,
             socklen_t  *OptLen )
 {
     DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p )\n",
