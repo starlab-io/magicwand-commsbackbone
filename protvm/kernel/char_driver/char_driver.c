@@ -84,16 +84,28 @@
 // Record performance metrics?
 #define MW_DO_PERFORMANCE_METRICS 0
 
+#define MW_INTERNAL_MAX_WAIT_ATTEMPTS 5
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Mason");
 MODULE_DESCRIPTION("A driver to support MagicWand's INS");
 MODULE_VERSION("0.2");
 
 //
+// Used to track currently open sockets. List anchor is in
+// thread_conn_map_t (i.e. sockets are tracked per thread group).
+//
+typedef struct _open_mw_socket {
+    mw_socket_fd_t   mwsockfd;
+    struct list_head list;
+} open_mw_socket_t;
+
+
+//
 // Used to map a thread to the (single) currently-outstanding
 // request. Assumption: no async IO!!
 //
-typedef struct _thread_conn_map {
+typedef struct _thread_response_map {
     mt_id_t message_id;
     
     pid_t pid;
@@ -105,11 +117,25 @@ typedef struct _thread_conn_map {
     // Worker thread writes the response here upone receipt, then
     // releases data_pending
     mt_response_generic_t response;
-    
+
+    // Track the open sockets
+    struct list_head open_socket_list;
+    struct rw_semaphore sock_list_sem;
+    bool                rundown;
+
     // Use semaphore so we can lock/unlock in different process' contexts
     struct semaphore data_pending;
-    struct list_head list;
-} thread_conn_map_t;
+
+    // Link for this mapping in the active list
+    struct list_head active_list;
+
+    // Link for this mapping in the rundown list
+    struct list_head rundown_list;
+} thread_response_map_t;
+
+// Slabs for fast allocation 
+static struct kmem_cache * open_socket_slab = NULL;
+static struct kmem_cache * threadresp_slab     = NULL;
 
 
 static int    majorNumber = -1;             //  Device number -- determined automatically
@@ -136,6 +162,7 @@ static grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
 static int          irqs_handled = 0;
 static int          irq = 0;
 
+
 #if MW_DO_PERFORMANCE_METRICS
 
 // Vars for performance tests
@@ -147,12 +174,31 @@ s64 actual_time;
 static struct semaphore event_channel_sem;
 
 // Enforce only one writer to ring buffer at a time
-static struct mutex mw_req_mutex;
+static struct mutex request_mutex;
 
 //static struct mutex mw_res_mutex;
 
-static struct list_head    thread_conn_head;
-static struct rw_semaphore thread_conn_lock;
+//
+// We maintain two lists of thread_response_map_t's. One is for the
+// active processes (threads); the other is for processes that have
+// closed their handle to our device - either on their own, or by the
+// kernel because the kernel is killing them.
+//
+// We do this because we have to hold the active lock during
+// dev_release (i.e. "rundown"), but we also need to acquire that lock
+// to complete processing in consume_response_worker().
+//
+static struct list_head    active_mapping_head;
+static struct rw_semaphore active_mapping_lock;
+
+static struct list_head    rundown_mapping_head;
+static struct rw_semaphore rundown_mapping_lock;
+
+static bool rundown_in_progress = false;
+
+
+//static struct mutex        active_mapping_lock; // ?????????????
+
 static struct completion   ring_ready;
 static bool                ring_prepared;
 
@@ -177,7 +223,14 @@ static int     dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
-//static void __exit mwchar_exit(void);
+static int
+internal_close_mwsock( thread_response_map_t * threadresp,
+                       mw_socket_fd_t      sockfd );
+
+static int
+internal_await_response( thread_response_map_t * threadresp );
+                                      
+
 static void mwchar_exit(void);
 
 // Tracks the current request ID. Corresponds to mt_request_base_t.id
@@ -193,28 +246,31 @@ get_next_id( void )
 /**
  * @brief Helper function to find or create socket/pid mapping.
  *
- * Mappins are keyed by PID, not by thread group. This way there can
+ * Mappings are keyed by PID, not by thread group. This way there can
  * be one mapping per thread.
  */
-static thread_conn_map_t *
-get_thread_conn_map_by_task( struct task_struct * task,
+static thread_response_map_t *
+get_thread_response_map_by_task( struct task_struct * task,
                              bool create )
 {
-    thread_conn_map_t * curr = NULL;
+    thread_response_map_t * curr = NULL;
 
-    down_read( &thread_conn_lock );
+    pr_debug( "Getting Thread Response mapping for PID %d\n",
+              task->pid );
     
-    list_for_each_entry( curr, &thread_conn_head, list )
+    down_read( &active_mapping_lock );
+    
+    list_for_each_entry( curr, &active_mapping_head, active_list )
     {
         if ( task->pid == curr->pid )
         {
-            up_read( &thread_conn_lock );
+            up_read( &active_mapping_lock );
             goto ErrorExit;
         }
     } // for
 
     // Not found; create a new one
-    up_read( &thread_conn_lock );
+    up_read( &active_mapping_lock );
 
     if ( !create )
     {
@@ -222,12 +278,11 @@ get_thread_conn_map_by_task( struct task_struct * task,
         goto ErrorExit;
     }
     
-    // XXXX: use SLAB instead
-    curr = kmalloc( sizeof(thread_conn_map_t),
-                    GFP_KERNEL | __GFP_ZERO );
+    curr = (thread_response_map_t *)
+        kmem_cache_alloc( threadresp_slab, GFP_KERNEL );
     if ( NULL == curr )
     {
-        pr_err( "kmalloc failed\n" );
+        pr_err( "kmem_cache_alloc failed\n" );
         goto ErrorExit;
     }
 
@@ -235,58 +290,210 @@ get_thread_conn_map_by_task( struct task_struct * task,
     curr->tgid = task->tgid;
     curr->task = task;
 
+    curr->rundown       = false;
     curr->awaiting_read = false;
-    
+
+    init_rwsem( &curr->sock_list_sem );
+    INIT_LIST_HEAD( &curr->open_socket_list );
+
     sema_init( &curr->data_pending, 0 );
 
     // Modify the global list
-    down_write( &thread_conn_lock );
-    list_add( &curr->list, &thread_conn_head );
-    up_write( &thread_conn_lock );
+    down_write( &active_mapping_lock );
+    list_add( &curr->active_list, &active_mapping_head );
+    up_write( &active_mapping_lock );
 
 ErrorExit:
     return curr;
 }
 
-static thread_conn_map_t *
-find_thread_conn_map_by_message_id( mt_id_t id )
+static thread_response_map_t *
+find_thread_response_map_by_id( mt_id_t id, bool rundown )
 {
-    thread_conn_map_t * curr = NULL;
-    
-    down_read( &thread_conn_lock );
-    
-    list_for_each_entry( curr, &thread_conn_head, list )
+    thread_response_map_t * curr = NULL;
+    bool found = false;
+    bool lock_active = !rundown_in_progress;
+
+    if ( rundown )
     {
-        if ( id == curr->message_id )
+        down_read( &rundown_mapping_lock );
+        list_for_each_entry( curr, &rundown_mapping_head, rundown_list )
+        {
+            if ( id == curr->message_id )
+            {
+                found = true;
+                break;
+            }
+        }
+        up_read( &rundown_mapping_lock );
+        pr_debug( "ID %lx found in rundown list? %d\n",
+                  (unsigned long) id, found );
+    }
+    else
+    {
+        if ( lock_active )
+        {
+            down_read( &active_mapping_lock );
+        }
+        list_for_each_entry( curr, &active_mapping_head, active_list )
+        {
+            if ( id == curr->message_id )
+            {
+                found = true;
+                break;
+            }
+        }
+        if ( lock_active )
+        {
+            up_read( &active_mapping_lock );
+        }
+        pr_debug( "ID %lx found in active list? %d\n",
+                  (unsigned long) id, found );
+    }
+
+    if ( !found )
+    {
+        curr = NULL;
+    }
+
+ErrorExit:
+    return curr;
+}
+
+
+// Caller must hold sock_list_sem
+
+static int
+destroy_socket( thread_response_map_t * threadresp,
+                mw_socket_fd_t          mwsock,
+                bool                    send_close )
+{
+    open_mw_socket_t * curr = NULL;
+    open_mw_socket_t * next = NULL;
+    bool found = false;
+    int rc = 0;
+
+    pr_debug( "Destroying socket %x (PID %d), send_close=%d\n",
+              mwsock, threadresp->pid, send_close );
+
+    list_for_each_entry_safe( curr, next, &threadresp->open_socket_list, list )
+    {
+        if ( curr->mwsockfd == mwsock )
+        {
+            found = true;
+            list_del( &curr->list );            
+            break;
+        }
+    }
+    
+    if ( !found )
+    {
+        pr_err( "Socket %x not found!\n", mwsock );
+        rc = -ENOENT;
+        goto ErrorExit;
+    }
+
+    kmem_cache_free( open_socket_slab, curr );
+
+    if ( send_close )
+    {
+        rc = internal_close_mwsock( threadresp, mwsock );
+        if ( rc )
         {
             goto ErrorExit;
         }
-    } // for
-
-    // Not found
-    curr = NULL;
+    }
 
 ErrorExit:
-    up_read( &thread_conn_lock );
-    return curr;
+    return rc;
 }
 
 
-// Caller must hold thread_conn_lock for write
+static int
+track_socket( thread_response_map_t * threadresp,
+              mw_socket_fd_t      sockfd )
+{
+    int rc = 0;
+    open_mw_socket_t * curr = NULL;
+
+    // XXXX: use SLAB
+    curr = kmem_cache_alloc( open_socket_slab, GFP_KERNEL ); 
+    if ( NULL == curr )
+    {
+        pr_err( "kmem_cache_alloc failed\n" );
+        rc = -ENOMEM;
+        goto ErrorExit;
+    }
+
+    curr->mwsockfd = sockfd;
+
+    down_write( &threadresp->sock_list_sem );
+    pr_debug( "Associated socket %x with PID %d\n", sockfd, threadresp->pid );
+    list_add( &curr->list, &threadresp->open_socket_list );
+    up_write( &threadresp->sock_list_sem );
+
+ErrorExit:
+    return rc;
+}
+
 
 static void
-destroy_thread_conn_map( thread_conn_map_t ** tcmap )
+destroy_thread_response_map( thread_response_map_t ** ThreadRespMap )
 {
-    // Release the waiter
-    up( &( (*tcmap)->data_pending ) );
+    // Convenience variable
+    thread_response_map_t * threadresp = *ThreadRespMap;
+
+    open_mw_socket_t * curr = NULL;
+    open_mw_socket_t * next = NULL;
+
+    int rc = 0;
+
+    pr_debug( "Moving mapping for PID %d TG %d (last message ID 0x%llx) to rundown list\n",
+              threadresp->pid, threadresp->tgid, threadresp->message_id );
+
+    // Indicate to that we've initiated destruction. This means we
+    // hold thread_response_map.
+
+    // Move the mapping from the active list to the rundown list
+    threadresp->rundown = true;
+
+    down_write( &rundown_mapping_lock );
+    list_add( &threadresp->rundown_list, &rundown_mapping_head );
+    list_del( &threadresp->active_list );
+    up_write( &rundown_mapping_lock );
+
+    //down_write( &active_mapping_lock );
+
+    //up_write( &active_mapping_lock );
+
+    // Close all the open sockets for this mapping
+
+    // XXXX: lock the list
+    down_write( &threadresp->sock_list_sem );
+    list_for_each_entry_safe( curr, next, &threadresp->open_socket_list, list )
+    {
+        rc = destroy_socket( threadresp, curr->mwsockfd, true );
+        if ( rc && rc != -EINTR )
+        {
+            // -EINTR means we sent the close() request but were
+            // interrupted while waiting for the response.
+            pr_err( "Unexpected rc = %d\n", rc );
+            break;
+        }
+    }
+
+    up_write( &threadresp->sock_list_sem );
+
     
-    pr_debug( "Removing mapping for PID %d TG %d (last message ID 0x%llx)\n",
-              (*tcmap)->pid, (*tcmap)->tgid, (*tcmap)->message_id );
-
-    list_del( &( (*tcmap)->list ) );
-
-    kfree( *tcmap );
-    *tcmap = NULL;
+    // Remove from the rundown list
+    pr_debug( "Removing Thread Response struct for PID %d from rundown list\n",
+              threadresp->pid );
+    down_write( &rundown_mapping_lock );
+    list_del( &threadresp->rundown_list );
+    up_write( &rundown_mapping_lock );
+    
+    kmem_cache_free( threadresp_slab, threadresp );
+    *ThreadRespMap = NULL;
 }
 
 
@@ -509,7 +716,7 @@ consume_response_worker( void * Data )
     int rc = 0;
     bool available = false;
     mt_response_generic_t * response = NULL;
-    thread_conn_map_t * conn = NULL;
+    thread_response_map_t * conn = NULL;
 
     pr_info( "Process %d created to consume messages on the ring buffer\n",
              current->pid );
@@ -533,7 +740,9 @@ consume_response_worker( void * Data )
              current->pid, RING_SIZE( &front_ring ) );
 
     // Consume responses until the module is unloaded. When it is
-    // unloaded, consume whatever is still on the ring, then quit.
+    // unloaded, consume whatever is still on the ring, then
+    // quit. Only leave this loop on a requested exit or a fatal
+    // error.
     while( true )
     {
         do
@@ -562,7 +771,7 @@ consume_response_worker( void * Data )
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
 
-        pr_debug( "Response ID %lx size %x type %d on ring at idx %d\n",
+        pr_debug( "Response ID %lx size %x type %x on ring at idx %x\n",
                   (unsigned long)response->base.id,
                   response->base.size, response->base.type,
                   front_ring.rsp_cons );
@@ -577,19 +786,26 @@ consume_response_worker( void * Data )
         }
 
         // Hereafter: Advance index as soon as we're done with the
-        // item in the ring bufer.
+        // item in the ring buffer.
 
-        conn = find_thread_conn_map_by_message_id( response->base.id );
+        // Look for the ID in the rundown list first, then in active list
+        conn = find_thread_response_map_by_id( response->base.id, true );
         if ( NULL == conn )
         {
-            // This can happen if the process dies between issuing a
-            // request and receiving the response.
-            pr_err( "Received response for unknown request. "
-                     "Did the process die?\n" );
-            ++front_ring.rsp_cons;
-            continue;
+            // Look in the active list
+            conn = find_thread_response_map_by_id( response->base.id, false );
+            if ( NULL == conn )
+            {
+                // This can happen if the process dies between issuing a
+                // request and receiving the response.
+                pr_err( "Received response %lx for unknown request. "
+                        "Did the process die?\n",
+                        (unsigned long)response->base.id );
+                ++front_ring.rsp_cons;
+                continue;
+            }
         }
-        
+
         // Compare size of response to permitted size.
         if ( response->base.size > sizeof( conn->response ) )
         {
@@ -598,12 +814,42 @@ consume_response_worker( void * Data )
             response->base.size = sizeof( conn->response );
         }
 
+        // If this response involves socket creation or destruction,
+        // we need to take certain actions. If destruction has been
+        // started, then don't re-attempt it! Whether or not the
+        // destruction succeeds, fall-through so the waiter is
+        // notified.
+        if ( //!conn->rundown
+             MtResponseSocketClose == response->base.type )
+        {
+            if ( !conn->rundown )
+            {
+                down_write( &conn->sock_list_sem );
+            }
+
+            rc = destroy_socket( conn, response->base.sockfd, false );//conn->rundown );
+            if ( !conn->rundown )
+            {
+                up_write( &conn->sock_list_sem );
+            }
+
+            // Ignore rc
+        }
+        else if ( MtResponseSocketCreate == response->base.type )
+        {
+            rc = track_socket( conn, response->base.sockfd );
+            if ( rc )
+            {
+                goto ErrorExit;
+            }
+        }
+
         // Put the response into the connection map struct
         memcpy( &conn->response, response, response->base.size );
 
         // Update index and share it
         ++front_ring.rsp_cons;
-        //RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
+        RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
 
         up( &conn->data_pending );
     } // while
@@ -618,13 +864,18 @@ ErrorExit:
 }
 
 static int
-send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
+send_request( mt_request_generic_t *  Request,
+              mt_size_t               RequestSize,
+              thread_response_map_t * ThreadResp )
 {
     int rc = 0;
     void * dest = NULL;
-    thread_conn_map_t * connmap = NULL;
-    mt_id_t id = get_next_id();
+    mt_id_t id = 0;
+    unsigned long flags;
+    thread_response_map_t * threadresp = ThreadResp;
     
+    local_irq_save( flags ); // XXXX: check ThreadResp->rundown?
+
     pr_debug( "Attempting to send request %lx\n", (unsigned long)id );
 
     if ( !ring_prepared )
@@ -641,32 +892,47 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
     // * Map the requesting process to the request, to match with the response
     // * Flush our private indices to the shared ring
 
-    mutex_lock(&mw_req_mutex);
+    mutex_lock(&request_mutex);
 
-    // Now get this task's mapping to associate the message with the 
-    connmap = get_thread_conn_map_by_task( current, true );
-    if ( NULL == connmap )
+    if ( NULL == threadresp )
     {
-        rc = -ENOMEM;
-        goto ErrorExit;
+        threadresp = get_thread_response_map_by_task( current, true );
+        if ( NULL == threadresp )
+        {
+            rc = -ENOMEM;
+            goto ErrorExit;
+        }
     }
 
+    // This thread is running down and the request is from user mode
+    if ( NULL == ThreadResp
+         && threadresp->rundown )
+    {
+        pr_warning( "Cannot process user request during rundown\n" );
+        rc = -EIO;
+        goto ErrorExit;
+    }
+    
     // The semaphore 'data_pending' starts off locked. read_request()
     // attempts to acquire it and blocks until the worker thread
     // releases it upon receipt of a response.
 
     // Map this process' connection map to this message ID
-    connmap->message_id = id;
+    id = get_next_id();
+    threadresp->message_id = id;
 
+    pr_debug( "PID %d associated with message ID %lx\n",
+              threadresp->pid, (unsigned long)id );
+    
     // If we are awaiting a read, then we cannot write!
-    if ( connmap->awaiting_read )
+    if ( threadresp->awaiting_read )
     {
         pr_err( "Caller already called write() and must call read() next\n" );
         rc = -EPERM;
         goto ErrorExit;
     }
 
-    if ( RING_FULL(&front_ring) )
+    if ( RING_FULL( &front_ring ) )
     {
         pr_alert("Front ring is full. Is remote side up?\n");
         rc = -EAGAIN;
@@ -681,19 +947,24 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
         goto ErrorExit;
     }
 
-    pr_debug( "Sending request %lx to idx %x\n",
-              (long int) id, front_ring.req_prod_pvt );
-
-    // Copy only the request's claimed size into the ring
-    // buffer. Hereafter work with copy in ring buffer.
-    rc = copy_from_user( dest, Request, RequestSize );
-    if ( rc )
+    if ( (void *)Request > (void *)TASK_SIZE )
     {
-        pr_err( "copy_from_user failed: %d\n", rc );
-        rc = -EFAULT;
-        goto ErrorExit;
+        // Kernel memory
+        memcpy( dest, Request, RequestSize );
+    }
+    else
+    {
+        // Copy the request's claimed size into the ring buffer.
+        rc = copy_from_user( dest, Request, RequestSize );
+        if ( rc )
+        {
+            pr_err( "copy_from_user failed: %d\n", rc );
+            rc = -EFAULT;
+            goto ErrorExit;
+        }
     }
 
+    // Hereafter work with copy in ring buffer.
     ((mt_request_generic_t *)dest)->base.id = id;
 
     if ( !MT_IS_REQUEST( (mt_request_generic_t *)dest ) )
@@ -702,15 +973,16 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
         rc = -EINVAL;
         goto ErrorExit;
     }
-    
+
     // We've written to the ring; now we are awaiting a response
-    connmap->awaiting_read = true;
+    threadresp->awaiting_read = true;
     
     // Update the ring buffer only *after* the mapping is in place!
     ++front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &front_ring );
 
-    pr_debug("front_ring.req_prod_pvt: %x\n", front_ring.req_prod_pvt);
+    pr_debug( "Request %lx was sent to idx %x\n",
+              (long int) id, front_ring.req_prod_pvt-1 );
     
 ErrorExit:
 #if 0 // Rump is polling and not using the event channel
@@ -720,8 +992,8 @@ ErrorExit:
         send_evt( common_event_channel );
     }
 #endif
-    mutex_unlock(&mw_req_mutex);
-
+    mutex_unlock(&request_mutex);
+    local_irq_restore( flags );
     return rc;
 }
 
@@ -897,7 +1169,6 @@ static void vm_port_is_bound(struct xenbus_watch *w,
                              unsigned int l)
 {
    char     *is_bound_str; 
-   int       i;
 
    pr_debug("Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH);
 
@@ -969,7 +1240,7 @@ ErrorExit:
 static int __init
 mwchar_init(void)
 {
-   int   err;
+   int   rc;
 
    foreign_grant_ref = 0;
    server_region = NULL;
@@ -995,13 +1266,37 @@ mwchar_init(void)
         , "c" (mod) );
 #endif
    // Set up the structs for the thread-connection mapping
-   INIT_LIST_HEAD( &thread_conn_head );
-   init_rwsem( &thread_conn_lock );
+   INIT_LIST_HEAD( &active_mapping_head );
+   init_rwsem( &active_mapping_lock );
+
+   INIT_LIST_HEAD( &rundown_mapping_head );
+   init_rwsem( &rundown_mapping_lock );
+   
    init_completion( &ring_ready );
    
    sema_init( &event_channel_sem, 0 );
-   mutex_init( &mw_req_mutex );
+   mutex_init( &request_mutex );
 
+   open_socket_slab =
+       kmem_cache_create( "MW sockets", sizeof(open_mw_socket_t),
+                          0, 0, NULL );
+   if ( NULL == open_socket_slab )
+   {
+       pr_err( "kmem_cache_create() failed\n" );
+       rc = -ENOMEM;
+       goto ErrorExit;
+   }
+
+   threadresp_slab =
+       kmem_cache_create( "MW connection maps", sizeof(thread_response_map_t),
+                          0, 0, NULL );
+   if ( NULL == threadresp_slab )
+   {
+       pr_err( "kmem_cache_create() failed\n" );
+       rc = -ENOMEM;
+       goto ErrorExit;
+   }
+   
    // Create worker thread that reads items from the ring buffer
    worker_thread = kthread_run( &consume_response_worker,
                                 NULL,
@@ -1009,7 +1304,7 @@ mwchar_init(void)
    if ( NULL == worker_thread )
    {
        pr_err( "kthread_run() failed\n" );
-       err = -ESRCH;
+       rc = -ESRCH;
        goto ErrorExit;
    }
 
@@ -1018,8 +1313,8 @@ mwchar_init(void)
    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
    if (majorNumber < 0)
    {
-       err = majorNumber;
-       pr_err( "register_chrdev failed: %d\n", err );
+       rc = majorNumber;
+       pr_err( "register_chrdev failed: %d\n", rc );
        goto ErrorExit;
    }
 
@@ -1027,8 +1322,8 @@ mwchar_init(void)
    mwcharClass = class_create(THIS_MODULE, CLASS_NAME);
    if (IS_ERR(mwcharClass))
    {
-       err = PTR_ERR(mwcharClass);
-       pr_err( "class_create failed: %d\n", err );
+       rc = PTR_ERR(mwcharClass);
+       pr_err( "class_create failed: %d\n", rc );
        goto ErrorExit;
    }
 
@@ -1040,29 +1335,29 @@ mwchar_init(void)
                                 DEVICE_NAME);
    if (IS_ERR(mwcharDevice))
    {
-      err = PTR_ERR(mwcharDevice);
-      pr_err( "device_create failed: %d\n", err );
+      rc = PTR_ERR(mwcharDevice);
+      pr_err( "device_create failed: %d\n", rc );
       goto ErrorExit;
    }
 
    // Set all protocol keys to zero
-   err = initialize_keys();
-   if ( err )
+   rc = initialize_keys();
+   if ( rc )
    {
-       pr_err("Key initialization failed: %d\n", err );
+       pr_err("Key initialization failed: %d\n", rc );
        goto ErrorExit;
    }
    
    // 1. Write Dom Id for Server to Key
-   err = write_server_id_to_key();
-   if ( err )
+   rc = write_server_id_to_key();
+   if ( rc )
    {
        goto ErrorExit;
    }
 
    // 2. Watch Client Id XenStore Key
-   err = register_xenbus_watch(&client_id_watch);
-   if (err)
+   rc = register_xenbus_watch(&client_id_watch);
+   if (rc)
    {
       pr_err("Failed to set client id watcher\n");
    }
@@ -1072,8 +1367,8 @@ mwchar_init(void)
    }
 
    // 3. Watch for our port being bound
-   err = register_xenbus_watch(&evtchn_bound_watch);
-   if (err)
+   rc = register_xenbus_watch(&evtchn_bound_watch);
+   if (rc)
    {
       pr_err("Failed to set client local port watcher\n");
    }
@@ -1083,19 +1378,19 @@ mwchar_init(void)
    }
 
 ErrorExit:
-   if ( err )
+   if ( rc )
    {
        mwchar_exit();
    }
-   return err;
+   return rc;
 }
 
 /** @brief The driver cleanup function
  */
 static void mwchar_exit(void)
 {
-    thread_conn_map_t * curr = NULL;
-    thread_conn_map_t * next = NULL;
+    thread_response_map_t * curr = NULL;
+    thread_response_map_t * next = NULL;
 
     pending_exit = true;
 
@@ -1163,17 +1458,26 @@ static void mwchar_exit(void)
       free_unbound_evt_chn();
    }
 
-   mutex_destroy( &mw_req_mutex );
+   mutex_destroy( &request_mutex );
 
-   // Destroy all the remaining mappings. Lock the list.
-   down_write( &thread_conn_lock );
+   down_write( &active_mapping_lock );
+    rundown_in_progress = true;
 
-   list_for_each_entry_safe( curr, next, &thread_conn_head, list )
+   // Destroy all the remaining mappings.
+   list_for_each_entry_safe( curr, next, &active_mapping_head, active_list )
    {
-       destroy_thread_conn_map( &curr );
+       destroy_thread_response_map( &curr );
    }
+   up_write( &active_mapping_lock );
 
-   up_write( &thread_conn_lock );
+   if ( open_socket_slab )
+   {
+       kmem_cache_destroy( open_socket_slab );
+   }
+   if ( threadresp_slab )
+   {
+       kmem_cache_destroy( threadresp_slab );
+   }
 
    pr_debug("cleanup is complete\n");
 }
@@ -1203,54 +1507,27 @@ static ssize_t
 dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
 {
    int rc = 0; 
-   thread_conn_map_t * connmap = NULL;
+   thread_response_map_t * threadresp = NULL;
    mt_size_t resp_size = 0;
 
-   if ( !ring_prepared )
-    {
-        pr_err( "Ring has not been initialized\n" );
-        rc = -ENODEV;
-        goto ErrorExit;
-    }
 
-   connmap = get_thread_conn_map_by_task( current, false );
-   if ( NULL == connmap )
+   threadresp = get_thread_response_map_by_task( current, false );
+   if ( NULL == threadresp )
    {
        pr_err( "read() called from thread that hasn't issued write()\n" );
        rc = -EPERM;
        goto ErrorExit;
    }
 
-   pr_debug( "Waiting for response %lx to arrive\n",
-             (unsigned long) connmap->message_id );
-   
-   // Now we have the mapping for this thread. Wait for data to
-   // arrive. This may block the calling process.
-
-   if ( down_interruptible( &connmap->data_pending ) )
+   rc = internal_await_response( threadresp );
+   if ( rc )
    {
-       // Signal encountered, semaphore not acquired. The caller must try again.
-       pr_err( "read() was interrupted\n" );
-       rc = -EINTR;
        goto ErrorExit;
    }
-
-   if ( !connmap->awaiting_read )
-   {
-       pr_err( "Caller hasn't called write() prior to this read()\n" );
-       rc = -EPERM;
-       goto ErrorExit;
-   }
-
-   connmap->awaiting_read = false;
    
-   resp_size = connmap->response.base.size;
+   resp_size = threadresp->response.base.size;
 
-   pr_debug( "Response %lx (size %x) has arrived\n",
-             (unsigned long) connmap->message_id,
-             resp_size );
-
-   // An item is available and is in connmap. Process it.
+   // An item is available and is in threadresp. Process it.
    if ( len < resp_size )
    {
        pr_err( "User buffer too small for response.\n" );
@@ -1260,7 +1537,7 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    
    // Data has been received. Write it to the user buffer.
    rc = copy_to_user( buffer,
-                      &connmap->response,
+                      &threadresp->response,
                       resp_size );
    if ( rc )
    {
@@ -1269,15 +1546,6 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
        goto ErrorExit;
    }
 
-/*
-  if ( pending_exit )
-  {
-  pr_err( "Driver is unloading\n" );
-  rc = -EINTR;
-  goto ErrorExit;
-  }
-*/
-
    // Success
    rc = resp_size;
 
@@ -1285,6 +1553,133 @@ ErrorExit:
    pr_debug( "Returning %d\n", rc );
    return rc;
 }
+
+
+static int
+internal_await_response( thread_response_map_t * threadresp )
+{
+    int rc = 0;
+    
+    if ( !ring_prepared )
+    {
+        pr_err( "Ring has not been initialized\n" );
+        rc = -ENODEV;
+        goto ErrorExit;
+    }
+
+    if ( !threadresp->awaiting_read )
+    {
+        pr_err( "Caller hasn't called write() prior to this read()\n" );
+        rc = -EPERM;
+        goto ErrorExit;
+    }
+
+    // Now we have the mapping for this thread. Wait for data to
+    // arrive. This may block the calling process.
+    pr_debug( "Waiting for response %lx to arrive (interruptible=%d)\n",
+              (unsigned long) threadresp->message_id,
+              !threadresp->rundown );
+#if 0
+    for ( int i = 0; i < MW_INTERNAL_MAX_WAIT_ATTEMPTS; ++i )
+    {
+        if ( down_interruptible( &threadresp->data_pending ) )
+        {
+            // Signal encountered, semaphore not acquired.
+            // The caller must try again.
+            pr_err( "read() was interrupted\n" );
+
+            // The response will be dropped; the write/read pair must be
+            // done again
+            threadresp->awaiting_read = false;
+            rc = -EINTR;
+            continue;
+        }
+        else
+        {
+            rc = 0;
+            break;
+        }
+    }
+
+    if ( rc == -EINTR )
+    {
+        pr_debug( "Interrupted too many times. Giving up.\n" );
+        goto ErrorExit;
+    }
+#endif
+    
+    if ( threadresp->rundown )
+    {
+        // XXXX: Is this wise? It could end badly if things go really
+        // south, e.g. the Ring buffer gets corrupted, the Rump
+        // crashes, etc.
+        down( &threadresp->data_pending );
+    }
+    else
+    {
+        if ( down_interruptible( &threadresp->data_pending ) )
+        {
+            // Signal encountered, semaphore not acquired.
+            // The caller must try again.
+            pr_err( "read() was interrupted\n" );
+
+            // The response will be dropped; the write/read pair must be
+            // done again
+            threadresp->awaiting_read = false;
+            rc = -EINTR;
+            goto ErrorExit;        
+        }
+    }
+    
+    pr_debug( "Response %lx (size %x) has arrived\n",
+              (unsigned long) threadresp->message_id,
+              threadresp->response.base.size );
+
+    threadresp->awaiting_read = false;
+    
+ErrorExit:
+    return rc;
+}
+
+//
+// Close an MW socket. Must be called from the task that created it
+// (i.e. via dev_release).
+//
+static int
+internal_close_mwsock( thread_response_map_t * threadresp,
+                       mw_socket_fd_t      sockfd )
+{
+    int rc = 0;
+    mt_request_socket_close_t req;
+
+    req.base.sig    = MT_SIGNATURE_REQUEST;
+    req.base.type   = MtRequestSocketClose;
+    req.base.size   = MT_REQUEST_SOCKET_CLOSE_SIZE;
+    req.base.id     = 0; // assigned by send_request()
+    req.base.sockfd = sockfd;
+
+    rc = send_request( (mt_request_generic_t *) &req,
+                       req.base.size,
+                       threadresp );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Now await the response in this thread's context
+    rc = internal_await_response( threadresp );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    pr_debug( "Successfully closed socket %x\n", sockfd );
+
+ErrorExit:
+    return rc;
+}
+
+
 
 /** @brief Writes a request to the shared ring buffer.
  *
@@ -1331,7 +1726,7 @@ dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
         goto ErrorExit;
     }
 
-    rc = send_request( req, req_size );
+    rc = send_request( req, req_size, NULL );
     if ( rc )
     {
         goto ErrorExit;
@@ -1364,23 +1759,27 @@ ErrorExit:
  */
 static int dev_release(struct inode *inodep, struct file *filep)
 {
-    thread_conn_map_t * currtc = NULL;
-    thread_conn_map_t * nexttc = NULL;
-    
+    thread_response_map_t * currtc = NULL;
+    thread_response_map_t * nexttc = NULL;
+
+    pr_debug( "Device release initiated\n" );
+
     // Release all the mappings associated with current's thread
     // group.
-    
-    down_write( &thread_conn_lock );
 
-    list_for_each_entry_safe( currtc, nexttc, &thread_conn_head, list )
+    down_write( &active_mapping_lock );
+    rundown_in_progress = true;
+
+    list_for_each_entry_safe( currtc, nexttc, &active_mapping_head, active_list )
     {
         if ( currtc->tgid == current->tgid )
         {
-            destroy_thread_conn_map( &currtc );
+            destroy_thread_response_map( &currtc );
         }
     }
 
-    up_write( &thread_conn_lock );
+    rundown_in_progress = false;
+    up_write( &active_mapping_lock );
 
     pr_debug("Device successfully closed\n");
 

@@ -37,7 +37,6 @@
 
 #define DEV_FILE "/dev/mwchar"
 #define BUF_SZ   1024
-#define REGISTER_SIGNAL_HANDLER 0
 
 
 static int devfd = -1; // FD to MW device
@@ -90,76 +89,6 @@ get_libc_symbol( void ** Addr, const char * Symbol )
     return *Addr;
 }
 
-
-//
-// Track the sockets we have opened from MW
-//
-#define MAX_SOCKETS 1024
-static mw_socket_fd_t g_open_sockets[ MAX_SOCKETS ];
-static pthread_mutex_t socket_mtx;
-
-static void
-init_open_sockets( void )
-{
-    for( int i = 0; i < MAX_SOCKETS; ++i )
-    {
-        g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
-    }
-}
-
-static void
-fini_open_sockets( void )
-{
-    pthread_mutex_lock( &socket_mtx );
-
-    for( int i = 0; i < MAX_SOCKETS; ++i )
-    {
-        if (  MT_INVALID_SOCKET_FD == g_open_sockets[ i ] )
-        {
-            continue;
-        }
-
-        // Close invalidates the array entry
-        close( g_open_sockets[ i ] );
-    }
-
-    pthread_mutex_unlock( &socket_mtx );
-}
-
-
-static int
-insert_open_socket( mw_socket_fd_t NewSock )
-{
-    ssize_t rc = 0;
-
-    for( int i = 0; i < MAX_SOCKETS; ++i )
-    {
-        if (  MT_INVALID_SOCKET_FD == g_open_sockets[ i ] )
-        {
-            g_open_sockets[ i ] = NewSock;
-            goto ErrorExit;
-        }
-    }
-
-    rc = ENOMEM;
-    
-ErrorExit:
-    return rc;
-}
-
-
-static void
-remove_open_socket( mw_socket_fd_t SockFd )
-{
-    for( int i = 0; i < MAX_SOCKETS; ++i )
-    {
-        if ( SockFd == g_open_sockets[ i ] )
-        {
-            g_open_sockets[ i ] = MT_INVALID_SOCKET_FD;
-            break;
-        }
-    }
-}
 
 static ssize_t
 read_response( mt_response_generic_t * Response )
@@ -368,14 +297,6 @@ socket( int domain,
        return -1;
    }
 
-   // Returns socket number on success
-   if ( insert_open_socket( response.base.sockfd ) )
-   {
-       DEBUG_PRINT( "Failure: cannot track this socket\n" );
-       close( response.base.sockfd );
-       response.base.sockfd = MT_INVALID_SOCKET_FD;
-   }
-   
    DEBUG_PRINT( "Returning socket 0x%x\n", response.base.sockfd );
    return (int)response.base.sockfd;
 }
@@ -413,8 +334,6 @@ close( int SockFd )
     //DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
     //DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
 
-    remove_open_socket( SockFd );
-    
     if ( response.base.status )
     {
         DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
@@ -730,11 +649,8 @@ static void
 cleanup( void )
 {
     // In case of process crash, the kernel will close all the open
-    // FDs for us. However, the FDs from Rump are not registered with
-    // the kernel. We should have an easy way to do this, e.g. tell
-    // Rump to close all sockets associated with this PID.
-
-    fini_open_sockets();
+    // FDs for us, including the MW sockets which the driver tracks on
+    // our behalf.
 
     if ( g_dlh_libc )
     {
@@ -743,108 +659,12 @@ cleanup( void )
     }
 }
 
-#if REGISTER_SIGNAL_HANDLER
-
-static void
-sighandler( int SigNo )
-{
-    struct sigaction sa;
-    sa.sa_handler = SIG_DFL;
-    sa.sa_flags = 0;
-
-    DEBUG_PRINT( "Received signal %d\n", SigNo );
-    cleanup();
-    DEBUG_PRINT( "Quitting due to signal %d\n", SigNo );
-
-    pthread_kill( pthread_self(), SIGPIPE );
-    /*
-    // Block every signal during the handler
-    sigfillset( &sa.sa_mask );
-    if (sigaction(SIGHUP, &sa, NULL) == -1)
-    {
-        // Unsafe call
-        perror("Error: cannot handle SIGUP");
-        }
-    */
-}
-
-static int
-register_sighandlers( void )
-{
-    int rc = 0;
-    struct sigaction sa;
-
-    // Setup the sighub handler
-    sa.sa_handler = &sighandler;
-
-    // Restart the system call, if at all possible
-    sa.sa_flags = 0; //SA_RESTART;
-
-    // Block every signal during the handler
-    sigfillset( &sa.sa_mask );
-
-    // Intercept these signals
-    if (sigaction(SIGHUP, &sa, NULL) == -1)
-    {
-        perror("Error: cannot handle SIGUP");
-        rc = errno;
-        goto ErrorExit;
-    }
-
-    if (sigaction(SIGINT, &sa, NULL) == -1)
-    {
-        perror("Error: cannot handle SIGINT");
-        rc = errno;
-        goto ErrorExit;
-    }
-
-
-    /*
-    if ( SIG_ERR == signal( SIGINT, sighandler ) )
-    {
-        rc = errno;
-        goto ErrorExit;
-    }
-
-    if ( SIG_ERR == signal( SIGSEGV, sighandler ) )
-    {
-        rc = errno;
-        goto ErrorExit;
-    }
-
-    if ( SIG_ERR == signal( SIGILL, sighandler ) )
-    {
-        rc = errno;
-        goto ErrorExit;
-    }
-
-    if ( SIG_ERR == signal( SIGPIPE, sighandler ) )
-    {
-        rc = errno;
-        goto ErrorExit;
-    }
-    */
-ErrorExit:
-    return rc;
-}
-#endif
-
 
 void 
 _init( void )
 {
     int rc = 0;
     DEBUG_PRINT("Intercept module loaded\n");
-
-    pthread_mutex_init( &socket_mtx, NULL );
-
-#if REGISTER_SIGNAL_HANDLER
-    rc = register_sighandlers();
-    if ( rc )
-    {
-        exit(1);
-    }
-#endif
 
 #ifdef NODEVICE
     devfd = open("/dev/null", O_RDWR);
@@ -868,8 +688,6 @@ _init( void )
         exit(1);
     }
 
-    init_open_sockets();
-    
     get_libc_symbol( (void **) &libc_read,     "read"     );
     get_libc_symbol( (void **) &libc_write,    "write"    );
     get_libc_symbol( (void **) &libc_close,    "close"    );
@@ -885,7 +703,6 @@ void
 _fini( void )
 {
     cleanup();
-    pthread_mutex_destroy( &socket_mtx );
     DEBUG_PRINT("Intercept module unloaded\n");
 }
 

@@ -315,9 +315,10 @@ release_buffer_item( buffer_item_t * BufferItem )
 {
     BufferItem->assigned_thread = NULL;
 
-    DEBUG_PRINT( "Releasing buffer %d\n", BufferItem->idx );
-
     (void) atomic_cas_32( &BufferItem->in_use, 1, 0 );
+
+    DEBUG_PRINT( "Released buffer %d, busy? %d\n",
+                 BufferItem->idx, BufferItem->in_use );
 }
 
 
@@ -403,8 +404,6 @@ release_worker_thread( thread_item_t * ThreadItem )
 {
     // Verify that the thread's workqueue is empty
 
-    DEBUG_PRINT( "Releasing worker thread %d\n", ThreadItem->idx );
-
     if ( !workqueue_is_empty( ThreadItem->work_queue ) )
     {
         debug_print_state();
@@ -412,7 +411,11 @@ release_worker_thread( thread_item_t * ThreadItem )
     }
     
     (void)atomic_cas_32( &ThreadItem->in_use, 1, 0 );
-    
+
+    DEBUG_PRINT( "Released worker thread %d, busy? %d\n",
+                 ThreadItem->idx, ThreadItem->in_use );
+
+
     // N.B. The thread might have never been reserved
 }
 
@@ -987,6 +990,12 @@ message_dispatcher( void )
             }
             goto ErrorExit;
         }
+
+        debug_print_state();
+        DEBUG_PRINT( "Read request %lx type %x size %x off ring\n",
+                     (unsigned long) myitem->request->base.id,
+                     myitem->request->base.type,
+                     myitem->request->base.size );
 
         // Assign the buffer to a thread. If fails, reports to PVM but
         // keeps going.

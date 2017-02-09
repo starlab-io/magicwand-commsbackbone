@@ -29,7 +29,7 @@
 
 #include "message_types.h" // real program should not use this!!
 
-#define THREAD_COUNT    15
+#define THREAD_COUNT    3
 #define OPEN_CLOSE_CNT  2
 #define MESSAGE_COUNT   5
 
@@ -59,14 +59,15 @@ thread_open_write_close( void * Ignored )
 
     for ( int i = 0; i < OPEN_CLOSE_CNT; i++ )
     {
-        printf( "Thread number %lx\n", pthread_self() );
-
         fd = socket( AF_INET, SOCK_STREAM, 0 );
         if ( fd < 0 )
         {
             printf( "socket failed: %x\n", errno );
             //continue;
         }
+
+        printf( "Thread number %lx has socket %x\n", pthread_self(), fd );
+
 /*
         if ( connect( fd, (struct sockaddr *) &server, sizeof(server) ) )
         {
@@ -225,7 +226,6 @@ thread_func_1( void *data )
     
     for(cnt = 0;cnt < OPEN_CLOSE_CNT; ++cnt)
     {
-
         printf("Thread number %lx\n", pthread_self());
         // 1> Call Socket
         socket_desc = socket( AF_INET, SOCK_STREAM, 0 );
@@ -336,8 +336,8 @@ int main(int argc , char *argv[])
     }
     printf( "Server is %s:%d\n", server_ip, server_port_num );
         
-    run_writer_threads();
-    // run_open_write_close_threads();
+    //run_writer_threads();
+    run_open_write_close_threads();
 
 ErrorExit:
     return err;

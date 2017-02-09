@@ -429,7 +429,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
     
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing connection\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
