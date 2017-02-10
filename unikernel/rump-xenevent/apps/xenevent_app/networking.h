@@ -6,7 +6,6 @@
 #include "message_types.h"
 #include "threadpool.h"
 
-
 int
 xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                       OUT mt_response_socket_create_t * Response,

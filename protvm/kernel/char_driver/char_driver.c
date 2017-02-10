@@ -84,13 +84,6 @@
 // Record performance metrics?
 #define MW_DO_PERFORMANCE_METRICS 0
 
-// down() blocks and triggers kernel warning message (good for debugging)
-//
-// down_interruptible() blocks until interrupt and does not trigger message
-//#define SEM_DOWN(x) down((x))
-#define SEM_DOWN(x) down_interruptible((x))
-
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Mason");
 MODULE_DESCRIPTION("A driver to support MagicWand's INS");
@@ -161,6 +154,8 @@ static struct mutex mw_req_mutex;
 static struct list_head    thread_conn_head;
 static struct rw_semaphore thread_conn_lock;
 static struct completion   ring_ready;
+static bool                ring_prepared;
+
 // Only this single thread reads from the ring buffer
 static struct task_struct * worker_thread;
 static bool pending_exit = false;
@@ -516,59 +511,70 @@ consume_response_worker( void * Data )
     mt_response_generic_t * response = NULL;
     thread_conn_map_t * conn = NULL;
 
-    pr_debug( "Worker thread spawned in process %d...\n",
+    pr_info( "Process %d created to consume messages on the ring buffer\n",
              current->pid );
-    do
+
+    // Wait for the ring buffer's initialization to complete
+    rc = wait_for_completion_interruptible( &ring_ready );
+    if ( rc < 0 )
     {
-        rc = wait_for_completion_timeout( &ring_ready, 0x10 );
-        if ( rc > 0 )
-        {
-            break;
-        }
-        if ( pending_exit )
-        {
-            goto ErrorExit;
-        }
-    } while ( true );
+        pr_info( "Received interrupt before ring ready\n" );
+        goto ErrorExit;
+    }
 
-    pr_debug( "Waiting for responses on the ring buffer in process %d...\n",
-             current->pid );
+    // Completion succeeded
+    if ( pending_exit )
+    {
+        pr_info( "Detecting pending exit. Worker thread exiting.\n" );
+        goto ErrorExit;
+    }
 
+    pr_info( "Proc %d awaiting responses from ring buffer (0x%x slots).\n",
+             current->pid, RING_SIZE( &front_ring ) );
+
+    // Consume responses until the module is unloaded. When it is
+    // unloaded, consume whatever is still on the ring, then quit.
     while( true )
     {
         do
         {
-            available = RING_HAS_UNCONSUMED_RESPONSES(&front_ring);
-            if ( pending_exit )
-            {
-                pr_info( "Detected pending exit request\n" );
-                goto ErrorExit;
-            }
-
+            available = RING_HAS_UNCONSUMED_RESPONSES( &front_ring );
             if ( !available )
             {
-                // must be smarter -- infinite wait is bad
-                SEM_DOWN(&event_channel_sem);
+                if ( pending_exit )
+                {
+                    // Nothing available and waiting on exit
+                    goto ErrorExit;
+                }
+
+                if ( down_interruptible( &event_channel_sem) )
+                {
+                    pr_info( "Received interrupt in worker thread\n" );
+                    goto ErrorExit;
+                }
             }
         } while (!available);
 
-        // An item is available. Consume it. Policy: continue upon
-        // error.
+        // An item is available. Consume it.
+        // Policy: continue upon error.
+        // Policy: in case of pending exit, keep consuming the requests until
+        //         there are no more
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE(&front_ring, front_ring.rsp_cons);
+
+        pr_debug( "Response ID %lx size %x type %d on ring at idx %d\n",
+                  (unsigned long)response->base.id,
+                  response->base.size, response->base.type,
+                  front_ring.rsp_cons );
 
         if ( !MT_IS_RESPONSE( response ) )
         {
             // Fatal: The ring is corrupted.
-            pr_crit( "Received data that is not a response\n" );
+            pr_crit( "Received data that is not a response at idx %d\n",
+                     front_ring.rsp_cons );
             rc = -EIO;
             goto ErrorExit;
         }
-
-        pr_debug( "Response ID %lx size %x on ring at idx %d\n",
-                  (unsigned long)response->base.id,
-                  response->base.size,
-                  front_ring.rsp_cons );
 
         // Hereafter: Advance index as soon as we're done with the
         // item in the ring bufer.
@@ -594,12 +600,20 @@ consume_response_worker( void * Data )
 
         // Put the response into the connection map struct
         memcpy( &conn->response, response, response->base.size );
+
+        // Update index and share it
         ++front_ring.rsp_cons;
+        //RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
 
         up( &conn->data_pending );
     } // while
 
 ErrorExit:
+    if ( ring_prepared )
+    {
+        // Push our front_ring data to shared ring
+        RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
+    }
     do_exit( rc );
 }
 
@@ -612,6 +626,13 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
     mt_id_t id = get_next_id();
     
     pr_debug( "Attempting to send request %lx\n", (unsigned long)id );
+
+    if ( !ring_prepared )
+    {
+        pr_err( "Ring has not been initialized\n" );
+        rc = -ENODEV;
+        goto ErrorExit;
+    }
 
     // Hold the lock for the duration of this function. All of these
     // must be done with no interleaving:
@@ -647,7 +668,7 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
 
     if ( RING_FULL(&front_ring) )
     {
-        pr_alert("Front ring is full\n");
+        pr_alert("Front ring is full. Is remote side up?\n");
         rc = -EAGAIN;
         goto ErrorExit;
     }
@@ -663,7 +684,8 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
     pr_debug( "Sending request %lx to idx %x\n",
               (long int) id, front_ring.req_prod_pvt );
 
-    // Copy only the request's claimed size into the ring buffer
+    // Copy only the request's claimed size into the ring
+    // buffer. Hereafter work with copy in ring buffer.
     rc = copy_from_user( dest, Request, RequestSize );
     if ( rc )
     {
@@ -672,10 +694,8 @@ send_request( mt_request_generic_t * Request, mt_size_t RequestSize )
         goto ErrorExit;
     }
 
-    // Update the ID in the ring buffer
     ((mt_request_generic_t *)dest)->base.id = id;
 
-    // Validate the request in the ring buffer ...
     if ( !MT_IS_REQUEST( (mt_request_generic_t *)dest ) )
     {
         pr_err( "Invalid request given\n" );
@@ -718,6 +738,7 @@ init_shared_ring(void)
    SHARED_RING_INIT(shared_ring);
    FRONT_RING_INIT(&front_ring, shared_ring, shared_mem_size);
 
+   ring_prepared = true;
    complete( &ring_ready );
 }
 
@@ -901,11 +922,6 @@ static void vm_port_is_bound(struct xenbus_watch *w,
 
    pr_debug( "Bound event channel %d to irq: %d\n",
              common_event_channel, irq );
-
-   for ( i = 0; i < 1; i++ )
-   {
-       pr_debug( "NOT Sending event via IRQ %d\n", irq );
-   }
 }
 
 static struct xenbus_watch evtchn_bound_watch = {
@@ -997,9 +1013,6 @@ mwchar_init(void)
        goto ErrorExit;
    }
 
-   pr_info("Created process %d to consume messages on the ring buffer\n",
-           worker_thread->pid);
-
    // Try to dynamically allocate a major number for the device --
    // more difficult but worth it
    majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
@@ -1086,15 +1099,18 @@ static void mwchar_exit(void)
 
     pending_exit = true;
 
+    // Kick the worker thread. It might be waiting for the ring to
+    // become ready, or it might be waiting for responses to arrive on
+    // the ring.
+    complete( &ring_ready );
+    up( &event_channel_sem );
+
     if ( NULL != worker_thread )
     {
-        // Kick the thread to make it resume
-        up( &event_channel_sem );
-        
-        kthread_stop( worker_thread );
-        worker_thread = NULL;
+        //kthread_stop( worker_thread );
+        //worker_thread = NULL;
     }
-    
+
     if ( majorNumber >= 0 )
     {
         device_destroy(mwcharClass, MKDEV(majorNumber, 0)); // remove the device
@@ -1189,7 +1205,14 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
    int rc = 0; 
    thread_conn_map_t * connmap = NULL;
    mt_size_t resp_size = 0;
-   
+
+   if ( !ring_prepared )
+    {
+        pr_err( "Ring has not been initialized\n" );
+        rc = -ENODEV;
+        goto ErrorExit;
+    }
+
    connmap = get_thread_conn_map_by_task( current, false );
    if ( NULL == connmap )
    {
@@ -1227,13 +1250,6 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
              (unsigned long) connmap->message_id,
              resp_size );
 
-   if ( pending_exit )
-   {
-       pr_err( "Driver is unloading\n" );
-       rc = -EINTR;
-       goto ErrorExit;
-   }
-   
    // An item is available and is in connmap. Process it.
    if ( len < resp_size )
    {
@@ -1252,6 +1268,15 @@ dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
        rc = -EFAULT;
        goto ErrorExit;
    }
+
+/*
+  if ( pending_exit )
+  {
+  pr_err( "Driver is unloading\n" );
+  rc = -EINTR;
+  goto ErrorExit;
+  }
+*/
 
    // Success
    rc = resp_size;
