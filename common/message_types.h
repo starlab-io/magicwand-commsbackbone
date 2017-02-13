@@ -256,7 +256,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 
 
 //
-//Listen
+// Listen
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_listen
 {
@@ -389,7 +389,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 } mt_response_socket_send_t;
 
 // User must add count of filled bytes to size
-#define MT_REQUEST_SOCKET_SEND_SIZE  (sizeof(mt_request_base_t) + sizeof(uint64_t))
+#define MT_REQUEST_SOCKET_SEND_SIZE  ( sizeof(mt_request_base_t) + sizeof(uint64_t) )
 #define MT_RESPONSE_SOCKET_SEND_SIZE sizeof(mt_response_socket_send_t)
 
 

@@ -43,6 +43,9 @@ static int dummy_socket = -1; // socket for get/setsockopt
 static void * g_dlh_libc = NULL;
 
 static int
+(*libc_socket)(int domain, int type, int protocol);
+
+static int
 (*libc_read)(int fd, void *buf, size_t count);
 
 static int
@@ -75,6 +78,22 @@ static ssize_t
                  int flags,
                  struct sockaddr* src_addr,
                  socklen_t* addrlen);
+
+static int 
+(*libc_getsockopt)( int Fd,
+                    int Level,
+                    int OptName,
+                    void * OptVal,
+                    socklen_t  * OptLen );
+
+static int
+(*libc_setsockopt)( int Fd,
+                    int Level,
+                    int OptName,
+                    const void * OptVal,
+                    socklen_t OptLen );
+
+
 
 static void *
 get_libc_symbol( void ** Addr, const char * Symbol )
@@ -268,39 +287,50 @@ socket( int domain,
    mt_request_generic_t  request;
    mt_response_generic_t response;
    ssize_t rc = 0;
+
+   if( AF_INET != domain )
+   {
+       rc = libc_socket( domain, type, protocol );
+       goto ErrorExit;
+   }
    
    // XXXX: args ignored
    build_create_socket( &request );
 
    DEBUG_PRINT("Sending socket-create request\n");
-   //DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
-   //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
 
-   rc = libc_write( devfd, &request, sizeof(request)); 
-   MYASSERT( rc > 0 );
+   if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+   {
+       goto ErrorExit;
+   }
 
-   rc = read_response( (mt_response_generic_t *) &response );
-   MYASSERT( rc > 0 );
-
+   if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+   {
+       goto ErrorExit;
+   }
+    
 #endif
 
-   //DEBUG_PRINT("Create-socket response returned\n");
-   //DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
-   //DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
    if ( (int)response.base.status < 0 )
    {
        DEBUG_PRINT( "Error creating socket. Error Number: %x (%d)\n",
                     (int)response.base.status, (int)response.base.status );
        errno = -response.base.status;
        BARE_DEBUG_BREAK();
-       // Returns -1 on error
-       return -1;
+
+       rc = -1;
+       goto ErrorExit;
    }
 
    DEBUG_PRINT( "Returning socket 0x%x\n", response.base.sockfd );
-   return (int)response.base.sockfd;
+   
+    rc = (int)response.base.sockfd;
+
+ErrorExit:
+
+   return rc;
 }
 
 int
@@ -321,34 +351,34 @@ close( int SockFd )
 
     DEBUG_PRINT( "Closing MW Socket %x\n", SockFd );
     
-    //DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
-    //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
-
 #ifndef NODEVICE
-
-    rc = libc_write( devfd, &request, sizeof(request)); 
-    MYASSERT( rc > 0 );
-
-    rc = read_response( (mt_response_generic_t *) &response );
-    MYASSERT( rc > 0 );
+    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
+    
+    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
 
 #endif
 
-    //DEBUG_PRINT("Close-socket response returned %d\n",
-    //(int)response.base.status );
-    //DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
-    //DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
-
     if ( response.base.status )
     {
-        DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n", response.base.status );
+        DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n",
+                     response.base.status );
         errno = -response.base.status;
         // Returns -1 on error
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
 
     // Returns 0 on success
-    return response.base.status;
+    rc = response.base.status;
+
+ErrorExit:
+    return rc;
 }
 
 
@@ -366,14 +396,17 @@ bind( int SockFd,
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
         errno = ENOTSOCK;
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
 
-    if ( SockAddr->sa_family != AF_INET || addrlen != sizeof(struct sockaddr_in) )
+    if ( SockAddr->sa_family != AF_INET
+         || addrlen != sizeof(struct sockaddr_in) )
     {
         perror("Only AF_INET is supported at this time\n");
         errno = EINVAL;
-        return -1;
+        rc =  -1;
+        goto ErrorExit;
     }
 
     sockaddr_in = ( struct sockaddr_in * ) SockAddr;
@@ -381,16 +414,21 @@ bind( int SockFd,
     build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
 
 #ifndef NODEVICE    
+    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
     
-    rc = libc_write( devfd, &request, sizeof(request) );
-    MYASSERT( rc > 0 );
-
-    rc = read_response( (mt_response_generic_t *) &response );
-    MYASSERT( rc > 0 );
-
+    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
 #endif
 
-    return response.base.status;
+    rc = response.base.status;
+
+ErrorExit:
+    return rc;
 }
 
 
@@ -405,27 +443,36 @@ listen( int SockFd, int backlog )
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
         errno = ENOTSOCK;
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
 
     build_listen_socket( &request, SockFd, &backlog);
 
 #ifndef NODEVICE
+    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
 
-    rc = libc_write( devfd, &request, sizeof(request) );
-    MYASSERT( rc > 0 );
-
-    rc = read_response( (mt_response_generic_t *) &response );
-    MYASSERT( rc > 0 );
+    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
 
 #endif
 
     if ( response.base.status < 0 )
     {
         errno = -response.base.status;
+        rc = -1;
+        goto ErrorExit;
     }
 
-    return ( response.base.status < 0 ? -1 : response.base.status );
+    rc = response.base.status;
+
+ErrorExit:
+    return rc;
 }
 
 
@@ -442,7 +489,8 @@ accept( int SockFd,
     {
         DEBUG_PRINT("Socket file discriptor value invalid");
         errno = ENOTSOCK;
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
     
     build_accept_socket(&request, SockFd);
@@ -451,21 +499,29 @@ accept( int SockFd,
     
 #ifndef NODEVICE
     
-    rc = libc_write( devfd, &request, sizeof(request) );
-    MYASSERT( rc > 0 );
-
-    rc = read_response( (mt_response_generic_t *) &response );
-    MYASSERT( rc > 0 );
-
+    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
+    
+    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+    {
+        rc = -1;
+        goto ErrorExit;
+    }
 #endif
 
     if ( response.base.status < 0 )
     {
         errno = -response.base.status;
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
-    
-    return response.base.status;
+
+    rc = response.base.status;
+
+ErrorExit:
+    return rc;
 }
 
 
@@ -524,19 +580,22 @@ recvfrom( int    SockFd,
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
         errno = -ENOTSOCK;
-        return -1;
+        rc = -1;
+        goto ErrorExit;
     }
 
     build_recv_socket( &request, SockFd, Len, Flags, SrcAddr, AddrLen );
 
 #ifndef NODEVICE
-
-    rc = libc_write( devfd, &request, sizeof(request) );
-    MYASSERT( rc > 0 );
-
-    rc = read_response( (mt_response_generic_t *) &response );
-    MYASSERT( rc > 0 );
-
+    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
+    
+    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+    {
+        goto ErrorExit;
+    }
 #endif
     
     rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
@@ -548,6 +607,8 @@ recvfrom( int    SockFd,
     if ( response.base.status < 0 )
     {
         errno = -response.base.status;
+        rc = -1;
+        goto ErrorExit;
     }
 
     if ( response.base.type == MtResponseSocketRecvFrom )
@@ -565,7 +626,11 @@ recvfrom( int    SockFd,
                     sizeof( socklen_t ) );
         }
     }
-    return ( response.base.status < 0 ? -1 : rc );
+
+    rc = response.base.status;
+
+ErrorExit:
+    return rc;
 }
 
 
@@ -581,9 +646,14 @@ recv( int     SockFd,
 ssize_t
 read( int Fd, void *Buf, size_t count )
 {
+    int rc = 0;
     if ( !MW_SOCKET_IS_FD( Fd ) )
     {
-        return libc_read( Fd, Buf, count );
+        if( ( rc = libc_read( Fd, Buf, count ) ) < 0 )
+        {
+            DEBUG_PRINT("Read failed in a bad way errno: %d \n", errno);
+        }
+        return rc;
     }
     
     return recvfrom( Fd, Buf, count, 0,  NULL, NULL );
@@ -603,7 +673,8 @@ connect( int SockFd,
    {
        DEBUG_PRINT("Socket file discriptor value invalid\n");
        errno = ENOTSOCK;
-       return -1;
+       rc = -1;
+       goto ErrorExit;
    }
 
    build_connect_socket( &request, SockFd, (struct sockaddr_in *) Addr );
@@ -612,12 +683,15 @@ connect( int SockFd,
    DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-
-   rc = libc_write( devfd, &request, sizeof(request)); 
-   MYASSERT( rc > 0 );
-
-   rc = read_response( (mt_response_generic_t *) &response );
-   MYASSERT( rc > 0 );
+   if( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+   {
+       goto ErrorExit;
+   }
+   
+   if( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+   {
+       goto ErrorExit;
+   }
 
 #endif
 
@@ -631,10 +705,14 @@ connect( int SockFd,
        DEBUG_PRINT( "\t\tError connecting. Error Number: %d\n",
                (int)response.base.status );
        errno = -response.base.status;
-       return -1;
-   }       
+       rc =  -1;
+       goto ErrorExit;
+   }
 
-   return response.base.status;
+    rc = response.base.status;
+
+ErrorExit:
+   return rc;
 }
 
 ssize_t 
@@ -646,67 +724,80 @@ send( int         SockFd,
    mt_request_generic_t request;
    mt_response_socket_send_t response;
    ssize_t rc = 0;
-   
+   ssize_t totSent = 0;
+   const uint8_t *buff_ptr = Buff;
+
    if ( !MW_SOCKET_IS_FD( SockFd ) )
    {
        DEBUG_PRINT( "send() received invalid FD 0x%x\n", SockFd );
        errno = EINVAL;
-       return -1;
+       rc =  -1;
+       goto ErrorExit;
    }
-   
-   build_send_socket( &request, SockFd, Buff, Len );
 
-   DEBUG_PRINT("Sending write-socket request on socket number: %x\n", SockFd);
-   DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
-   DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
+   while ( totSent < Len )
+   {
+       build_send_socket( &request, 
+                          SockFd, 
+                          ( buff_ptr + totSent ), 
+                          Len - totSent );
+
+       DEBUG_PRINT("Sending write-socket request on socket number: %x\n", SockFd);
+       DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
+       DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
 
-   rc = libc_write( devfd, &request, sizeof(request) ); 
-   MYASSERT( rc > 0 );
+       if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+       {
+           rc = -1;
+           goto ErrorExit;
+       }
 
-   rc = read_response( (mt_response_generic_t *) &response );
-   rc = libc_read( devfd, &response, sizeof(response) );
-
-   MYASSERT( rc > 0 );
-
+       if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+       {
+           rc = -1;
+           goto ErrorExit;
+       }
 #endif
 
-   DEBUG_PRINT("Write-socket response returned status %d len %d\n",
-               (int)response.base.status, rc );
-   DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
-   DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
-   
-   if ( (int)response.base.status < 0 )
-   {
-       errno = -response.base.status;
+       DEBUG_PRINT("Write-socket response returned status %d len %ld\n",
+                   (int)response.base.status, rc );
+       DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
+       DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
+       
+       if ( (int)response.base.status < 0 )
+       {
+           errno = -response.base.status;
+           rc = -1;
+           goto ErrorExit;
+       }
+
+       totSent += (int)response.sent;
    }
-   return ( response.base.status < 0 ? -1 : response.sent );
+
+    rc = totSent;
+
+ErrorExit:
+   return rc;
 }
 
-static void
-cleanup( void )
-{
-    // In case of process crash, the kernel will close all the open
-    // FDs for us, including the MW sockets which the driver tracks on
-    // our behalf.
-
-    if ( g_dlh_libc )
-    {
-        dlclose( g_dlh_libc );
-        g_dlh_libc = NULL;
-    }
-}
 
 ssize_t
 write( int Fd, const void *Buf, size_t count )
 {
-    if( !MW_SOCKET_IS_FD( Fd ) )
+    ssize_t rc = 0;
+
+    if ( !MW_SOCKET_IS_FD( Fd ) )
     {
-        return libc_write( Fd, Buf, count );
+        rc = libc_write( Fd, Buf, count );
+        goto ErrorExit;
     }
-    
-    return send( Fd, Buf, count, 0 );
+
+    rc = send( Fd, Buf, count, 0 );
+
+ErrorExit:
+    return rc;
 }
 
 int
@@ -714,11 +805,24 @@ getsockopt( int Fd,
             int Level,
             int OptName,
             void * OptVal,
-            socklen_t  * OptLen )
+            socklen_t  *OptLen )
 {
+    int targetFd = 0;
+    
     DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p )\n",
                  Fd, Level, OptName, OptVal, OptLen );
-    return 0;
+
+    // Never call getsockopt on an mw_sock
+    if ( MW_SOCKET_IS_FD( Fd ) )
+    {
+        targetFd = dummy_socket;
+    }
+    else
+    {
+        targetFd = Fd;
+    }
+    
+    return libc_getsockopt( targetFd, Level, OptName, OptVal, OptLen );
 }
 
 
@@ -729,18 +833,28 @@ setsockopt( int Fd,
             const void * OptVal,
             socklen_t OptLen )
 {
+    int targetFd = 0;
+
     DEBUG_PRINT( "setsockopt( 0x%x, %d, %d, %p, %d )\n",
                  Fd, Level, OptName, OptVal, OptLen );
-    return 0;
+
+    // Never call getsockopt on an mw_sock
+    if ( MW_SOCKET_IS_FD( Fd ) )
+    {
+        targetFd = dummy_socket;
+    }
+    else
+    {
+        targetFd = Fd;
+    }
+    
+    return libc_setsockopt( targetFd, Level, OptName, OptVal, OptLen );
 }
-
-
 
 
 void 
 _init( void )
 {
-    int rc = 0;
     DEBUG_PRINT("Intercept module loaded\n");
 
 #ifdef NODEVICE
@@ -765,6 +879,7 @@ _init( void )
         exit(1);
     }
 
+    get_libc_symbol( (void **) &libc_socket,   "socket"   );
     get_libc_symbol( (void **) &libc_read,     "read"     );
     get_libc_symbol( (void **) &libc_write,    "write"    );
     get_libc_symbol( (void **) &libc_close,    "close"    );
@@ -772,15 +887,32 @@ _init( void )
     get_libc_symbol( (void **) &libc_sendto,   "sendto"   );
     get_libc_symbol( (void **) &libc_recv,     "recv"     );
     get_libc_symbol( (void **) &libc_recvfrom, "recvfrom" );
-}
+    
+    get_libc_symbol( (void **) &libc_getsockopt, "getsockopt" );
+    get_libc_symbol( (void **) &libc_setsockopt, "setsockopt" );
 
+    dummy_socket = libc_socket( AF_INET, SOCK_STREAM, 0 );
+    if ( dummy_socket < 0 )
+    {
+        perror("socket");
+        exit(1);
+    }
+}
 
 
 void
 _fini( void )
 {
-    cleanup();
+    if ( dummy_socket > 0 )
+    {
+        libc_close( dummy_socket );
+    }
+    
+    if ( g_dlh_libc )
+    {
+        dlclose( g_dlh_libc );
+        g_dlh_libc = NULL;
+    }
+
     DEBUG_PRINT("Intercept module unloaded\n");
 }
-
-
