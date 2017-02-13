@@ -618,7 +618,7 @@ process_buffer_item( buffer_item_t * BufferItem )
  * (1) the buffer item has been processed, or
  * (2) the buffer item has been successfully assigned to
  *     a worker thread, or
- * (3) an error reponse has been written.
+ * (3) an error response has been written.
  */
 static int
 assign_work_to_thread( IN buffer_item_t   * BufferItem,
@@ -711,7 +711,7 @@ ErrorExit:
     if ( rc )
     {
         *ProcessFurther = false;
-        DEBUG_PRINT( "An internal failure occured. Sending error reponse.\n" );
+        DEBUG_PRINT( "An internal failure occured. Sending error response.\n" );
         (void) send_dispatch_error_response( request );
     }
 
@@ -991,7 +991,6 @@ message_dispatcher( void )
             goto ErrorExit;
         }
 
-        debug_print_state();
         DEBUG_PRINT( "Read request %lx type %x size %x off ring\n",
                      (unsigned long) myitem->request->base.id,
                      myitem->request->base.type,

@@ -212,6 +212,7 @@ run_writer_threads()
     }
 
     // Do not call close - test the wrapper
+    close( fd );
 
 ErrorExit:
     return rc;
@@ -336,8 +337,8 @@ int main(int argc , char *argv[])
     }
     printf( "Server is %s:%d\n", server_ip, server_port_num );
         
-    //run_writer_threads();
-    run_open_write_close_threads();
+    run_writer_threads();
+    //run_open_write_close_threads();
 
 ErrorExit:
     return err;

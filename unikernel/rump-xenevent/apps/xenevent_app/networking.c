@@ -440,6 +440,9 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     if ( Response->base.status < 0 )
     {
         Response->base.status = -errno;
+        DEBUG_PRINT( "Failed to close socket %x / %d: %d\n",
+                     WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                     Response->base.status );
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
