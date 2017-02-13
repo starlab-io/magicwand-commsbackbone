@@ -36,10 +36,9 @@
 #include <pthread.h>
 
 #define DEV_FILE "/dev/mwchar"
-#define BUF_SZ   1024
-
 
 static int devfd = -1; // FD to MW device
+static int dummy_socket = -1; // socket for get/setsockopt
 
 static void * g_dlh_libc = NULL;
 
@@ -80,6 +79,7 @@ static ssize_t
 static void *
 get_libc_symbol( void ** Addr, const char * Symbol )
 {
+    dlerror();
     *Addr = dlsym( g_dlh_libc, Symbol );
     if ( NULL == *Addr )
     {
@@ -277,11 +277,13 @@ socket( int domain,
    //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   rc = write( devfd, &request, sizeof(request));
+
+   rc = libc_write( devfd, &request, sizeof(request)); 
    MYASSERT( rc > 0 );
 
    rc = read_response( (mt_response_generic_t *) &response );
    MYASSERT( rc > 0 );
+
 #endif
 
    //DEBUG_PRINT("Create-socket response returned\n");
@@ -323,10 +325,13 @@ close( int SockFd )
     //DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-    rc = write( devfd, &request, sizeof(request));
+
+    rc = libc_write( devfd, &request, sizeof(request)); 
     MYASSERT( rc > 0 );
- rc = read_response( (mt_response_generic_t *) &response );
+
+    rc = read_response( (mt_response_generic_t *) &response );
     MYASSERT( rc > 0 );
+
 #endif
 
     //DEBUG_PRINT("Close-socket response returned %d\n",
@@ -376,10 +381,13 @@ bind( int SockFd,
     build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
 
 #ifndef NODEVICE    
-    rc = write( devfd, &request, sizeof(request) );
+    
+    rc = libc_write( devfd, &request, sizeof(request) );
     MYASSERT( rc > 0 );
+
     rc = read_response( (mt_response_generic_t *) &response );
     MYASSERT( rc > 0 );
+
 #endif
 
     return response.base.status;
@@ -403,10 +411,13 @@ listen( int SockFd, int backlog )
     build_listen_socket( &request, SockFd, &backlog);
 
 #ifndef NODEVICE
-    rc = write( devfd, &request, sizeof(request) );
+
+    rc = libc_write( devfd, &request, sizeof(request) );
     MYASSERT( rc > 0 );
+
     rc = read_response( (mt_response_generic_t *) &response );
     MYASSERT( rc > 0 );
+
 #endif
 
     if ( response.base.status < 0 )
@@ -439,10 +450,13 @@ accept( int SockFd,
                           &response.socket_accept.sockaddr);
     
 #ifndef NODEVICE
-    rc = write( devfd, &request, sizeof(request) );
+    
+    rc = libc_write( devfd, &request, sizeof(request) );
     MYASSERT( rc > 0 );
+
     rc = read_response( (mt_response_generic_t *) &response );
     MYASSERT( rc > 0 );
+
 #endif
 
     if ( response.base.status < 0 )
@@ -456,16 +470,16 @@ accept( int SockFd,
 
 
 void
-build_recv_socket( int SockFd,
+build_recv_socket( mt_request_generic_t * Request, 
+                   int SockFd,
                    size_t Len,
                    int Flags,
                    struct sockaddr *SrcAddr,
-                   socklen_t *AddrLen,
-                   mt_request_generic_t * Request )
+                   socklen_t *AddrLen )
 {
    mt_request_socket_recv_t * recieve = &(Request->socket_recv);
 
-    bzero( Request, sizeof(*Request) );
+    bzero( Request, sizeof( *Request ) );
     
     recieve->base.sig  = MT_SIGNATURE_REQUEST;
     recieve->base.id = MT_ID_UNSET_VALUE;
@@ -501,6 +515,9 @@ recvfrom( int    SockFd,
 {
     mt_request_generic_t request;
     mt_response_generic_t response;
+    
+    bzero( &response, sizeof(response) );
+
     ssize_t rc = 0;
 
     if ( !MW_SOCKET_IS_FD(SockFd) )
@@ -510,13 +527,16 @@ recvfrom( int    SockFd,
         return -1;
     }
 
-    build_recv_socket( SockFd, Len, Flags, SrcAddr, AddrLen, &request );
+    build_recv_socket( &request, SockFd, Len, Flags, SrcAddr, AddrLen );
 
 #ifndef NODEVICE
-    rc = write( devfd, &request, sizeof(request) );
+
+    rc = libc_write( devfd, &request, sizeof(request) );
     MYASSERT( rc > 0 );
+
     rc = read_response( (mt_response_generic_t *) &response );
     MYASSERT( rc > 0 );
+
 #endif
     
     rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
@@ -558,6 +578,17 @@ recv( int     SockFd,
     return recvfrom( SockFd, Buf, Len, Flags, NULL, NULL);
 }
 
+ssize_t
+read( int Fd, void *Buf, size_t count )
+{
+    if ( !MW_SOCKET_IS_FD( Fd ) )
+    {
+        return libc_read( Fd, Buf, count );
+    }
+    
+    return recvfrom( Fd, Buf, count, 0,  NULL, NULL );
+}
+
 
 int 
 connect( int SockFd, 
@@ -581,10 +612,13 @@ connect( int SockFd,
    DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   rc = write( devfd, &request, sizeof(request));
+
+   rc = libc_write( devfd, &request, sizeof(request)); 
    MYASSERT( rc > 0 );
+
    rc = read_response( (mt_response_generic_t *) &response );
    MYASSERT( rc > 0 );
+
 #endif
 
    DEBUG_PRINT("Connect-socket response returned %d\n",
@@ -627,10 +661,15 @@ send( int         SockFd,
    DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
 
 #ifndef NODEVICE
-   rc = write( devfd, &request, sizeof(request) ); 
+
+   rc = libc_write( devfd, &request, sizeof(request) ); 
    MYASSERT( rc > 0 );
+
    rc = read_response( (mt_response_generic_t *) &response );
+   rc = libc_read( devfd, &response, sizeof(response) );
+
    MYASSERT( rc > 0 );
+
 #endif
 
    DEBUG_PRINT("Write-socket response returned status %d len %d\n",
@@ -658,6 +697,44 @@ cleanup( void )
         g_dlh_libc = NULL;
     }
 }
+
+ssize_t
+write( int Fd, const void *Buf, size_t count )
+{
+    if( !MW_SOCKET_IS_FD( Fd ) )
+    {
+        return libc_write( Fd, Buf, count );
+    }
+    
+    return send( Fd, Buf, count, 0 );
+}
+
+int
+getsockopt( int Fd,
+            int Level,
+            int OptName,
+            void * OptVal,
+            socklen_t  * OptLen )
+{
+    DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p )\n",
+                 Fd, Level, OptName, OptVal, OptLen );
+    return 0;
+}
+
+
+int
+setsockopt( int Fd,
+            int Level,
+            int OptName,
+            const void * OptVal,
+            socklen_t OptLen )
+{
+    DEBUG_PRINT( "setsockopt( 0x%x, %d, %d, %p, %d )\n",
+                 Fd, Level, OptName, OptVal, OptLen );
+    return 0;
+}
+
+
 
 
 void 

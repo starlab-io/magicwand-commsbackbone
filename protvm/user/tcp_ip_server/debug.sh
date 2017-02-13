@@ -8,6 +8,6 @@ echo set environment LD_PRELOAD=$PWD/../wrapper/tcp_ip_wrapper.so > gdbcommands
 echo set verbose on >> gdbcommands
 echo dir /home/alex/magicwand-commsbackbone/common >> gdbcommands
 
-sudo gdb -tui --command=gdbcommands ./test_server
+sudo gdb -tui --command=gdbcommands --args ./test_server 21845
 
 rm gdbcommands
