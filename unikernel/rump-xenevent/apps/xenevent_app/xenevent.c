@@ -313,12 +313,13 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 static void
 release_buffer_item( buffer_item_t * BufferItem )
 {
-    BufferItem->assigned_thread = NULL;
+    int prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
 
-    (void) atomic_cas_32( &BufferItem->in_use, 1, 0 );
-
-    DEBUG_PRINT( "Released buffer %d, busy? %d\n",
-                 BufferItem->idx, BufferItem->in_use );
+    if ( prev )
+    {
+        BufferItem->assigned_thread = NULL;
+        DEBUG_PRINT( "Released buffer %d\n", BufferItem->idx );
+    }
 }
 
 
@@ -403,20 +404,20 @@ static void
 release_worker_thread( thread_item_t * ThreadItem )
 {
     // Verify that the thread's workqueue is empty
-
+    int prev = 0;
+    
     if ( !workqueue_is_empty( ThreadItem->work_queue ) )
     {
         debug_print_state();
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
-    
-    (void)atomic_cas_32( &ThreadItem->in_use, 1, 0 );
 
-    DEBUG_PRINT( "Released worker thread %d, busy? %d\n",
-                 ThreadItem->idx, ThreadItem->in_use );
-
-
-    // N.B. The thread might have never been reserved
+    // N.B. The thread might have never been reserved    
+    prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
+    if ( prev )
+    {
+        DEBUG_PRINT( "Released worker thread %d\n", ThreadItem->idx );
+    }
 }
 
 
@@ -628,11 +629,9 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     int rc = 0;
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
     mt_request_type_t request_type = MT_RESPONSE_GET_TYPE( request );
-    
-    // Release the buffer item, unless it is successfully assigned to the worker thread.
-    bool release_item = true;
 
-    // Typically the caller needs to do more work on this buffer
+    // Typically the caller needs to do more work on this buffer. When
+    // this is false we release the buffer item.
     *ProcessFurther = true;
     
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
@@ -666,7 +665,8 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         BufferItem->assigned_thread = *AssignedThread;
         rc = process_buffer_item( BufferItem );
     }
-    /*
+#if 0
+    // Process immediately to debug scheduling problems
     else if ( MtRequestSocketConnect == request_type ||
               MtRequestSocketWrite   == request_type || 
               MtRequestSocketClose   == request_type )
@@ -680,7 +680,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
 
         rc = process_buffer_item( BufferItem );
     }
-    */
+#endif
     else
     {
         // This request is for an existing connection. Find the thread
@@ -697,9 +697,6 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         {
             goto ErrorExit;
         }
-
-        // The buffer item was successfully assigned to the worker thread
-        release_item = false;
     }
 
     DEBUG_PRINT( "Work item %d assigned to thread %d\n",
@@ -715,7 +712,7 @@ ErrorExit:
         (void) send_dispatch_error_response( request );
     }
 
-    if ( release_item )
+    if ( ! *ProcessFurther )
     {
         release_buffer_item( BufferItem );
     }
@@ -1019,7 +1016,8 @@ message_dispatcher( void )
              || request_type == MtRequestSocketAccept)
         {
             xe_yield();
-        } else 
+        }
+        else 
         {
             sched_yield();
         }

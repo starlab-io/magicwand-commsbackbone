@@ -19,6 +19,8 @@
 
 extern uint16_t client_id;
 
+#define XE_GET_NEG_ERRNO()                              \
+    ( errno ? (mt_status_t)(-errno) : (mt_status_t)(-1) )
 
 //
 // Upon recv(), should we attempt to receive the entire buffer given?
@@ -70,7 +72,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                      native_proto );
     if ( sockfd < 0 )
     {
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
     }
     else
     {
@@ -125,20 +127,22 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is connecting\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is connecting to %s:%d\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd );
+                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
     // Request->hostname, Request->port );
 
     rc = connect( WorkerThread->native_sock_fd,
                   (const struct sockaddr * ) &sockaddr,
                   sizeof( sockaddr ) );
-
-    Response->base.status = ( rc < 0 ? -errno : 0 );
-//    if ( rc < 0 )
-//    {
-//        Response->base.status = -errno;
-//    }
+    if ( rc < 0 )
+    {
+        Response->base.status = XE_GET_NEG_ERRNO();
+        DEBUG_PRINT( "connect() failed with status %ld\n",
+                     (unsigned long)Response->base.status );
+        MYASSERT( !"connect" );
+    }
 
 
 /*
@@ -206,17 +210,18 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding on %s:%d\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd );
+                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
 
     Response->base.status = bind( WorkerThread->native_sock_fd,
-                                  (const struct sockaddr*)&sockaddr,
+                                  (const struct sockaddr*) &sockaddr,
                                   addrlen );
     if ( Response->base.status < 0 )
     {
-        DEBUG_PRINT("Bind failed\n");
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT ( !"bind" );
     }
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
@@ -235,7 +240,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
     MYASSERT( 1 == WorkerThread->in_use );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is listening\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
@@ -243,7 +248,8 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
                                     Request->backlog);
     if( Response->base.status < 0 )
     {
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"listen" );
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
@@ -273,20 +279,23 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
     sockfd = accept( WorkerThread->native_sock_fd,
-                     (struct sockaddr*)&sockaddr,
-                     (socklen_t*)&addrlen );
+                     (struct sockaddr *) &sockaddr,
+                     (socklen_t *) &addrlen );
 
     if ( Response->base.status < 0 )
     {
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"accept" );
     }
     else
     {
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
 
-        DEBUG_PRINT ( "Worker thread %d (%d) accepted connection\n",
-                      WorkerThread->idx, sockfd );
+        DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
+                      WorkerThread->idx,
+                      WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                      inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
     }
 
     populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
@@ -323,7 +332,8 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
 
     if( bytes_read < 0 )
     {
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"recvfrom" );
         bytes_read = 0;
     }
     else
@@ -372,7 +382,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
         if ( rcv < 0 )
         {
             // Error, even if some data has been received already
-            Response->base.status = -errno;
+            Response->base.status = XE_GET_NEG_ERRNO();
             MYASSERT( !"recv" );
             break;
         }
@@ -400,7 +410,8 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
                        Request->flags );
     if ( bytes_read < 0 )
     {
-        Response->base.status = -errno;
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"recv" );
         bytes_read = 0;
 
     }
@@ -439,10 +450,8 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
     if ( Response->base.status < 0 )
     {
-        Response->base.status = -errno;
-        DEBUG_PRINT( "Failed to close socket %x / %d: %d\n",
-                     WorkerThread->sock_fd, WorkerThread->native_sock_fd,
-                     Response->base.status );
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"close" );
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -479,7 +488,7 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
                             0 );
         if ( rcv < 0 && totRead == 0 )
         {
-            Response->base.status = -errno;
+            Response->base.status =  XE_GET_NEG_ERRNO();
             MYASSERT( !"read" );
             break;
         }
@@ -535,7 +544,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                              (int) Request->flags );
         if ( sent < 0 )
         {
-            Response->base.status = -errno;
+            Response->base.status = XE_GET_NEG_ERRNO();
             MYASSERT( !"send" );
             break;
         }

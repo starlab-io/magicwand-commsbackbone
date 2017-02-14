@@ -130,7 +130,8 @@ read_response( mt_response_generic_t * Response )
 
     if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
     {
-        DEBUG_PRINT( "Remote side encountered critical error\n" );
+        DEBUG_PRINT( "Remote side encountered critical error, ID=%lx FD=%x\n",
+                     (unsigned long)Response->base.id, Response->base.sockfd );
         rc = -1;
         Response->base.status = -EIO;
     }
@@ -344,7 +345,8 @@ close( int SockFd )
     if ( !MW_SOCKET_IS_FD( SockFd ) )
     {
         DEBUG_PRINT( "Closing local socket %x\n", SockFd );
-        return libc_close( SockFd );
+        rc = libc_close( SockFd );
+        goto ErrorExit;
     }
     
     build_close_socket( &request, SockFd );
@@ -649,7 +651,7 @@ read( int Fd, void *Buf, size_t count )
     int rc = 0;
     if ( !MW_SOCKET_IS_FD( Fd ) )
     {
-        if( ( rc = libc_read( Fd, Buf, count ) ) < 0 )
+        if ( ( rc = libc_read( Fd, Buf, count ) ) < 0 )
         {
             DEBUG_PRINT("Read failed in a bad way errno: %d \n", errno);
         }
