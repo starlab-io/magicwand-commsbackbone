@@ -15,3 +15,5 @@ debug.sh
 run.sh
 cscope.out
 tags
+Makefile
+makefile

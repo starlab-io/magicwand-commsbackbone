@@ -10,12 +10,11 @@
 #include <stddef.h>
 
 #include "message_types.h"
-#include "networking.h"
 #include "workqueue.h"
 #include "config.h"
 #include "mwsocket.h"
 
-typedef struct _worker_thread
+typedef struct _thread_item
 {
     //
     // Is this item working on an open or opening socket? Use interlocked operators.
@@ -23,7 +22,7 @@ typedef struct _worker_thread
     volatile uint32_t in_use;
 
     //
-    // Index of this item in its array - it's ID
+    // Index of this item in its array - its ID
     //
     int idx;
     
@@ -46,7 +45,7 @@ typedef struct _worker_thread
     //
     
     //work_queue_buffer_idx_t work_queue_space[ BUFFER_ITEM_COUNT ];
-    
+
     workqueue_t * work_queue;
 
     //

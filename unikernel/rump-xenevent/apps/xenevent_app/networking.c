@@ -10,13 +10,16 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <poll.h>
 
 #include "app_common.h"
+#include "common.h"
 #include "networking.h"
 #include "message_types.h"
 #include "threadpool.h"
 #include "translate.h"
 
+extern xenevent_globals_t g_state;
 extern uint16_t client_id;
 
 #define XE_GET_NEG_ERRNO()                              \
@@ -528,7 +531,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
-    
+
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is writing %ld bytes\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd,
@@ -560,3 +563,82 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 
     return 0;
 }
+
+int
+xe_net_poll( IN  mt_request_socket_poll_t  * Request,
+             OUT mt_response_socket_poll_t * Response,
+             IN  thread_item_t             * WorkerThread )
+{
+    int rc = 0;
+    struct pollfd fds[ MAX_POLL_FD_COUNT ] = {0};
+    int fdcount = Request->count;
+
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+
+    if ( (uint8_t *) &Request->pollfds[ fdcount+1 ]
+         > (uint8_t *)Request + Request->base.size );
+    {
+        MYASSERT( !"Input is not sufficient for all the FDs given" );
+        Response->base.status = -EINVAL;
+        fdcount = 0;
+        goto ErrorExit;
+    }
+
+    for ( int i = 0; i < fdcount; ++i )
+    {
+        // Get the native FD and flags from the request
+        mt_socket_poll_fd_t * pollfd = &Request->pollfds[i];
+        mw_socket_fd_t mwfd = pollfd->sockfd;
+
+        int thridx = MW_SOCKET_GET_ID( mwfd );
+
+        if ( thridx >= MAX_THREAD_COUNT
+            || 0 == g_state.worker_threads[ thridx ].in_use )
+        {
+            Response->base.status = -EINVAL;
+            MYASSERT( !"Invalid FD passed in" );
+            goto ErrorExit;
+        }
+
+        fds[i].fd      = g_state.worker_threads[ thridx ].native_sock_fd;
+        fds[i].events  = pollfd->events;
+        fds[i].revents = 0;
+
+        // Record external-facing FD in response
+        Response->pollfds[i].sockfd = mwfd;
+        Response->pollfds[i].events = 0;
+    } // for
+
+    Response->base.status = poll( fds, Request->count, Request->timeout );
+    if ( Response->base.status < 0 )
+    {
+        Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"poll" );
+        goto ErrorExit;
+    }
+    
+    for ( int i = 0; i < Request->count; ++i )
+    {
+        //mt_socket_poll_fd_t * pollfd = &Request->pollfds[i];
+        if ( 0 == fds[i].revents )
+        {
+            Response->pollfds[i].sockfd = MT_INVALID_SOCKET_FD;
+        }
+        else
+        {
+            Response->pollfds[i].events = fds[i].revents;
+        }
+    } // for
+    
+ErrorExit:
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_POLL_SIZE
+                                + MT_SOCKET_POLL_SIZE * fdcount,
+                              (mt_response_generic_t *)Response );
+
+    return rc;
+}
+
+

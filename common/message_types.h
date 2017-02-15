@@ -11,12 +11,19 @@
 
 #include "mwsocket.h"
 
+//
+// Maximum number of file descriptors we will call poll() on
+//
+#define MAX_POLL_FD_COUNT 16
+
+
 // XXXX do this smartly
 // Set it small for testing - then we can deal with more messages
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN 64
 
 // Maximum length for a host name
 #define MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN MESSAGE_TYPE_MAX_PAYLOAD_LEN
+
 
 // Structures are shared across VMs in code built by different gccs.
 // Make sure they agree on the layout.
@@ -68,6 +75,7 @@ typedef enum
     MtRequestSocketAccept   = MT_REQUEST( 8 ),
     MtRequestSocketRecv     = MT_REQUEST( 9 ),
     MtRequestSocketRecvFrom = MT_REQUEST( 10 ),
+    MtRequestSocketPoll     = MT_REQUEST( 11 )
 } mt_request_type_t;
 
 
@@ -84,6 +92,7 @@ typedef enum
     MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
     MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
+    MtResponseSocketPoll        = MT_RESPONSE( MtRequestSocketPoll     )
 } mt_response_id_t;
 
 typedef uint32_t mt_addrlen_t;
@@ -389,8 +398,45 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 } mt_response_socket_send_t;
 
 // User must add count of filled bytes to size
-#define MT_REQUEST_SOCKET_SEND_SIZE  ( sizeof(mt_request_base_t) + sizeof(uint64_t) )
+#define MT_REQUEST_SOCKET_SEND_SIZE  \
+    ( sizeof(mt_request_base_t) + sizeof(uint64_t) )
+
 #define MT_RESPONSE_SOCKET_SEND_SIZE sizeof(mt_response_socket_send_t)
+
+
+
+//
+// Poll
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_socket_poll_fd
+{
+    mw_socket_fd_t sockfd;
+    uint32_t       events; // in and out
+} mt_socket_poll_fd_t;
+
+#define MT_SOCKET_POLL_SIZE sizeof(mt_socket_poll_fd_t)
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_poll
+{
+    mt_request_base_t   base;
+    uint32_t            count;
+    uint32_t            timeout;
+    mt_socket_poll_fd_t pollfds[ MAX_POLL_FD_COUNT ];
+} mt_request_socket_poll_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_poll
+{
+    mt_response_base_t  base;
+    uint32_t            count;
+    mt_socket_poll_fd_t pollfds[ MAX_POLL_FD_COUNT ];
+} mt_response_socket_poll_t;
+
+#define MT_REQUEST_SOCKET_POLL_SIZE \
+    ( sizeof(mt_request_base_t) + 2 * sizeof(uint32_t) )
+
+#define MT_RESPONSE_SOCKET_POLL_SIZE \
+    ( sizeof(mt_request_base_t) + sizeof(uint32_t) )
 
 
 //
@@ -408,6 +454,7 @@ typedef union _mt_request_generic
     mt_request_socket_listen_t  socket_listen;
     mt_request_socket_accept_t  socket_accept;
     mt_request_socket_recv_t    socket_recv;
+    mt_request_socket_poll_t    socket_poll;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -431,6 +478,7 @@ typedef union _mt_response_generic
     mt_response_socket_accept_t     socket_accept;
     mt_response_socket_recv_t       socket_recv;
     mt_response_socket_recvfrom_t   socket_recvfrom;
+    mt_response_socket_poll_t       socket_poll;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

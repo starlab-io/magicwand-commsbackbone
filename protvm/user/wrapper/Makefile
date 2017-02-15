@@ -26,8 +26,12 @@ list: $(LIST_SRCS)
 $(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_NAME).c
 	$(CC) $(CFLAGS) -c $^ -o $@
 
-$(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ)
+$(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ) epoll_wrapper.o
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl
+
+%.o : %.c
+	$(CC) -c $(CFLAGS) $< -o $@
+
 
 clean:
 	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ) $(PRE_LOAD_LIB_NAME).so

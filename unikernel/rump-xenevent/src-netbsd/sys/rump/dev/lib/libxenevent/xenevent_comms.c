@@ -336,7 +336,7 @@ xe_comms_read_item( void * Memory,
         RING_GET_REQUEST( &g_state.back_ring,
                           g_state.back_ring.req_cons );
 
-    DEBUG_PRINT( "Processing item idx %d, ID=%lx size=%d\n",
+    DEBUG_PRINT( "Processing item idx %x, ID=%lx size=%d\n",
                  g_state.back_ring.req_cons,
                  (unsigned long)request->base.id, request->base.size );
     

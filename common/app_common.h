@@ -78,7 +78,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #ifdef MYDEBUG
 #  define DEBUG_PRINT(...)                                              \
     pthread_mutex_lock( &__debug_mutex );                               \
-    _DEBUG_EMIT_META();                                                  \
+    _DEBUG_EMIT_META();                                                 \
     DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     pthread_mutex_unlock( &__debug_mutex )
@@ -90,7 +90,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
         pthread_mutex_lock( &__debug_mutex );                           \
         _DEBUG_EMIT_META();                                             \
         DEBUG_PRINT_FUNCTION( "Assertion failure: %s\n", #x );          \
-        DEBUG_EMIT_BREAKPOINT();                                       \
+        DEBUG_EMIT_BREAKPOINT();                                        \
         pthread_mutex_unlock( &__debug_mutex );                         \
     }
 

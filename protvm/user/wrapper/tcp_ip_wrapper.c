@@ -26,14 +26,15 @@
 #include <netinet/in.h>
 
 #include <dlfcn.h>
-
+#include <pthread.h>
 #include <signal.h>
+#include <sys/epoll.h>
 
 #include <message_types.h>
 #include <translate.h>
 #include <app_common.h>
 
-#include <pthread.h>
+#include "epoll_wrapper.h"
 
 #define DEV_FILE "/dev/mwchar"
 
@@ -93,6 +94,31 @@ static int
                     const void * OptVal,
                     socklen_t OptLen );
 
+static int
+(*libc_epoll_create)( int Size );
+
+static int
+(*libc_epoll_create1)( int Flags );
+
+
+static int
+(*libc_epoll_ctl)( int EpFd,
+                   int Op,
+                   int Fd,
+                   struct epoll_event * Event );
+
+static int
+(*libc_epoll_wait)( int EpFd,
+                    struct epoll_event * Events,
+                    int MaxEvents,
+                    int Timeout );
+
+static int
+(*libc_epoll_pwait)( int EpFd,
+                     struct epoll_event * Events,
+                     int MaxEvents,
+                     int Timeout,
+                     const sigset_t * Sigmask );
 
 
 static void *
@@ -280,6 +306,124 @@ build_send_socket( mt_request_generic_t * Request,
     send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
 }
 
+void
+build_poll_socket( mt_request_socket_poll_t * Request,
+                   epoll_request_t          * Poll,
+                   int                        Timeout)
+{
+    bzero( Request, sizeof(*Request) );
+
+    Request->base.sig  = MT_SIGNATURE_REQUEST;
+    Request->base.type = MtRequestSocketPoll;
+    Request->base.id   = MT_ID_UNSET_VALUE;
+    Request->base.sockfd = MT_INVALID_SOCKET_FD;
+
+    Request->timeout = Timeout;
+    
+    for ( int i = 0; i < Poll->fdct; ++i )
+    {
+        uint32_t * reqflags = &Request->pollfds[ Request->count ].events;
+        *reqflags = 0;
+        
+        if ( Poll->events[i].data.fd == MT_INVALID_SOCKET_FD )
+        {
+            continue;
+        }
+        ++Request->count;
+
+        Request->pollfds[ Request->count ].sockfd = Poll->events[i].data.fd;
+
+        if ( Poll->events[i].events & EPOLLIN )     *reqflags |= MW_POLLIN;
+        if ( Poll->events[i].events & EPOLLPRI )    *reqflags |= MW_POLLPRI;
+        if ( Poll->events[i].events & EPOLLOUT )    *reqflags |= MW_POLLOUT;
+        if ( Poll->events[i].events & EPOLLRDNORM ) *reqflags |= MW_POLLRDNORM;
+        if ( Poll->events[i].events & EPOLLWRNORM ) *reqflags |= MW_POLLWRNORM;
+        if ( Poll->events[i].events & EPOLLRDBAND ) *reqflags |= MW_POLLRDBAND;
+        if ( Poll->events[i].events & EPOLLWRBAND ) *reqflags |= MW_POLLWRBAND;
+        if ( Poll->events[i].events & EPOLLERR )    *reqflags |= MW_POLLERR;
+        if ( Poll->events[i].events & EPOLLHUP )    *reqflags |= MW_POLLHUP;
+//        if ( Poll->events[i].events & EPOLLNVAL )   *reqflags |= MW_POLLNVAL;
+    }
+
+    Request->base.size = MT_REQUEST_SOCKET_POLL_SIZE
+        + Request->count * sizeof(mt_socket_poll_fd_t);
+}
+
+int
+populate_epoll_results( mt_response_socket_poll_t * Response,
+                        struct epoll_event *       Events )
+{
+    int ct = 0;
+    mt_response_socket_poll_t * r = Response; // alias for easier code
+    
+    for ( int i = 0; i < r->count; ++i )
+    {
+        uint32_t * resflags = &Events[i].events;
+        *resflags = 0;
+
+        if ( !MW_SOCKET_IS_FD( r->pollfds[i].sockfd ) )
+        {
+            Events[i].data.fd = MT_INVALID_SOCKET_FD;
+            Events[i].events  = 0;
+            continue;
+        }
+
+        ++ct;
+        Events[i].data.fd = r->pollfds[i].sockfd;
+        if ( r->pollfds[i].events & MW_POLLIN )     *resflags |= EPOLLIN;
+        if ( r->pollfds[i].events & MW_POLLPRI )    *resflags |= EPOLLPRI;
+        if ( r->pollfds[i].events & MW_POLLOUT )    *resflags |= EPOLLOUT;
+        if ( r->pollfds[i].events & MW_POLLRDNORM ) *resflags |= EPOLLRDNORM;
+        if ( r->pollfds[i].events & MW_POLLWRNORM ) *resflags |= EPOLLWRNORM;
+        if ( r->pollfds[i].events & MW_POLLRDBAND ) *resflags |= EPOLLRDBAND;
+        if ( r->pollfds[i].events & MW_POLLWRBAND ) *resflags |= EPOLLWRBAND;
+        if ( r->pollfds[i].events & MW_POLLERR )    *resflags |= EPOLLERR;
+        if ( r->pollfds[i].events & MW_POLLHUP )    *resflags |= EPOLLHUP;
+//        if ( r->pollfds[i].events & MW_POLLNVAL )   *resflags |= EPOLLNVAL;
+    }
+    return ct;
+}
+
+
+// Perform steps up to epoll_wait as described in Request
+static int
+do_epoll( epoll_request_t * Poll,
+          struct epoll_event * Events,
+          int MaxEvents,
+          int Timeout )
+{
+    int fd = -1;
+    int count = 0;
+    
+    fd = epoll_create(1);
+    if ( fd < 0 )
+    {
+        count = -1;
+        goto ErrorExit;
+    }
+
+    for ( int i = 0; i < Poll->fdct; ++i )
+    {
+        if ( Poll->events[i].data.fd == MW_INVALID_FD )
+        {
+            continue;
+        }
+        ++count;
+
+        // Struct copy
+        Events[i] = Poll->events[i];
+    }        
+
+    count = libc_epoll_wait( fd, Events, MaxEvents, Timeout );
+    
+ErrorExit:
+    if ( fd > 0 )
+    {
+        close( fd );
+    }
+    return count;        
+}
+
 int 
 socket( int domain, 
         int type, 
@@ -335,49 +479,58 @@ ErrorExit:
 }
 
 int
-close( int SockFd )
+close( int Fd )
 {
     mt_request_generic_t  request;
     mt_response_generic_t response;
     ssize_t rc = 0;
 
-    //BARE_DEBUG_BREAK();
-    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    if ( MW_SOCKET_IS_FD( Fd ) )
     {
-        DEBUG_PRINT( "Closing local socket %x\n", SockFd );
-        rc = libc_close( SockFd );
-        goto ErrorExit;
-    }
-    
-    build_close_socket( &request, SockFd );
+        build_close_socket( &request, Fd );
 
-    DEBUG_PRINT( "Closing MW Socket %x\n", SockFd );
+        DEBUG_PRINT( "Closing MW Socket %x\n", Fd );
     
 #ifndef NODEVICE
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-    {
-        goto ErrorExit;
-    }
+        if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+        {
+            goto ErrorExit;
+        }
     
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        goto ErrorExit;
-    }
-
+        if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
+        {
+            goto ErrorExit;
+        }
 #endif
+        if ( response.base.status )
+        {
+            DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n",
+                         response.base.status );
+            errno = -response.base.status;
+            // Returns -1 on error
+            rc = -1;
+            goto ErrorExit;
+        }
 
-    if ( response.base.status )
+        // Returns 0 on success
+        rc = response.base.status;
+    }
+    else if ( MW_EPOLL_IS_FD( Fd ) )
     {
-        DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n",
-                     response.base.status );
-        errno = -response.base.status;
-        // Returns -1 on error
-        rc = -1;
+        epoll_request_t * req = mw_epoll_find( Fd );
+        if ( NULL == req )
+        {
+            rc = -1;
+            goto ErrorExit;
+        }
+        mw_epoll_destroy( req );
+    }
+    else
+    {
+        DEBUG_PRINT( "Closing local socket %x\n", Fd );
+        rc = libc_close( Fd );
         goto ErrorExit;
     }
-
-    // Returns 0 on success
-    rc = response.base.status;
 
 ErrorExit:
     return rc;
@@ -853,6 +1006,111 @@ setsockopt( int Fd,
     return libc_setsockopt( targetFd, Level, OptName, OptVal, OptLen );
 }
 
+int
+epoll_create1( int Flags )
+{
+    int rc = 0;
+
+    epoll_request_t * req = mw_epoll_create();
+    if ( NULL == req )
+    {
+        errno = ENOMEM;
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    req->createflags = Flags;
+    rc = req->pseudofd;
+
+ErrorExit:
+    return rc;
+
+}
+
+
+int
+epoll_create( int Size )
+{
+    return epoll_create1( 0 );
+}
+
+int
+epoll_ctl( int EpFd,
+           int Op,
+           int Fd,
+           struct epoll_event * Event )
+{
+    int rc = 0;
+
+    rc = mw_epoll_ctl( EpFd, Op, Fd, Event );
+
+    return rc;
+}
+
+int
+epoll_wait( int EpFd,
+            struct epoll_event * Events,
+            int MaxEvents,
+            int Timeout )
+{
+    int rc = 0;
+    mt_request_socket_poll_t mreq;
+    epoll_request_t * ereq = NULL;
+    
+    ereq = mw_epoll_find( EpFd );
+    if ( NULL == ereq )
+    {
+        rc = -1;
+        errno = EBADFD;
+        goto ErrorExit;
+    }
+
+    if ( ereq->is_mw )
+    {
+        mt_response_socket_poll_t mres;
+        
+        build_poll_socket( &mreq, ereq, Timeout );
+#ifndef NODEVICE
+       if ( ( rc = libc_write( devfd, &mreq, sizeof( mreq ) ) ) < 0 )
+       {
+           rc = -1;
+           goto ErrorExit;
+       }
+
+       if ( ( rc = read_response( (mt_response_generic_t *) &mres ) ) < 0 )
+       {
+           rc = -1;
+           goto ErrorExit;
+       }
+
+       rc = populate_epoll_results( &mres, Events );
+       goto ErrorExit;
+#endif
+    }
+
+    // Non-MW case
+    rc = do_epoll( ereq, Events, MaxEvents, Timeout );
+    
+ErrorExit:
+
+    return rc;
+}
+
+int
+epoll_pwait( int EpFd,
+             struct epoll_event * Events,
+             int MaxEvents,
+             int Timeout,
+             const sigset_t * Sigmask )
+{
+    DEBUG_PRINT( "epoll_pwait( %x, %p, %d, %d, %p )\n",
+                 EpFd, Events, MaxEvents, Timeout, Sigmask );
+
+    return libc_epoll_pwait( EpFd, Events, MaxEvents, Timeout, Sigmask );
+}
+
+
+
 
 void 
 _init( void )
@@ -892,6 +1150,13 @@ _init( void )
     
     get_libc_symbol( (void **) &libc_getsockopt, "getsockopt" );
     get_libc_symbol( (void **) &libc_setsockopt, "setsockopt" );
+
+    get_libc_symbol( (void **) &libc_epoll_create, "epoll_create" );
+    get_libc_symbol( (void **) &libc_epoll_create1, "epoll_create1" );
+    
+    get_libc_symbol( (void **) &libc_epoll_ctl,   "epoll_ctl" );
+    get_libc_symbol( (void **) &libc_epoll_wait,  "epoll_wait" );
+    get_libc_symbol( (void **) &libc_epoll_pwait, "epoll_pwait" );
 
     dummy_socket = libc_socket( AF_INET, SOCK_STREAM, 0 );
     if ( dummy_socket < 0 )

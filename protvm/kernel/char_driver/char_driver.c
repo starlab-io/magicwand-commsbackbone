@@ -1023,8 +1023,8 @@ send_request( mt_request_generic_t *  Request,
     ++front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &front_ring );
 
-    pr_debug( "Request %lx was sent to idx %x\n",
-              (long int) id, front_ring.req_prod_pvt-1 );
+    pr_debug( "Request %lx size %d was sent to idx %x\n",
+              (long int) id, RequestSize, front_ring.req_prod_pvt-1 );
     
 ErrorExit:
 #if MW_DO_SEND_RING_EVENTS

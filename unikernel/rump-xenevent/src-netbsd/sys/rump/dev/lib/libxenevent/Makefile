@@ -9,7 +9,7 @@ CPPFLAGS += -I../../../../../../../../../common
 CPPFLAGS += -Ixen
 
 # Enable debugging - breakpoints and messages
-#CPPFLAGS += -DMYDEBUG
+CPPFLAGS += -DMYDEBUG
 CPPFLAGS += -DMYTRAP
 
 # Definitely do NOT define this. It breaks the build.

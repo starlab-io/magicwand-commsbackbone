@@ -79,51 +79,17 @@
 
 //#include "bitfield.h"
 
-#include "threadpool.h"
-#include "bufferpool.h"
-#include "workqueue.h"
+#include "common.h"
 
-#include "config.h"
-#include "message_types.h"
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
 #  define DEBUG_INPUT_FILE  "incoming_requests.bin"
 #endif
 
-#define ONE_REQUEST_REGION_SIZE sizeof(mt_request_generic_t)
 
-typedef struct _xenevent_globals
-{
-    // Current index into the buffer_items array. Only goes up, modulo
-    // the size.
-    volatile uint32_t  curr_buffer_idx;
-    buffer_item_t      buffer_items[ BUFFER_ITEM_COUNT ];
-
-    // The buffer of incoming requests
-    byte_t       in_request_buf [ ONE_REQUEST_REGION_SIZE * BUFFER_ITEM_COUNT ];
-
-    // Pool of worker threads
-    thread_item_t worker_threads[ MAX_THREAD_COUNT ];
-
-    // Have we been asked to shutdown? 
-    bool      shutdown_pending;
-
-    // File descriptor to the xenevent device. The dispatcher (main)
-    // thread reads commands from this, the worker threads write
-    // responses to it. This is split into two file descriptors for
-    // debugging. In operations they will be the same.
-
-    int        input_fd;
-    int        output_fd;
-
-    //pthread_attr_t attr;
-
-    //struct sched_param schedparam;
-    
-} xenevent_globals_t;
-
-static xenevent_globals_t g_state;
+// Global data
+xenevent_globals_t g_state;
 
 // XXXX: put this in globals and share globals
 // What's my domid? Needed by networking.c
@@ -536,6 +502,12 @@ process_buffer_item( buffer_item_t * BufferItem )
                                      ( mt_response_socket_recvfrom_t* ) &response,
                                      worker );
         break;
+    case MtRequestSocketPoll:
+        rc = xe_net_poll( ( mt_request_socket_poll_t*) request,
+                          ( mt_response_socket_poll_t* ) &response,
+                          worker );
+        break;
+        
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
@@ -640,31 +612,39 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
-    if ( MtRequestSocketCreate == request_type ) 
-    
+    if ( MtRequestSocketCreate == request_type
+        ||  MtRequestSocketPoll == request_type )
     {
-        // Request is for a new socket, so we assign the task to an
-        // unassigned thread. The thread and socket will be bound
-        // together during the socket's lifetime. However, we must
-        // also complete this request now so that future work for this
-        // socket goes to the right thread. So in this special case,
-        // the buffer item is not processed by the thread that's
-        // assigned to the socket.
+        // Request requires a new thread, which we procure by getting
+        // requesting the thread for an invalid socket. The thread and
+        // socket are bound for the lifetime of the socket.
 
-        *ProcessFurther = false;
-        
+        // If we're creating a socket, we process the request here so
+        // that future work goes to the right thread. If the request
+        // is for a poll(), we'll enqueue the work so our main thread
+        // isn't blocked.
         rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, AssignedThread );
         if ( rc )
         {
-            // No worker thread is available, but we must associate a
-            // new socket and an available thread now. We could yield
-            // and try again. For now, give up.
+            // No worker thread is available. We could yield and try
+            // again. For now, give up.
             goto ErrorExit;
         }
 
         BufferItem->assigned_thread = *AssignedThread;
-        rc = process_buffer_item( BufferItem );
+
+        if ( MtRequestSocketCreate == request_type )
+        {
+            *ProcessFurther = false;
+            rc = process_buffer_item( BufferItem );
+        }
+        else
+        {
+            rc = workqueue_enqueue( (*AssignedThread)->work_queue,
+                                    BufferItem->idx );
+        }
     }
+    
 #if 0
     // Process immediately to debug scheduling problems
     else if ( MtRequestSocketConnect == request_type ||
@@ -969,8 +949,8 @@ message_dispatcher( void )
                      ONE_REQUEST_REGION_SIZE );
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
-        if ( size < (ssize_t) sizeof(mt_request_base_t) ||
-             myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
+        if ( size < (ssize_t) sizeof(mt_request_base_t)
+             || myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
         {
             // Handle underflow or overflow
             if ( 0 == size )
@@ -1026,8 +1006,6 @@ message_dispatcher( void )
         //t3 = diff(t1,t2);
         //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
                  //t3.tv_sec, t3.tv_nsec);
-
-
     } // while
     
 ErrorExit:

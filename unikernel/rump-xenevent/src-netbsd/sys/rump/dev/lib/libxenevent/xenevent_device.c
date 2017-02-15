@@ -272,8 +272,7 @@ xe_dev_read( dev_t Dev,
         DEBUG_PRINT( "Read request: %d bytes at %p\n",
                      (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
 
-        hex_dump( "Read request", 
-                  iov->iov_base, (int) iov->iov_len );
+        hex_dump( "Read request", iov->iov_base, (int) iov->iov_len );
 
         // Inform system of data transfer
         iov->iov_len -= bytes_read;

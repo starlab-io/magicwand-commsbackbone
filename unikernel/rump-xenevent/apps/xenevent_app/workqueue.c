@@ -111,7 +111,7 @@ workqueue_dequeue( workqueue_t * wq )
     if ( wq->item_ct == wq->available_slots )
     {
         // Ensure there's something to get.
-        DEBUG_PRINT( "Requested item not available in workqueue %d\n", wq->id);
+        MYASSERT( !"No work available" );
         goto ErrorExit;
     }
 
