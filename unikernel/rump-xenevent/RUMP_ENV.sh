@@ -34,20 +34,25 @@ for d in `echo $PATH | sed -e "s/:/ /g"`; do
     fi
 done
 
-GIT=git
 
-# are we on a git branch which is not master?
-if type ${GIT} >/dev/null; then
-    GITBRANCH=$(${GIT} rev-parse --abbrev-ref HEAD 2>/dev/null)
-    if [ ${GITBRANCH} = "master" -o ${GITBRANCH} = "HEAD" ]; then
-        GITBRANCH=
+setgitbranch() {
+    GIT=git
+
+    # are we on a git branch which is not master?
+    if type ${GIT} >/dev/null; then
+        GITBRANCH=$(${GIT} rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [ ${GITBRANCH} = "master" -o ${GITBRANCH} = "HEAD" ]; then
+            GITBRANCH=
+        else
+            echo "Detected git branch $GITBRANCH"
+            GITBRANCH=-${GITBRANCH}
+        fi
     else
-         GITBRANCH=-${GITBRANCH}
+        GITBRANCH=
     fi
-else
-    GITBRANCH=
-fi
-
+    echo "Rerun this script if you switch git branches"
+}
+setgitbranch
 
 # Now, update the PATH to include the needed subdirectories here
 export PATH=$PWD/rumprun$GITBRANCH/bin:$PWD/obj-amd64-xen$GITBRANCH/rumptools/bin:$newpath
@@ -68,10 +73,11 @@ export -f dbgbuildrump
 echo "Command dbgbuildrump is available"
 
 dbgrebuildrump() {
-    rm -fr obj-amd64-xen             \
+    setgitbranch
+    rm -fr obj-amd64-xen$GITBRANCH   \
         platform/xen/obj             \
         platform/xen/xen/include/xen \
-        rumprun
+        rumprun$GITBRANCH
 
     dbgbuildrump
 }

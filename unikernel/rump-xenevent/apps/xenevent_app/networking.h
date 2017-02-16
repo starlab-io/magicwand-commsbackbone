@@ -58,8 +58,19 @@ xe_net_recvfrom_socket( IN  mt_request_socket_recv_t        * Request,
                         IN  thread_item_t                   * WorkerThread );
 
 int
-xe_net_poll( IN  mt_request_socket_poll_t  * Request,
-             OUT mt_response_socket_poll_t * Response,
-             IN  thread_item_t             * WorkerThread );
+xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
+                    OUT mt_response_poll_create_t * Response,
+                    IN  thread_item_t             * WorkerThread );
+
+
+int
+xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
+                   OUT mt_response_poll_create_t * Response,
+                   IN  thread_item_t             * WorkerThread );
+
+int
+xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
+                  OUT mt_response_poll_wait_t * Response,
+                  IN  thread_item_t           * WorkerThread );
 
 #endif // xenevent_app_networking_h

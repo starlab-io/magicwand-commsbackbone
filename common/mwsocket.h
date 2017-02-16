@@ -21,12 +21,12 @@
 *********************************************************************/
 
 typedef int32_t mw_socket_fd_t;
-
+typedef  mw_socket_fd_t mw_fd_t; // alias
 
 #define MW_SOCKET_PREFIX_MASK   0x7f000000
 #define MW_SOCKET_PREFIX_SHIFT  24
-#define _MW_SOCKET_PREFIX       (uint8_t) 'C' // 0x43 = 67
-#define MW_SOCKET_PREFIX_VAL    (_MW_SOCKET_PREFIX << 24)
+#define _MW_SOCKET_PREFIX       (uint8_t) 'S' // 0x53 = 0n83
+#define MW_SOCKET_PREFIX_VAL    (_MW_SOCKET_PREFIX << MW_SOCKET_PREFIX_SHIFT)
 #define MW_SOCKET_CLIENT_MASK   0x00ffff00
 #define MW_SOCKET_LOCAL_ID_MASK 0x000000ff
 
@@ -36,10 +36,26 @@ typedef int32_t mw_socket_fd_t;
 #define MW_SOCKET_IS_FD(x)                                      \
     ( ((x) >> MW_SOCKET_PREFIX_SHIFT) == _MW_SOCKET_PREFIX )
 
-#define MW_SOCKET_CREATE(rumpid, sockfd)                                \
-    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)rumpid) << 8) | (sockfd) )
+#define MW_SOCKET_CREATE(clientid, sockfd)                                \
+    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)clientid) << 8) | (sockfd) )
 
 #define MW_SOCKET_GET_ID(x)                     \
     ((x) & MW_SOCKET_LOCAL_ID_MASK )
+
+//
+// Pseudo-socket FDs for epoll_wait() support. Format same as
+// MW_SOCKET, but the prefix is different.
+//
+
+#define _MW_EPOLL_PREFIX (uint8_t)'E' // 0x45 = 0n69
+#define MW_EPOLL_PREFIX_SHIFT MW_SOCKET_PREFIX_SHIFT
+#define MW_EPOLL_PREFIX_VAL (_MW_EPOLL_PREFIX << MW_EPOLL_PREFIX_SHIFT)
+
+#define MW_EPOLL_IS_FD(x)                                       \
+    ( ( (x) >> MW_EPOLL_PREFIX_SHIFT ) == _MW_EPOLL_PREFIX )
+
+#define MW_EPOLL_CREATE_FD(clientid, x)                         \
+    ( MW_EPOLL_PREFIX_VAL | (((uint16_t)clientid) << 8) | (x) )
+
 
 #endif // mwsockets_h

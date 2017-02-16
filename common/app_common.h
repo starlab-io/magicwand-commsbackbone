@@ -14,7 +14,7 @@
 // MYDEBUG enables DEBUG_PRINT()
 //
 
-#if (defined MYDEBUG)
+#if (defined MYDEBUG) || (defined MYTRAP)
 static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
@@ -68,20 +68,6 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     DEBUG_PRINT_FUNCTION( "At breakpoint\n" );                          \
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     _DEBUG_EMIT_BREAKPOINT()
-#else
-
-#  define DEBUG_BREAK()      ((void)0)
-
-#endif
-
-
-#ifdef MYDEBUG
-#  define DEBUG_PRINT(...)                                              \
-    pthread_mutex_lock( &__debug_mutex );                               \
-    _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
-    DEBUG_FLUSH_FUNCTION(stdout);                                       \
-    pthread_mutex_unlock( &__debug_mutex )
 
 // MYASSERT emits breakpoint only if MYTRAP is defined.
 // If MYDEBUG is defined it will print out the message
@@ -95,8 +81,23 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     }
 
 #else
+
+#  define DEBUG_BREAK()   ((void)0)
+#  define MYASSERT(x)     ((void)0)
+#endif
+
+
+#ifdef MYDEBUG
+#  define DEBUG_PRINT(...)                                              \
+    pthread_mutex_lock( &__debug_mutex );                               \
+    _DEBUG_EMIT_META();                                                 \
+    DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
+    DEBUG_FLUSH_FUNCTION(stdout);                                       \
+    pthread_mutex_unlock( &__debug_mutex )
+
+
+#else
 #  define DEBUG_PRINT(...) ((void)0)
-#  define MYASSERT(x)      ((void)0)
 #endif // MYDEBUG
 
 

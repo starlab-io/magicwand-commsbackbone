@@ -75,7 +75,9 @@ typedef enum
     MtRequestSocketAccept   = MT_REQUEST( 8 ),
     MtRequestSocketRecv     = MT_REQUEST( 9 ),
     MtRequestSocketRecvFrom = MT_REQUEST( 10 ),
-    MtRequestSocketPoll     = MT_REQUEST( 11 )
+    MtRequestPollCreate     = MT_REQUEST( 11 ),
+    MtRequestPollWait       = MT_REQUEST( 12 ),
+    MtRequestPollClose      = MT_REQUEST( 13 )
 } mt_request_type_t;
 
 
@@ -92,12 +94,16 @@ typedef enum
     MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
     MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
-    MtResponseSocketPoll        = MT_RESPONSE( MtRequestSocketPoll     )
+    
+    MtResponsePollCreate        = MT_RESPONSE( MtRequestPollCreate     ),
+    MtResponsePollWait          = MT_RESPONSE( MtRequestPollWait       ),
+    MtResponsePollClose         = MT_RESPONSE( MtRequestPollClose      )
 } mt_response_id_t;
 
 typedef uint32_t mt_addrlen_t;
 
 #define MT_INVALID_SOCKET_FD (mw_socket_fd_t)-1
+#define MT_INVALID_FD        (mw_socket_fd_t)-1
 
 typedef uint16_t mt_port_t;
 
@@ -105,8 +111,12 @@ typedef uint16_t mt_port_t;
 typedef int64_t mt_status_t;
 
 #define _CRITICAL_ERROR_MASK 0xc0000000
-#define CRITICAL_ERROR(x) (_CRITICAL_ERROR_MASK | (x))
-#define IS_CRITICAL_ERROR(x) ( (x) & _CRITICAL_ERROR_MASK )
+
+#define CRITICAL_ERROR(x)                       \
+    (_CRITICAL_ERROR_MASK | (x))
+
+#define IS_CRITICAL_ERROR(x)                                    \
+    ( _CRITICAL_ERROR_MASK == ((x) & _CRITICAL_ERROR_MASK) )
 
 typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_REQUEST  0xff11
@@ -245,7 +255,7 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
 
 
 //
-//Bind
+// Bind
 //
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
@@ -406,37 +416,55 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 
 
 //
-// Poll
+// Poll: call epoll() on a set of socket MW FDs.
 //
+typedef struct MT_STRUCT_ATTRIBS _mt_request_poll_create
+{
+    mt_request_base_t   base;
+} mt_request_poll_create_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_socket_poll_fd
+typedef struct MT_STRUCT_ATTRIBS _mt_response_poll_create
+{
+    mt_response_base_t   base;
+} mt_response_poll_create_t;
+
+#define MT_REQUEST_POLL_CREATE_SIZE sizeof(mt_request_base_t)
+#define MT_RESPONSE_POLL_CREATE_SIZE sizeof(mt_response_base_t)
+
+#define mt_request_poll_close_t  mt_request_poll_create_t
+#define mt_response_poll_close_t mt_response_poll_create_t
+#define MT_REQUEST_POLL_CLOSE_SIZE  MT_REQUEST_POLL_CREATE_SIZE
+#define MT_RESPONSE_POLL_CLOSE_SIZE MT_RESPONSE_POLL_CREATE_SIZE
+
+
+typedef struct MT_STRUCT_ATTRIBS _mt_poll_info
 {
     mw_socket_fd_t sockfd;
     uint32_t       events; // in and out
-} mt_socket_poll_fd_t;
+} mt_poll_info_t;
 
-#define MT_SOCKET_POLL_SIZE sizeof(mt_socket_poll_fd_t)
+#define MT_POLL_INFO_SIZE sizeof(mt_poll_info_t)
 
-typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_poll
+typedef struct MT_STRUCT_ATTRIBS _mt_request_poll_wait
 {
     mt_request_base_t   base;
     uint32_t            count;
     uint32_t            timeout;
-    mt_socket_poll_fd_t pollfds[ MAX_POLL_FD_COUNT ];
-} mt_request_socket_poll_t;
+    mt_poll_info_t      pollinfo[ MAX_POLL_FD_COUNT ];
+} mt_request_poll_wait_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_poll
+typedef struct MT_STRUCT_ATTRIBS _mt_response_poll_wait
 {
     mt_response_base_t  base;
     uint32_t            count;
-    mt_socket_poll_fd_t pollfds[ MAX_POLL_FD_COUNT ];
-} mt_response_socket_poll_t;
+    mt_poll_info_t      pollinfo[ MAX_POLL_FD_COUNT ];
+} mt_response_poll_wait_t;
 
-#define MT_REQUEST_SOCKET_POLL_SIZE \
+#define MT_REQUEST_POLL_WAIT_SIZE                               \
     ( sizeof(mt_request_base_t) + 2 * sizeof(uint32_t) )
 
-#define MT_RESPONSE_SOCKET_POLL_SIZE \
-    ( sizeof(mt_request_base_t) + sizeof(uint32_t) )
+#define MT_RESPONSE_POLL_WAIT_SIZE                      \
+    ( sizeof(mt_response_base_t) + sizeof(uint32_t) )
 
 
 //
@@ -454,7 +482,9 @@ typedef union _mt_request_generic
     mt_request_socket_listen_t  socket_listen;
     mt_request_socket_accept_t  socket_accept;
     mt_request_socket_recv_t    socket_recv;
-    mt_request_socket_poll_t    socket_poll;
+    mt_request_poll_create_t    poll_create;
+    mt_request_poll_close_t     poll_close;
+    mt_request_poll_wait_t      poll_wait;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -478,7 +508,11 @@ typedef union _mt_response_generic
     mt_response_socket_accept_t     socket_accept;
     mt_response_socket_recv_t       socket_recv;
     mt_response_socket_recvfrom_t   socket_recvfrom;
-    mt_response_socket_poll_t       socket_poll;
+
+    mt_response_poll_create_t    poll_create;
+    mt_response_poll_close_t     poll_close;
+    mt_response_poll_wait_t      poll_wait;
+
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

@@ -8,7 +8,7 @@ CFLAGS = -Wall -fPIC -DPIC -std=gnu99
 CFLAGS += -I.. -I../../../common
 CFLAGS += -ggdb
 CFLAGS += -DMYDEBUG
-#CFLAGS += -DMYTRAP
+CFLAGS += -DMYTRAP
 
 LD = ld
 LDFLAGS = -ggdb -shared
@@ -22,9 +22,6 @@ all: list $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so
 
 list: $(LIST_SRCS)
 	$(CC) -fPIC -c $^
-
-$(PRE_LOAD_LIB_NAME).o: $(PRE_LOAD_LIB_NAME).c
-	$(CC) $(CFLAGS) -c $^ -o $@
 
 $(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o $(LIST_OBJ) epoll_wrapper.o
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl

@@ -26,7 +26,7 @@ extern uint16_t client_id;
     ( errno ? (mt_status_t)(-errno) : (mt_status_t)(-1) )
 
 //
-// Upon recv(), should we attempt to receive the entire buffer given?
+// Upon recv(), should we attempt to receive all the bytes requested?
 //
 #define XE_RECEIVE_ALL 0
 
@@ -255,6 +255,35 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
         MYASSERT( !"listen" );
     }
 
+#if 0
+    // HACK HACK HACK
+    uint32_t val = 30;
+    int rc = setsockopt( WorkerThread->native_sock_fd,
+                         SOL_TCP,
+                         TCP_DEFER_ACCEPT, 
+                         &val,
+                         sizeof(val) );
+    MYASSERT( 0 == rc );
+    // HACK HACK HACK
+#endif
+
+#if 1
+    uint32_t val = 1;
+    int rc;
+    rc = setsockopt( WorkerThread->native_sock_fd,
+                     SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val) );
+    MYASSERT( 0 == rc );
+
+    rc = setsockopt( WorkerThread->native_sock_fd,
+                     SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val) );
+    MYASSERT( 0 == rc );
+
+    //rc = setsockopt( WorkerThread->native_sock_fd,
+    //SOL_TCP, TCP_NODELAY, &val, sizeof(val) );
+    //MYASSERT( 0 == rc );
+    
+#endif
+    
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_LISTEN_SIZE,
                               (mt_response_generic_t *) Response);
@@ -565,9 +594,53 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 }
 
 int
-xe_net_poll( IN  mt_request_socket_poll_t  * Request,
-             OUT mt_response_socket_poll_t * Response,
-             IN  thread_item_t             * WorkerThread )
+xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
+                    OUT mt_response_poll_create_t * Response,
+                    IN  thread_item_t             * WorkerThread )
+{
+    int rc = 0;
+    mw_socket_fd_t fd = 0;
+    
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+
+    fd = MW_EPOLL_CREATE_FD( client_id, WorkerThread->idx );
+
+    // Set up Response; clobbers base.sockfd
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_POLL_CREATE_SIZE,
+                              (mt_response_generic_t *)Response );
+
+    Response->base.status = 0;
+    Response->base.sockfd = fd;
+    WorkerThread->sock_fd = fd;
+    WorkerThread->native_sock_fd = MT_INVALID_FD;
+
+    DEBUG_PRINT ( "**** Thread %d <== epoll fd %x\n",
+                  WorkerThread->idx, fd );
+
+    return rc;
+}
+
+
+int
+xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
+                   OUT mt_response_poll_create_t * Response,
+                   IN  thread_item_t             * WorkerThread )
+{
+    Response->base.status = 0;
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_CLOSE_SIZE,
+                              (mt_response_generic_t *)Response );
+    return 0;
+}
+
+
+int
+xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
+                  OUT mt_response_poll_wait_t * Response,
+                  IN  thread_item_t           * WorkerThread )
 {
     int rc = 0;
     struct pollfd fds[ MAX_POLL_FD_COUNT ] = {0};
@@ -577,10 +650,11 @@ xe_net_poll( IN  mt_request_socket_poll_t  * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    if ( (uint8_t *) &Request->pollfds[ fdcount+1 ]
-         > (uint8_t *)Request + Request->base.size );
+    if ( Request->base.size
+         != (MT_REQUEST_POLL_WAIT_SIZE + fdcount * MT_POLL_INFO_SIZE) )
     {
-        MYASSERT( !"Input is not sufficient for all the FDs given" );
+        _DEBUG_EMIT_BREAKPOINT();
+        MYASSERT( !"The request's size is wrong" );
         Response->base.status = -EINVAL;
         fdcount = 0;
         goto ErrorExit;
@@ -589,8 +663,8 @@ xe_net_poll( IN  mt_request_socket_poll_t  * Request,
     for ( int i = 0; i < fdcount; ++i )
     {
         // Get the native FD and flags from the request
-        mt_socket_poll_fd_t * pollfd = &Request->pollfds[i];
-        mw_socket_fd_t mwfd = pollfd->sockfd;
+        mt_poll_info_t * pi = &Request->pollinfo[i];
+        mw_socket_fd_t mwfd = pi->sockfd;
 
         int thridx = MW_SOCKET_GET_ID( mwfd );
 
@@ -603,39 +677,41 @@ xe_net_poll( IN  mt_request_socket_poll_t  * Request,
         }
 
         fds[i].fd      = g_state.worker_threads[ thridx ].native_sock_fd;
-        fds[i].events  = pollfd->events;
+        fds[i].events  = pi->events;
         fds[i].revents = 0;
 
-        // Record external-facing FD in response
-        Response->pollfds[i].sockfd = mwfd;
-        Response->pollfds[i].events = 0;
+        Response->pollinfo[i].sockfd = MT_INVALID_SOCKET_FD;
     } // for
 
+    Response->count = fdcount; // Copy input count
+
     Response->base.status = poll( fds, Request->count, Request->timeout );
+    DEBUG_PRINT( "poll() returned %d\n", Response->base.status );
+    MYASSERT( 0 == Response->base.status );
+
     if ( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         MYASSERT( !"poll" );
         goto ErrorExit;
     }
-    
-    for ( int i = 0; i < Request->count; ++i )
+
+    // Pass back all the elements given. Report all return events but
+    // only passing FDs.
+    for ( int i = 0; i < fdcount; ++i )
     {
-        //mt_socket_poll_fd_t * pollfd = &Request->pollfds[i];
-        if ( 0 == fds[i].revents )
+        if ( 0 != fds[i].revents )
         {
-            Response->pollfds[i].sockfd = MT_INVALID_SOCKET_FD;
+            Response->pollinfo[i].sockfd = Request->pollinfo[i].sockfd;
         }
-        else
-        {
-            Response->pollfds[i].events = fds[i].revents;
-        }
+        Response->pollinfo[i].events = fds[i].revents;
     } // for
+
     
 ErrorExit:
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_POLL_SIZE
-                                + MT_SOCKET_POLL_SIZE * fdcount,
+                              MT_RESPONSE_POLL_WAIT_SIZE
+                              + fdcount * MT_POLL_INFO_SIZE ,
                               (mt_response_generic_t *)Response );
 
     return rc;

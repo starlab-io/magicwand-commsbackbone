@@ -5,14 +5,19 @@
 ##
 
 echo "If debugging, use:"
-echo "gdb -tui -ex 'target remote:1234' xenevent.run"
+echo "gdb -tui -ex 'target remote localhost:1234' xenevent.run"
 
 if [ -z $RUMP_IP ]; then
     echo "Failure: RUMP_IP must be defined in env"
     exit 1
 fi
 
+if [ -z $_GW ]; then
+    echo "Failure: _GW must be defined in env"
+    exit 1
+fi
+
 rumprun -S xen -dip -D 1234 -M 512 -N xenevent-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$RUMP_IP/24 \
+        -W xen0,inet,static,$RUMP_IP/24,$_GW \
         xenevent.run

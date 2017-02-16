@@ -228,6 +228,7 @@ static bool                ring_prepared;
 // Only this single thread reads from the ring buffer
 static struct task_struct * worker_thread;
 static bool pending_exit = false;
+static struct completion   worker_thread_done;
 
 // Defines:
 // mwevent_sring_t
@@ -477,6 +478,8 @@ ErrorExit:
 
 
 /// @brief Destroys the thread response map. Blocks until complete.
+///
+/// Caller must hold rundown_mutex
 static void
 destroy_thread_response_map( thread_response_map_t ** ThreadRespMap )
 {
@@ -896,6 +899,7 @@ ErrorExit:
         // Push our front_ring data to shared ring
         RING_FINAL_CHECK_FOR_RESPONSES( &front_ring, available );
     }
+    complete( &worker_thread_done );
     do_exit( rc );
 }
 
@@ -1317,6 +1321,7 @@ mwchar_init(void)
    mutex_init( &rundown_mutex );
    
    init_completion( &ring_ready );
+   init_completion( &worker_thread_done );
    
    sema_init( &event_channel_sem, 0 );
    mutex_init( &request_mutex );
@@ -1440,12 +1445,16 @@ static void mwchar_exit(void)
 
     // Kick the worker thread. It might be waiting for the ring to
     // become ready, or it might be waiting for responses to arrive on
-    // the ring.
+    // the ring. Wait for it to complete so shared resources can be
+    // destroyed.
     complete( &ring_ready );
     up( &event_channel_sem );
 
     if ( NULL != worker_thread )
     {
+        pr_info( "Waiting for worker thread (PID %d) to complete\n",
+                 worker_thread->pid );
+        wait_for_completion( &worker_thread_done );
         //kthread_stop( worker_thread );
         //worker_thread = NULL;
     }

@@ -295,8 +295,8 @@ release_buffer_item( buffer_item_t * BufferItem )
 // the thread that has already been assigned to work on Socket.
 //
 static int
-get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
-                              OUT thread_item_t ** WorkerThread )
+get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
+                          OUT thread_item_t ** WorkerThread )
 {
     int rc = EBUSY;
     thread_item_t * curr = NULL;
@@ -304,9 +304,9 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Socket );
+    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Fd );
 
-    if ( MT_INVALID_SOCKET_FD == Socket )
+    if ( MT_INVALID_SOCKET_FD == Fd )
     {
         for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
         {
@@ -328,7 +328,7 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
         // This socket has already been assigned a thread. It's LSB is
         // the index into the thread array of its servicer. The code
         // below verifies this claim.
-        int idx = MW_SOCKET_GET_ID( Socket );
+        int idx = MW_SOCKET_GET_ID( Fd );
 
         if ( idx >= MAX_THREAD_COUNT )
         {
@@ -345,7 +345,7 @@ get_worker_thread_for_socket( IN mw_socket_fd_t Socket,
             goto ErrorExit;
         }
 
-        if ( Socket != curr->sock_fd )
+        if ( Fd != curr->sock_fd )
         {
             MYASSERT( !"Internal error: socket's ID mismatches internal one\n" );
             rc = EINVAL;
@@ -502,10 +502,23 @@ process_buffer_item( buffer_item_t * BufferItem )
                                      ( mt_response_socket_recvfrom_t* ) &response,
                                      worker );
         break;
-    case MtRequestSocketPoll:
-        rc = xe_net_poll( ( mt_request_socket_poll_t*) request,
-                          ( mt_response_socket_poll_t* ) &response,
-                          worker );
+
+    case MtRequestPollCreate:
+        rc = xe_net_poll_create( (mt_request_poll_create_t *) request,
+                                 (mt_response_poll_create_t *) &response,
+                                 worker );
+        break;
+
+    case MtRequestPollClose:
+        rc = xe_net_poll_close( (mt_request_poll_close_t *) request,
+                                (mt_response_poll_close_t *) &response,
+                                worker );
+        break;
+        
+    case MtRequestPollWait:
+        rc = xe_net_poll_wait( ( mt_request_poll_wait_t*) request,
+                               ( mt_response_poll_wait_t* ) &response,
+                               worker );
         break;
         
     case MtRequestInvalid:
@@ -531,7 +544,7 @@ process_buffer_item( buffer_item_t * BufferItem )
          && response.base.status >= 0 )
     {
         thread_item_t * accept_thread = NULL;
-        rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, &accept_thread );
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, &accept_thread );
         if ( rc )
         {
             // Destroy the new socket and fail the request
@@ -571,8 +584,9 @@ process_buffer_item( buffer_item_t * BufferItem )
     // We're done with the buffer item
     release_buffer_item( BufferItem );
 
-    // If we closed the socket, we can release the thread.
-    if ( MtRequestSocketClose == reqtype )
+    // If we closed a socket/FD, we can release the thread.
+    if ( MtRequestSocketClose == reqtype
+         || MtRequestPollClose == reqtype )
     {
         release_worker_thread( worker );
     }
@@ -613,17 +627,16 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
     if ( MtRequestSocketCreate == request_type
-        ||  MtRequestSocketPoll == request_type )
+         ||  MtRequestPollCreate == request_type )
     {
         // Request requires a new thread, which we procure by getting
         // requesting the thread for an invalid socket. The thread and
         // socket are bound for the lifetime of the socket.
 
-        // If we're creating a socket, we process the request here so
-        // that future work goes to the right thread. If the request
-        // is for a poll(), we'll enqueue the work so our main thread
-        // isn't blocked.
-        rc = get_worker_thread_for_socket( MT_INVALID_SOCKET_FD, AssignedThread );
+        // If we're creating a socket FD or an epoll pseudo-FD, we
+        // process the request here so that future work goes to the
+        // right thread. The operation is cheap in both these cases.
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
         if ( rc )
         {
             // No worker thread is available. We could yield and try
@@ -632,17 +645,8 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         }
 
         BufferItem->assigned_thread = *AssignedThread;
-
-        if ( MtRequestSocketCreate == request_type )
-        {
-            *ProcessFurther = false;
-            rc = process_buffer_item( BufferItem );
-        }
-        else
-        {
-            rc = workqueue_enqueue( (*AssignedThread)->work_queue,
-                                    BufferItem->idx );
-        }
+        *ProcessFurther = false;
+        rc = process_buffer_item( BufferItem );
     }
     
 #if 0
@@ -654,18 +658,35 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         *ProcessFurther = false;
 
         // Assign thread 0 and comment out next two statements
-        rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
 
         BufferItem->assigned_thread = *AssignedThread;
 
         rc = process_buffer_item( BufferItem );
     }
 #endif
+    else if ( MtRequestSocketClose == request_type )
+    {
+        // A socket could be stuck in a connect or accept state, and
+        // we need to close it now. Don't queue the request; do it the
+        // rude way instead.
+        *ProcessFurther = false;
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        if ( rc )
+        {
+            // No thread; already closed?
+            goto ErrorExit;
+        }
+        
+        BufferItem->assigned_thread = *AssignedThread;
+
+        rc = process_buffer_item( BufferItem );
+    }
     else
     {
-        // This request is for an existing connection. Find the thread
+        // This request is for an existing FD/thread. Find the thread
         // that services the connection and assign it.
-        rc = get_worker_thread_for_socket( request->base.sockfd, AssignedThread );
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
         if ( rc )
         {
             goto ErrorExit;
