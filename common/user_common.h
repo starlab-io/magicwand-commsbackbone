@@ -73,6 +73,13 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     DEBUG_FLUSH_FUNCTION(stdout);                                       \
     _DEBUG_EMIT_BREAKPOINT()
 
+#else
+
+#  define DEBUG_BREAK()   ((void)0)
+
+#endif
+
+#if (defined MYDEBUG) || (defined MYTRAP)
 // MYASSERT emits breakpoint only if MYTRAP is defined.
 // If MYDEBUG is defined it will print out the message
 #  define MYASSERT(x)                                                   \
@@ -85,8 +92,6 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     }
 
 #else
-
-#  define DEBUG_BREAK()   ((void)0)
 #  define MYASSERT(x)     ((void)0)
 #endif
 

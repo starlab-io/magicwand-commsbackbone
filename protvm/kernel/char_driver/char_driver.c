@@ -26,14 +26,15 @@
  *
  * The driver supports the usage of an underlying Xen ring buffer. The
  * driver writes requests on to the ring buffer, and reads responses
- * off the ring buffer. The driver cannot assume that a response
+ * off the ring buffer. The driver does not assume that a response
  * following a request will correspond to that last request.
  *
  * The multithreading support works as follows:
  *
- * (1) A user-mode program writes a request to the driver. The driver
- *     assigns an ID to that request and associates the caller's PID
- *     with the request ID via a connection mapping.
+ * (1) A user-mode program writes a request to the driver's
+ *     device. The driver assigns a system-wide unique ID to that
+ *     request and associates the caller's PID with the request ID via
+ *     a connection mapping.
  *
  * (2) The user-mode program reads a response from the driver. The
  *     driver will cause that read() to block until it receives the
@@ -42,9 +43,13 @@
  *     the consume_response_worker() function.
  *
  * This model implies some strict standards:
- *  - The remote side *must* send a response for every request it receives
- *  - The programs that use this driver must be well-written: they must
- *    always read a response for every request they write.
+ *
+ * - The remote side *must* send a response for every request it
+ *   receives during normal (vs. rundown) operation
+ * 
+ *  - The programs that use this driver must be well-written: they
+ *    must always read a response for every request they write. This
+ *    driver attempts to enforce that behavior.
  *
  * This LKM tracks MW sockets that user applications have opened. If
  * an application doesn't close the socket correctly, this LKM will do
@@ -54,8 +59,9 @@
  * could be accessed in two ways: (1) the app sends a request via
  * write() and reads a response via read(); (2) the app suddenly calls
  * dev_release() or dies (and the kernel calls dev_release()), in
- * which case the LKM must send close requests over the ring buffer
- * and wait for the responses on behalf of the app.
+ * which case the LKM puts the resources associated with the app into
+ * "rundown" mode, sends "close" requests over the ring buffer and
+ * waits for the responses on behalf of the app.
  */
 
 
@@ -95,11 +101,14 @@
 // Record performance metrics?
 #define MW_DO_PERFORMANCE_METRICS 0
 
-#define MW_INTERNAL_MAX_WAIT_ATTEMPTS 5
+// In case of rundown, how many times will we await a response across
+// interrupts?
+#define MW_INTERNAL_MAX_WAIT_ATTEMPTS 2
 
 // Is the remote side checking for Xen events?
 #define MW_DO_SEND_RING_EVENTS 0
 
+#define MW_RUNDOWN_DELAY_SECS 1
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Mason");
@@ -131,7 +140,7 @@ typedef struct _thread_response_map {
     bool awaiting_read;
 
     // Worker thread writes the response here upone receipt, then
-    // releases data_pending
+    // releases response_pending
     mt_response_generic_t response;
 
     // Track the open sockets
@@ -150,7 +159,7 @@ typedef struct _thread_response_map {
 
     // Semaphore provides communication between the worker thread and
     // the in-process thread that waits on data.
-    struct semaphore data_pending;
+    struct semaphore response_pending;
 
     // List link for this mapping. It is either in the active list or
     // the rundown list; never in both.
@@ -248,7 +257,7 @@ static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
 static int
-internal_close_mwsock( thread_response_map_t * ThreadResp,
+internal_close_remote_fd( thread_response_map_t * ThreadResp,
                        mw_socket_fd_t          SockFd );
 
 static int
@@ -321,7 +330,7 @@ get_thread_response_map_by_task( struct task_struct * Task,
     init_rwsem( &curr->sock_list_sem );
     INIT_LIST_HEAD( &curr->open_socket_list );
 
-    sema_init( &curr->data_pending,   0 );
+    sema_init( &curr->response_pending,   0 );
 
     // Allow 1 request/response pair per thread. 
     sema_init( &curr->in_flight_lock, 1 );
@@ -438,7 +447,7 @@ destroy_socket( thread_response_map_t * ThreadResp,
 
     if ( SendClose )
     {
-        rc = internal_close_mwsock( ThreadResp, MwSock );
+        rc = internal_close_remote_fd( ThreadResp, MwSock );
         if ( rc )
         {
             goto ErrorExit;
@@ -500,9 +509,10 @@ destroy_thread_response_map( thread_response_map_t ** ThreadRespMap )
     up_write( &rundown_mapping_lock );
     up_write( &active_mapping_lock );
 
-    // We won't destroy this thread's sockets until there's no
-    // in-flight I/O
-    down( &threadresp->in_flight_lock );
+    // Make an effort to wait for in-flight I/O. However, it is
+    // impossible to wait for all of it, e.g. an accept() might never
+    // return.
+    (void) down_interruptible( &threadresp->in_flight_lock );
 
     // Close all the open sockets for this mapping. A true rundown
     // field means that sock_list_sem is held.
@@ -861,17 +871,19 @@ consume_response_worker( void * Data )
             response->base.size = sizeof( conn->response );
         }
 
-        // If this response involves socket creation or destruction,
+        // If this response involves thread assignment on the Rump side, 
         // we need to take certain actions. If destruction has been
         // started, then don't re-attempt it! Whether or not the
         // destruction succeeds, fall-through so the waiter is
         // notified.
-        if ( MtResponseSocketClose == response->base.type )
+        if ( MT_DEALLOCATES_FD( response->base.type ) )
         {
             (void) destroy_socket( conn, response->base.sockfd, false );
         }
-        else if ( MtResponseSocketCreate == response->base.type )
+        else if ( MT_ALLOCATES_FD( response->base.type )
+                  && response->base.sockfd > 0 )
         {
+            // The resource allocation succeeded: track the FD
             rc = track_socket( conn, response->base.sockfd );
             if ( rc )
             {
@@ -890,7 +902,7 @@ consume_response_worker( void * Data )
         up( &conn->in_flight_lock );
 
         // Signal the (blocked) thread that a response is available
-        up( &conn->data_pending );
+        up( &conn->response_pending );
     } // while
 
 ErrorExit:
@@ -951,7 +963,7 @@ send_request( mt_request_generic_t *  Request,
         goto ErrorExit;
     }
     
-    // The semaphore 'data_pending' starts off locked. read_request()
+    // The semaphore 'response_pending' starts off locked. read_request()
     // attempts to acquire it and blocks until the worker thread
     // releases it upon receipt of a response.
 
@@ -962,8 +974,9 @@ send_request( mt_request_generic_t *  Request,
     pr_debug( "PID %d associated with message ID %lx\n",
               threadresp->pid, (unsigned long)id );
     
-    // If we are awaiting a read, then we cannot write!
-    if ( threadresp->awaiting_read )
+    // If we are awaiting a read, then we cannot write! However, if
+    // we're in rundown then we allow the write.
+    if ( threadresp->awaiting_read && !threadresp->rundown )
     {
         pr_err( "Caller already called write() and must call read() next\n" );
         rc = -EPERM;
@@ -1022,7 +1035,7 @@ send_request( mt_request_generic_t *  Request,
 
     // We've written to the ring; now we are awaiting a response
     threadresp->awaiting_read = true;
-    
+
     // Update the ring buffer only *after* the mapping is in place!
     ++front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &front_ring );
@@ -1650,39 +1663,48 @@ internal_await_response( thread_response_map_t * ThreadResp )
 
     // Now we have the mapping for this thread. Wait for data to
     // arrive. This may block the calling process.
-    pr_debug( "Waiting for response %lx to arrive (interruptible=%d)\n",
+    pr_debug( "Waiting for response %lx to arrive (rundown=%d)\n",
               (unsigned long) ThreadResp->message_id,
-              !ThreadResp->rundown );
-    
-    if ( ThreadResp->rundown )
+              ThreadResp->rundown );
+
+    for ( int i = MW_INTERNAL_MAX_WAIT_ATTEMPTS; i > 0; --i )
     {
-        // Uninterruptible wait for completion of rundown. This is OK
-        // unless things go very badly, e.g. the Ring buffer gets
-        // corrupted, the remote side crashes, etc.
-        down( &ThreadResp->data_pending );
-    }
-    else
-    {
-        if ( down_interruptible( &ThreadResp->data_pending ) )
+        if ( down_interruptible( &ThreadResp->response_pending ) )
         {
             // Signal encountered, semaphore not acquired.
-            // The caller must try again.
             pr_err( "read() was interrupted\n" );
 
-            // The response will be dropped; the write/read pair must be
-            // done again
-            ThreadResp->awaiting_read = false;
-            rc = -EINTR;
-            goto ErrorExit;        
+            if ( !ThreadResp->rundown )
+            {
+                // The non-rundown case: give up immediately. The
+                // response will be dropped; the write/read pair must
+                // be reissued.
+                rc = -EINTR;
+                goto ErrorExit;
+            }
+
+            // Rundown case
+            if ( 0 == i )
+            {
+                // Our final attempt was interrupted. Give up.
+                rc = -EINTR;
+                goto ErrorExit;
+            }
+        }
+        else
+        {
+            break;
         }
     }
-    
+
+    // The semaphore was acquired: the response has arrived, and the
+    // user should call a write() next.
     pr_debug( "Response %lx (size %x) has arrived\n",
               (unsigned long) ThreadResp->message_id,
               ThreadResp->response.base.size );
 
     ThreadResp->awaiting_read = false;
-    
+
 ErrorExit:
     return rc;
 }
@@ -1695,8 +1717,8 @@ ErrorExit:
 /// properly.
 ///
 static int
-internal_close_mwsock( thread_response_map_t * ThreadResp,
-                       mw_socket_fd_t          SockFd )
+internal_close_remote_fd( thread_response_map_t * ThreadResp,
+                          mw_socket_fd_t          SockFd )
 {
     int rc = 0;
     mt_request_socket_close_t req;
@@ -1821,10 +1843,19 @@ static int dev_release(struct inode *inodep, struct file *filep)
     // group. First, move them all to the rundown list. Then, destroy
     // them. Do this so we're not holding the active lock throughout
     // the operation.
-    
+
+    // Give the ring buffer a chance to clear out
+    pr_debug( "Sleeping..." );
+    set_current_state( TASK_INTERRUPTIBLE );
+    schedule_timeout( MW_RUNDOWN_DELAY_SECS * HZ );
+    pr_debug( "Done sleeping." );
+
     list_for_each_entry_safe( currtc, nexttc, &active_mapping_head, list )
     {
-        destroy_thread_response_map( &currtc );
+        if ( currtc->tgid == current->tgid )
+        {
+            destroy_thread_response_map( &currtc );
+        }
     }
 
     //rundown_in_progress = false;

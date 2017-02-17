@@ -22,8 +22,9 @@
 extern xenevent_globals_t g_state;
 extern uint16_t client_id;
 
+// Get a negative value, preferably (-1 * errno)
 #define XE_GET_NEG_ERRNO()                              \
-    ( errno ? (mt_status_t)(-errno) : (mt_status_t)(-1) )
+    ( errno > 0 ? (mt_status_t)(-errno) : (mt_status_t)(-1) )
 
 //
 // Upon recv(), should we attempt to receive all the bytes requested?
@@ -144,7 +145,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         Response->base.status = XE_GET_NEG_ERRNO();
         DEBUG_PRINT( "connect() failed with status %ld\n",
                      (unsigned long)Response->base.status );
-        MYASSERT( !"connect" );
+        //MYASSERT( !"connect" );
     }
 
 
@@ -314,10 +315,11 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                      (struct sockaddr *) &sockaddr,
                      (socklen_t *) &addrlen );
 
-    if ( Response->base.status < 0 )
+    if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
-        MYASSERT( !"accept" );
+        Response->base.sockfd = -1;
+        //MYASSERT( !"accept" );
     }
     else
     {
@@ -471,13 +473,11 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     MYASSERT( NULL != WorkerThread );
 
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
-    
+
     DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd );
 
-    Response->base.status = 0;
-    
     Response->base.status = close( WorkerThread->native_sock_fd );
 
     if ( Response->base.status < 0 )
@@ -593,6 +593,8 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     return 0;
 }
 
+// Create a pseudo-fd. The only resource we're reserving is a
+// thread. No network resources are used.
 int
 xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
                     OUT mt_response_poll_create_t * Response,

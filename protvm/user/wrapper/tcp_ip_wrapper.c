@@ -156,7 +156,7 @@ read_response( mt_response_generic_t * Response )
 
     if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
     {
-        DEBUG_PRINT( "Remote side encountered critical error %lx, ID=%lx FD=%x\n",
+        DEBUG_PRINT( "Remote side encountered critical error %x, ID=%lx FD=%x\n",
                      (long)Response->base.status,
                      (unsigned long)Response->base.id,
                      Response->base.sockfd );
@@ -545,7 +545,7 @@ close( int Fd )
         if ( response.base.status )
         {
             DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n",
-                         response.base.status );
+                         (long) -response.base.status );
             errno = -response.base.status;
             // Returns -1 on error
             rc = -1;
@@ -553,7 +553,7 @@ close( int Fd )
         }
 
         // Returns 0 on success
-        rc = response.base.status;
+        rc = 0;
     }
     else if ( MW_EPOLL_IS_FD( Fd ) )
     {
@@ -584,7 +584,7 @@ close( int Fd )
         if ( response.base.status )
         {
             DEBUG_PRINT( "\t\tError closing poll FD. Error Number: %lu\n",
-                         response.base.status );
+                         (long)response.base.status );
             errno = -response.base.status;
             rc = -1;
             goto ErrorExit;
@@ -681,14 +681,13 @@ listen( int SockFd, int backlog )
 
 #endif
 
+    rc = response.base.status;
     if ( response.base.status < 0 )
     {
+        DEBUG_PRINT( "Returning error response with errno=%d\n", -response.base.status );
         errno = -response.base.status;
         rc = -1;
-        goto ErrorExit;
     }
-
-    rc = response.base.status;
 
 ErrorExit:
     return rc;

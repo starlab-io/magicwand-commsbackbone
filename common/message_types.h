@@ -59,27 +59,32 @@ typedef uint64_t mt_id_t;
 
 
 //
-// Possible message types - Request and Response values must run in parallel
+// Possible message types - Request and Response values must run in parallel.
+//
+// Requests that allocate an FD are in the form 01xx. Request that
+// deallocate an FD are in the form 02xx.
 //
 
 typedef enum
 {
-    MtRequestInvalid        = MT_REQUEST( 0 ),
-    MtRequestSocketCreate   = MT_REQUEST( 1 ),
-    MtRequestSocketConnect  = MT_REQUEST( 2 ),
-    MtRequestSocketClose    = MT_REQUEST( 3 ),
-    MtRequestSocketRead     = MT_REQUEST( 4 ),
-    MtRequestSocketSend     = MT_REQUEST( 5 ),
-    MtRequestSocketBind     = MT_REQUEST( 6 ),
-    MtRequestSocketListen   = MT_REQUEST( 7 ),
-    MtRequestSocketAccept   = MT_REQUEST( 8 ),
-    MtRequestSocketRecv     = MT_REQUEST( 9 ),
-    MtRequestSocketRecvFrom = MT_REQUEST( 10 ),
-    MtRequestPollCreate     = MT_REQUEST( 11 ),
-    MtRequestPollWait       = MT_REQUEST( 12 ),
-    MtRequestPollClose      = MT_REQUEST( 13 )
+    MtRequestInvalid        = MT_REQUEST( 0x0000 ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x0101 ),
+    MtRequestSocketConnect  = MT_REQUEST( 0x0002 ),
+    MtRequestSocketClose    = MT_REQUEST( 0x0203 ),
+    MtRequestSocketRead     = MT_REQUEST( 0x0004 ),
+    MtRequestSocketSend     = MT_REQUEST( 0x0005 ),
+    MtRequestSocketBind     = MT_REQUEST( 0x0006 ),
+    MtRequestSocketListen   = MT_REQUEST( 0x0007 ),
+    MtRequestSocketAccept   = MT_REQUEST( 0x0108 ),
+    MtRequestSocketRecv     = MT_REQUEST( 0x0009 ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 0x000a ),
+    MtRequestPollCreate     = MT_REQUEST( 0x010b ),
+    MtRequestPollWait       = MT_REQUEST( 0x000c ),
+    MtRequestPollClose      = MT_REQUEST( 0x020d )
 } mt_request_type_t;
 
+#define MT_ALLOCATES_FD(x)   ( ((x) >> 8) & 1 )
+#define MT_DEALLOCATES_FD(x) ( ((x) >> 8) & 2 )
 
 typedef enum
 {
@@ -108,15 +113,20 @@ typedef uint32_t mt_addrlen_t;
 typedef uint16_t mt_port_t;
 
 // maps to -errno; non-negative value typically means success; must be signed
-typedef int64_t mt_status_t;
+typedef int32_t mt_status_t;
 
-#define _CRITICAL_ERROR_MASK 0xc0000000
+
+// A critical error is a 32 bit value starting with the byte 0xc0
+#define _CRITICAL_ERROR_PREFIX 0xc0
+#define _CRITICAL_ERROR_PREFIX_SHIFT 24
+#define _CRITICAL_ERROR_MASK (_CRITICAL_ERROR_PREFIX << _CRITICAL_ERROR_PREFIX_SHIFT)
 
 #define CRITICAL_ERROR(x)                       \
     (_CRITICAL_ERROR_MASK | (x))
 
-#define IS_CRITICAL_ERROR(x)                                    \
-    ( _CRITICAL_ERROR_MASK == ((x) & _CRITICAL_ERROR_MASK) )
+#define IS_CRITICAL_ERROR(x)                                            \
+    ( ((x) >> _CRITICAL_ERROR_PREFIX_SHIFT) == _CRITICAL_ERROR_PREFIX )
+
 
 typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_REQUEST  0xff11

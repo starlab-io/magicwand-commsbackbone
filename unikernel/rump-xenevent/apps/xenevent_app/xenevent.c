@@ -543,6 +543,7 @@ process_buffer_item( buffer_item_t * BufferItem )
          && response.base.status >= 0 )
     {
         thread_item_t * accept_thread = NULL;
+        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
         rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, &accept_thread );
         if ( rc )
         {
@@ -559,6 +560,7 @@ process_buffer_item( buffer_item_t * BufferItem )
 
             // Mask the native FD with the exported one
             response.base.status = accept_thread->sock_fd;
+            response.base.sockfd = accept_thread->sock_fd;
         }
     }
 
@@ -567,7 +569,7 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     size_t written = write( g_state.output_fd,
                             &response,
-                            sizeof(response) );
+                            response.base.size );
 
     //clock_gettime(CLOCK_REALTIME, &t2);
     //t3 = diff(t1,t2);
@@ -583,12 +585,19 @@ process_buffer_item( buffer_item_t * BufferItem )
     // We're done with the buffer item
     release_buffer_item( BufferItem );
 
-    // If we closed a socket/FD, we can release the thread.
-    if ( MtRequestSocketClose == reqtype
-         || MtRequestPollClose == reqtype )
+    // Release the worker thread if: (1) we are releasing an FD, or
+    // (2) we were allocating an FD and that failed.
+    if ( MT_DEALLOCATES_FD( reqtype )
+         || (MT_ALLOCATES_FD( reqtype ) && response.base.status < 0 ) )
     {
+        DEBUG_PRINT( "Releasing thread due to request type or response: "
+                     "ID %lx type %x status %d\n",
+                     response.base.id, reqtype, response.base.status );
         release_worker_thread( worker );
     }
+
+    DEBUG_PRINT( "Done with response %lx\n", response.base.id );
+    debug_print_state();
 
     return rc;
 }

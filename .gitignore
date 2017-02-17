@@ -17,3 +17,8 @@ cscope.out
 tags
 Makefile
 makefile
+GPATH
+GRTAGS
+GSYMS
+GTAGS
+TAGS

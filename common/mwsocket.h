@@ -20,7 +20,7 @@
 * undertand and interpret this value correctly.
 *********************************************************************/
 
-typedef int32_t mw_socket_fd_t;
+typedef int32_t mw_socket_fd_t; // signed
 typedef  mw_socket_fd_t mw_fd_t; // alias
 
 #define MW_SOCKET_PREFIX_MASK   0x7f000000
