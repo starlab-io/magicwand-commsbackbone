@@ -12,8 +12,8 @@
 
 #include <poll.h>
 
-#include "app_common.h"
-#include "common.h"
+#include "user_common.h"
+#include "xenevent_app_common.h"
 #include "networking.h"
 #include "message_types.h"
 #include "threadpool.h"
@@ -686,7 +686,7 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     Response->count = fdcount; // Copy input count
 
     Response->base.status = poll( fds, Request->count, Request->timeout );
-    DEBUG_PRINT( "poll() returned %d\n", Response->base.status );
+    DEBUG_PRINT( "poll() returned %ld\n", (long)Response->base.status );
     MYASSERT( 0 == Response->base.status );
 
     if ( Response->base.status < 0 )

@@ -2,7 +2,7 @@
 #define xenevent_app_networking_h
 
 #include <sys/types.h>
-#include "app_common.h"
+#include "user_common.h"
 #include "message_types.h"
 #include "threadpool.h"
 

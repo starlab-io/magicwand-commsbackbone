@@ -75,11 +75,9 @@
 #include <semaphore.h>
 
 #include "networking.h"
-#include "app_common.h"
+#include "user_common.h"
 
-//#include "bitfield.h"
-
-#include "common.h"
+#include "xenevent_app_common.h"
 
 
 #ifdef NODEVICE // for debugging outside of Rump
@@ -91,7 +89,8 @@
 // Global data
 xenevent_globals_t g_state;
 
-// XXXX: put this in globals and share globals
+// XXXX: put this in globals and share globals; add IOCTL to driver to get domid.
+
 // What's my domid? Needed by networking.c
 uint16_t   client_id;
 
@@ -667,9 +666,9 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
 #endif
     else if ( MtRequestSocketClose == request_type )
     {
-        // A socket could be stuck in a connect or accept state, and
-        // we need to close it now. Don't queue the request; do it the
-        // rude way instead.
+        // This socket's thread could be stuck awaiting connect() or
+        // accept(), but the PVM has asked us to close it now. So,
+        // we'll close it from this thread and fail the pending IO.
         *ProcessFurther = false;
         rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
         if ( rc )

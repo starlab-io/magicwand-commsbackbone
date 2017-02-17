@@ -1,6 +1,10 @@
 #ifndef app_common_h
 #define app_common_h
 
+//
+// Basic definitions for user-mode code, whether on PVM or Rump side
+//
+
 #define DEBUG_PRINT_FUNCTION printf
 #define DEBUG_FLUSH_FUNCTION fflush
 

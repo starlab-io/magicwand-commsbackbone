@@ -32,7 +32,7 @@
 
 #include <message_types.h>
 #include <translate.h>
-#include <app_common.h>
+#include <user_common.h>
 
 #include "epoll_wrapper.h"
 
@@ -156,8 +156,10 @@ read_response( mt_response_generic_t * Response )
 
     if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
     {
-        DEBUG_PRINT( "Remote side encountered critical error %x, ID=%lx FD=%x\n",
-                     (unsigned long)Response->base.id, Response->base.sockfd );
+        DEBUG_PRINT( "Remote side encountered critical error %lx, ID=%lx FD=%x\n",
+                     (long)Response->base.status,
+                     (unsigned long)Response->base.id,
+                     Response->base.sockfd );
         rc = -1;
         Response->base.status = -EIO;
     }

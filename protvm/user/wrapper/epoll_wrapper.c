@@ -2,7 +2,7 @@
 
 #include <message_types.h>
 #include <translate.h>
-#include <app_common.h>
+#include <user_common.h>
 #include <stdlib.h>
 #include <errno.h>
 
