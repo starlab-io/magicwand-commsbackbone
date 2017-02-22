@@ -157,7 +157,7 @@ read_response( mt_response_generic_t * Response )
     if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
     {
         DEBUG_PRINT( "Remote side encountered critical error %x, ID=%lx FD=%x\n",
-                     (long)Response->base.status,
+                     (int)Response->base.status,
                      (unsigned long)Response->base.id,
                      Response->base.sockfd );
         rc = -1;

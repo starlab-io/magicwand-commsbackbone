@@ -5,8 +5,17 @@ if [ -z $PVM_IP ]; then
    exit 1
 fi
 
+if [ -z $PVM_USER ]; then
+   echo "Failure: PVM_USER must be defined in env"
+   exit 1
+fi
+
+if [ -z $MWROOT ]; then
+   echo "Failure: MWROOT must be defined in env"
+   exit 1
+fi
+
 PVM_USER=sluser
-MWROOT="$HOME/proj/mw-cbb"
 
 docmd() {
    echo "Command: $*"

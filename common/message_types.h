@@ -19,7 +19,7 @@
 
 // XXXX do this smartly
 // Set it small for testing - then we can deal with more messages
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN 64
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN 1500
 
 // Maximum length for a host name
 #define MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN MESSAGE_TYPE_MAX_PAYLOAD_LEN
