@@ -11,15 +11,15 @@
 
 #include "mwsocket.h"
 
+#define _common_header_file
+#include "common_config.h"
+#undef  _common_header_file
+
 //
 // Maximum number of file descriptors we will call poll() on
 //
 #define MAX_POLL_FD_COUNT 16
 
-
-// XXXX do this smartly
-// Set it small for testing - then we can deal with more messages
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN 1500
 
 // Maximum length for a host name
 #define MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN MESSAGE_TYPE_MAX_PAYLOAD_LEN

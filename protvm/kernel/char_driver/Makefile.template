@@ -1,3 +1,5 @@
+# To preserve changes to Makefile, edit Makefile.template
+
 obj-m+=char_driver.o
 
 ccflags-y := -I$(src)/../../../common

@@ -22,11 +22,11 @@ do
 done
 
 
-#cp $MWROOT/unikernel/rump-xenevent/apps/xenevent_app/$mt \
-#   $MWROOT/unikernel/rump-xenevent/apps/xenevent_app/$m
+cp $MWROOT/unikernel/rump-xenevent/apps/xenevent_app/$mt \
+   $MWROOT/unikernel/rump-xenevent/apps/xenevent_app/$m
 
-#cp $MWROOT/protvm/user/wrapper/$mt $MWROOT/protvm/user/wrapper/$m
+cp $MWROOT/protvm/user/wrapper/$mt $MWROOT/protvm/user/wrapper/$m
 
-#cp $MWROOT/protvm/kernel/char_driver/$mt $MWROOT/protvm/kernel/char_driver/$m
+cp $MWROOT/protvm/kernel/char_driver/$mt $MWROOT/protvm/kernel/char_driver/$m
 
-cp $MWROOT/common/xen_keystore_defs.h.template $MWROOT/common/xen_keystore_defs.h
+cp $MWROOT/common/common_config.h.template $MWROOT/common/common_config.h

@@ -1,3 +1,5 @@
+# To preserve changes to Makefile, edit Makefile.template
+
 ##
 ## NOTICE: If you compiled rump from a git branch, the rump binaries
 ## were put into a directory whose name is branch-dependent. Adjust
