@@ -11,9 +11,9 @@
 
 #include "mwsocket.h"
 
-#define _common_header_file
-#include "common_config.h"
-#undef  _common_header_file
+#define _common_config_defined
+#   include "common_config.h"
+#undef  _common_config_defined
 
 //
 // Maximum number of file descriptors we will call poll() on

@@ -22,7 +22,7 @@
 // have for our ring buffer. For instance, if the order is 6, we share
 // 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
 // 6. Xen has an upper limit on how many pages can be shared. That
-// limit can be configured by a boot parameter.
+// limit can be configured by a Xen boot parameter.
 //
 
 #define XENEVENT_GRANT_REF_ORDER  1 // (2^order == page count)
