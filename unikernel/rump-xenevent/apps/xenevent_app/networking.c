@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 
 #include <poll.h>
+#include <fcntl.h>
 
 #include "user_common.h"
 #include "xenevent_app_common.h"
@@ -270,7 +271,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 
 #if 1
     uint32_t val = 1;
-    int rc;
+    int rc = 0;
     rc = setsockopt( WorkerThread->native_sock_fd,
                      SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val) );
     MYASSERT( 0 == rc );
@@ -639,6 +640,7 @@ xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
 }
 
 
+
 int
 xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
                   OUT mt_response_poll_wait_t * Response,
@@ -647,6 +649,8 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     int rc = 0;
     struct pollfd fds[ MAX_POLL_FD_COUNT ] = {0};
     int fdcount = Request->count;
+    int flags = 0;
+    int native_fd = 0;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -678,7 +682,18 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
             goto ErrorExit;
         }
 
-        fds[i].fd      = g_state.worker_threads[ thridx ].native_sock_fd;
+        //On native sockfds call fnctl to set O_NONBLOCK
+        //after poll has returned mark file descriptor as blocking again
+        native_fd = g_state.worker_threads[ thridx ].native_sock_fd;
+        
+        flags = fcntl( native_fd, F_GETFL );
+
+        //make sure this is a blocking flag
+        MYASSERT( !( flags & O_NONBLOCK ) );
+
+        fcntl( native_fd, F_SETFD, ( flags | O_NONBLOCK ) );
+
+        fds[i].fd      = native_fd;
         fds[i].events  = pi->events;
         fds[i].revents = 0;
 
@@ -691,6 +706,7 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     DEBUG_PRINT( "poll() returned %ld\n", (long)Response->base.status );
     MYASSERT( 0 == Response->base.status );
 
+
     if ( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
@@ -699,9 +715,13 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     }
 
     // Pass back all the elements given. Report all return events but
-    // only passing FDs.
+    // only passing FDs.  Return all sockets to a blocking state
     for ( int i = 0; i < fdcount; ++i )
-    {
+    {   
+        
+        flags = fcntl( native_fd, F_GETFL );
+        fcntl( fds[i].fd, F_SETFD, ( flags & ~O_NONBLOCK ) ); 
+
         if ( 0 != fds[i].revents )
         {
             Response->pollinfo[i].sockfd = Request->pollinfo[i].sockfd;
