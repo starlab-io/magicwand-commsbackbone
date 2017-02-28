@@ -59,32 +59,49 @@ typedef uint64_t mt_id_t;
 
 
 //
-// Possible message types - Request and Response values must run in parallel.
+// Possible message types - request and response values run in
+// parallel. Here's the format of the message type:
 //
-// Requests that allocate an FD are in the form 01xx. Request that
-// deallocate an FD are in the form 02xx.
+//  position 76543210 76543210
+//  value    ssssffff tttttttt
 //
+// s = side (0 = request, 1 = response), f = flags, t = type
+//
+
+#define _MT_TYPE_MASK_ALLOC_FD    0x0100
+#define _MT_TYPE_MASK_DEALLOC_FD  0x0200
+#define _MT_TYPE_MASK_CALL_BLOCKS 0x0400
+
+#define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
+#define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
+
+// The call might block, depending on socket state (including O_NONBLOCK flag)
+#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_CALL_BLOCKS )
 
 typedef enum
 {
-    MtRequestInvalid        = MT_REQUEST( 0x0000 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x0101 ),
-    MtRequestSocketConnect  = MT_REQUEST( 0x0002 ),
-    MtRequestSocketClose    = MT_REQUEST( 0x0203 ),
-    MtRequestSocketRead     = MT_REQUEST( 0x0004 ),
-    MtRequestSocketSend     = MT_REQUEST( 0x0005 ),
-    MtRequestSocketBind     = MT_REQUEST( 0x0006 ),
-    MtRequestSocketListen   = MT_REQUEST( 0x0007 ),
-    MtRequestSocketAccept   = MT_REQUEST( 0x0108 ),
-    MtRequestSocketRecv     = MT_REQUEST( 0x0009 ),
-    MtRequestSocketRecvFrom = MT_REQUEST( 0x000a ),
-    MtRequestPollCreate     = MT_REQUEST( 0x010b ),
-    MtRequestPollWait       = MT_REQUEST( 0x000c ),
-    MtRequestPollClose      = MT_REQUEST( 0x020d )
+    MtRequestInvalid        = MT_REQUEST( 0x00 ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD     ),
+    MtRequestSocketConnect  = MT_REQUEST( 0x02 | _MT_TYPE_MASK_CALL_BLOCKS  ),
+    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD   ),
+    MtRequestSocketRead     = MT_REQUEST( 0x04 | _MT_TYPE_MASK_CALL_BLOCKS  ),
+    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_CALL_BLOCKS  ),
+    MtRequestSocketBind     = MT_REQUEST( 0x06 ),
+    MtRequestSocketListen   = MT_REQUEST( 0x07 ),
+    MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD | _MT_TYPE_MASK_CALL_BLOCKS), 
+    MtRequestSocketRecv     = MT_REQUEST( 0x09 | _MT_TYPE_MASK_CALL_BLOCKS  ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 0x0a | _MT_TYPE_MASK_CALL_BLOCKS  ),
+
+    MtRequestSocketGetName  = MT_REQUEST( 0x0b ),
+    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c ),
+
+    MtRequestSocketFcntl    = MT_REQUEST( 0x0d ),
+
+    MtRequestPollCreate     = MT_REQUEST( 0x20 | _MT_TYPE_MASK_ALLOC_FD ),
+    MtRequestPollWait       = MT_REQUEST( 0x21 | _MT_TYPE_MASK_CALL_BLOCKS),
+    MtRequestPollClose      = MT_REQUEST( 0x22 | _MT_TYPE_MASK_DEALLOC_FD ),
 } mt_request_type_t;
 
-#define MT_ALLOCATES_FD(x)   ( ((x) >> 8) & 1 )
-#define MT_DEALLOCATES_FD(x) ( ((x) >> 8) & 2 )
 
 typedef enum
 {
@@ -99,10 +116,14 @@ typedef enum
     MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
     MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
-    
+    MtResponseSocketGetName     = MT_RESPONSE( MtRequestSocketGetName  ),
+    MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
+    MtResponseSocketFcntl       = MT_RESPONSE( MtRequestSocketFcntl    ),
+
     MtResponsePollCreate        = MT_RESPONSE( MtRequestPollCreate     ),
     MtResponsePollWait          = MT_RESPONSE( MtRequestPollWait       ),
-    MtResponsePollClose         = MT_RESPONSE( MtRequestPollClose      )
+    MtResponsePollClose         = MT_RESPONSE( MtRequestPollClose      ),
+
 } mt_response_id_t;
 
 typedef uint32_t mt_addrlen_t;
@@ -187,7 +208,7 @@ typedef struct _mt_sockaddr_in
 
 } mt_sockaddr_in_t;
 
-//Inet address type
+// Inet address type
 #define MT_INADDR_ANY ((unsigned long int) 0x00000000)
 
 
@@ -253,6 +274,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_create
     mt_protocol_family_t sock_fam; // or socket domain
     mt_sock_type_t       sock_type;
     uint32_t             sock_protocol;
+    uint8_t              blocking; // bool
 } mt_request_socket_create_t;
 
 typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
@@ -270,7 +292,7 @@ typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
     mt_request_base_t base;
-    mt_sockaddr_in_t sockaddr;  //Hard coded for now, but should be a union of all sockaddr types.
+    mt_sockaddr_in_t sockaddr;  // Hard coded for now, but should be a union of all sockaddr types.
 
 } mt_request_socket_bind_t;
 
@@ -282,6 +304,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 
 #define MT_REQUEST_SOCKET_BIND_SIZE sizeof(mt_request_socket_bind_t)
 #define MT_RESPONSE_SOCKET_BIND_SIZE sizeof(mt_response_socket_bind_t)
+
 
 
 //
@@ -424,6 +447,57 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 #define MT_RESPONSE_SOCKET_SEND_SIZE sizeof(mt_response_socket_send_t)
 
 
+//
+// GetName, GetPeer
+//
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_getname
+{
+    mt_request_base_t base;
+    mt_size_t         maxlen;
+} mt_request_socket_getname_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
+{
+    mt_response_base_t base;
+    mt_size_t          reslen;
+    mt_sockaddr_in_t sockaddr;  // Hard coded for now, but should be a union of all sockaddr types.
+
+} mt_response_socket_getname_t;
+
+#define mt_request_socket_getpeer_t  mt_request_socket_getname_t
+#define mt_response_socket_getpeer_t mt_response_socket_getname_t
+
+#define MT_REQUEST_SOCKET_GETNAME_SIZE sizeof(mt_request_socket_getname_t)
+#define MT_RESPONSE_SOCKET_GETNAME_SIZE sizeof(mt_response_socket_getname_t)
+
+#define MT_REQUEST_SOCKET_GETPEER_SIZE MT_REQUEST_SOCKET_GETNAME_SIZE
+#define MT_RESPONSE_SOCKET_GETPEER_SIZE MT_RESPONSE_SOCKET_GETNAME_SIZE
+
+
+//
+// fcntl
+//
+
+#define MT_SOCK_FCNTL_FLAG_CT 1
+#define MT_SOCK_FCNTL_IDX_NONBLOCK 0
+
+// Potentially required: O_NDELAY, FNDELAY (See apr sockopt.c)
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_fcntl
+{
+    mt_request_base_t base;
+    uint8_t           modify; // we're using F_SETFL
+    uint8_t           flags[MT_SOCK_FCNTL_FLAG_CT];
+} mt_request_socket_fcntl_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_fcntl
+{
+    mt_response_base_t base;
+    uint8_t           flags[MT_SOCK_FCNTL_FLAG_CT];
+} mt_response_socket_fcntl_t;
+
+#define MT_REQUEST_SOCKET_FCNTL_SIZE sizeof(mt_request_socket_fcntl_t)
+#define MT_RESPONSE_SOCKET_FCNTL_SIZE sizeof(mt_response_socket_fcntl_t)
+
 
 //
 // Poll: call epoll() on a set of socket MW FDs.
@@ -492,6 +566,10 @@ typedef union _mt_request_generic
     mt_request_socket_listen_t  socket_listen;
     mt_request_socket_accept_t  socket_accept;
     mt_request_socket_recv_t    socket_recv;
+    mt_request_socket_getname_t socket_getname;
+    mt_request_socket_getpeer_t socket_getpeer;
+    mt_request_socket_fcntl_t   socket_fcntl;
+
     mt_request_poll_create_t    poll_create;
     mt_request_poll_close_t     poll_close;
     mt_request_poll_wait_t      poll_wait;
@@ -511,13 +589,15 @@ typedef union _mt_response_generic
     mt_response_socket_create_t     socket_create;
     mt_response_socket_connect_t    socket_connect;
     mt_response_socket_close_t      socket_close;
-//    mt_response_socket_read_t       socket_read;
     mt_response_socket_send_t       socket_send;
     mt_response_socket_bind_t       socket_bind;
     mt_response_socket_listen_t     socket_listen;
     mt_response_socket_accept_t     socket_accept;
     mt_response_socket_recv_t       socket_recv;
     mt_response_socket_recvfrom_t   socket_recvfrom;
+    mt_response_socket_getname_t    socket_getname;
+    mt_response_socket_getpeer_t    socket_getpeer;
+    mt_response_socket_fcntl_t      socket_fcntl;
 
     mt_response_poll_create_t    poll_create;
     mt_response_poll_close_t     poll_close;

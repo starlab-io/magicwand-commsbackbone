@@ -47,21 +47,30 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t		* Request,
                       OUT  mt_response_socket_accept_t 		* Response,
                       IN   thread_item_t                        * WorkerThread );
 
-
 int
 xe_net_recv_socket( IN  mt_request_socket_recv_t        * Request,
                     OUT mt_response_socket_recv_t       * Response,
                     IN  thread_item_t                   * WorkerThread );
+
 int
 xe_net_recvfrom_socket( IN  mt_request_socket_recv_t        * Request,
                         OUT mt_response_socket_recvfrom_t   * Response,
                         IN  thread_item_t                   * WorkerThread );
 
 int
+xe_net_get_name( IN mt_request_socket_getname_t  * Request,
+                 IN mt_response_socket_getname_t * Response,
+                 IN  thread_item_t               * WorkerThread );
+
+int
+xe_net_socket_fcntl( IN  mt_request_socket_fcntl_t  * Request,
+                     OUT mt_response_socket_fcntl_t * Response,
+                     IN  thread_item_t              * WorkerThread );
+
+int
 xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
                     OUT mt_response_poll_create_t * Response,
                     IN  thread_item_t             * WorkerThread );
-
 
 int
 xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
