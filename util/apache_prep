@@ -1,0 +1,13 @@
+#!/bin/sh
+
+##  
+## Minimal preparation for apache launch to fix things that get
+## messed up
+##
+
+_LOCK=/var/lock/apache2
+_USER=www-data
+
+rm -fr $_LOCK
+mkdir $_LOCK
+chown $_USER:$_USER $_LOCK

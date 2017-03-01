@@ -39,4 +39,17 @@ typedef struct _xenevent_globals
     
 } xenevent_globals_t;
 
+
+// Convert errno value to MW standard
+int xe_get_mwerrno( int NativeErrno );
+
+//
+// Get -1*errno, provided the result will be negative. Otherwise return -1.
+//
+#define XE_GET_NEG_ERRNO_VAL(__err)                              \
+    ( (__err) > 0 ? -(mt_status_t)xe_get_mwerrno((__err)) : (mt_status_t)(-1) )
+
+#define XE_GET_NEG_ERRNO()   XE_GET_NEG_ERRNO_VAL( errno )
+
+
 #endif //xenevent_app_common_h

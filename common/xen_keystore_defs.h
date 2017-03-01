@@ -1,6 +1,12 @@
 #ifndef xenevent_config_h
 #define xenevent_config_h
 
+
+#define _common_config_defined
+#   include "common_config.h"
+#undef  _common_config_defined
+
+
 //
 // XenStore keys and specs
 //
@@ -57,14 +63,7 @@
 // XXXX: in moving to a multi-rump model, we can have smaller but more
 // shared regions. now we just have one.
 
-//
-// Number of grant refs (1/page). This determines how much space we
-// have for our ring buffer. For instance, if the order is 6, we share
-// 2^6 = 64 (0x40) pages, or 0x40000 bytes.
-//
-
-//#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
-#define XENEVENT_GRANT_REF_ORDER  1 // (2^order == page count)
+// XENEVENT_GRANT_REF_ORDER is in common_config.h
 #define XENEVENT_GRANT_REF_COUNT  (1 << XENEVENT_GRANT_REF_ORDER)
 
 // Split the grant refs apart by this in XenStore

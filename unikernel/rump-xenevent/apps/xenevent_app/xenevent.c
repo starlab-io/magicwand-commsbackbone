@@ -79,6 +79,7 @@
 
 #include "xenevent_app_common.h"
 
+#include "mwerrno.h"
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
@@ -94,6 +95,175 @@ xenevent_globals_t g_state;
 // What's my domid? Needed by networking.c
 uint16_t   client_id;
 
+
+//
+// Errno support
+//
+
+int xe_get_mwerrno( int NativeErrno )
+{
+    struct errmap
+    {
+        int native;
+        int mwerr;
+    };
+    static struct errmap _emap[] =
+        {
+            {EPERM, MW_EPERM },
+            {ENOENT, MW_ENOENT },
+            {ESRCH, MW_ESRCH },
+            {EINTR, MW_EINTR },
+            {EIO, MW_EIO },
+            {ENXIO, MW_ENXIO },
+            {E2BIG, MW_E2BIG },
+            {ENOEXEC, MW_ENOEXEC },
+            {EBADF, MW_EBADF },
+            {ECHILD, MW_ECHILD },
+            {EAGAIN, MW_EAGAIN },
+            {ENOMEM, MW_ENOMEM },
+            {EACCES, MW_EACCES },
+            {EFAULT, MW_EFAULT },
+            {ENOTBLK, MW_ENOTBLK },
+            {EBUSY, MW_EBUSY },
+            {EEXIST, MW_EEXIST },
+            {EXDEV, MW_EXDEV },
+            {ENODEV, MW_ENODEV },
+            {ENOTDIR, MW_ENOTDIR },
+            {EISDIR, MW_EISDIR },
+            {EINVAL, MW_EINVAL },
+            {ENFILE, MW_ENFILE },
+            {EMFILE, MW_EMFILE },
+            {ENOTTY, MW_ENOTTY },
+            {ETXTBSY, MW_ETXTBSY },
+            {EFBIG, MW_EFBIG },
+            {ENOSPC, MW_ENOSPC },
+            {ESPIPE, MW_ESPIPE },
+            {EROFS, MW_EROFS },
+            {EMLINK, MW_EMLINK },
+            {EPIPE, MW_EPIPE },
+            {EDOM, MW_EDOM },
+            {ERANGE, MW_ERANGE },
+            {EDEADLK, MW_EDEADLK },
+            {ENAMETOOLONG, MW_ENAMETOOLONG },
+            {ENOLCK, MW_ENOLCK },
+            {ENOSYS, MW_ENOSYS },
+            {ENOTEMPTY, MW_ENOTEMPTY },
+            {ELOOP, MW_ELOOP },
+            {EWOULDBLOCK, MW_EWOULDBLOCK },
+            {ENOMSG, MW_ENOMSG },
+            {EIDRM, MW_EIDRM },
+            //{ECHRNG, MW_ECHRNG },
+            //{EL2NSYNC, MW_EL2NSYNC },
+            //{EL3HLT, MW_EL3HLT },
+            //{EL3RST, MW_EL3RST },
+            //{ELNRNG, MW_ELNRNG },
+            //{EUNATCH, MW_EUNATCH },
+            //{ENOCSI, MW_ENOCSI },
+            //{EL2HLT, MW_EL2HLT },
+            //{EBADE, MW_EBADE },
+            //{EBADR, MW_EBADR },
+            //{EXFULL, MW_EXFULL },
+            //{ENOANO, MW_ENOANO },
+            //{EBADRQC, MW_EBADRQC },
+            //{EBADSLT, MW_EBADSLT },
+            //{EDEADLOCK, MW_EDEADLOCK },
+            //{EBFONT, MW_EBFONT },
+            {ENOSTR, MW_ENOSTR },
+            {ENODATA, MW_ENODATA },
+            {ETIME, MW_ETIME },
+            {ENOSR, MW_ENOSR },
+            //{ENONET, MW_ENONET },
+            //{ENOPKG, MW_ENOPKG },
+            {EREMOTE, MW_EREMOTE },
+            {ENOLINK, MW_ENOLINK },
+            //{EADV, MW_EADV },
+            //{ESRMNT, MW_ESRMNT },
+            //{ECOMM, MW_ECOMM },
+            {EPROTO, MW_EPROTO },
+            {EMULTIHOP, MW_EMULTIHOP },
+            //{EDOTDOT, MW_EDOTDOT },
+            {EBADMSG, MW_EBADMSG },
+            {EOVERFLOW, MW_EOVERFLOW },
+            //{ENOTUNIQ, MW_ENOTUNIQ },
+            //{EBADFD, MW_EBADFD },
+            //{EREMCHG, MW_EREMCHG },
+            //{ELIBACC, MW_ELIBACC },
+            //{ELIBBAD, MW_ELIBBAD },
+            //{ELIBSCN, MW_ELIBSCN },
+            //{ELIBMAX, MW_ELIBMAX },
+            //{ELIBEXEC, MW_ELIBEXEC },
+            //{EILSEQ, MW_EILSEQ },
+            //{ERESTART, MW_ERESTART },
+            //{ESTRPIPE, MW_ESTRPIPE },
+            {EUSERS, MW_EUSERS },
+            {ENOTSOCK, MW_ENOTSOCK },
+            {EDESTADDRREQ, MW_EDESTADDRREQ },
+            {EMSGSIZE, MW_EMSGSIZE },
+            {EPROTOTYPE, MW_EPROTOTYPE },
+            {ENOPROTOOPT, MW_ENOPROTOOPT },
+            {EPROTONOSUPPORT, MW_EPROTONOSUPPORT },
+            {ESOCKTNOSUPPORT, MW_ESOCKTNOSUPPORT },
+            {EOPNOTSUPP, MW_EOPNOTSUPP },
+            {EPFNOSUPPORT, MW_EPFNOSUPPORT },
+            {EAFNOSUPPORT, MW_EAFNOSUPPORT },
+            {EADDRINUSE, MW_EADDRINUSE },
+            {EADDRNOTAVAIL, MW_EADDRNOTAVAIL },
+            {ENETDOWN, MW_ENETDOWN },
+            {ENETUNREACH, MW_ENETUNREACH },
+            {ENETRESET, MW_ENETRESET },
+            {ECONNABORTED, MW_ECONNABORTED },
+            {ECONNRESET, MW_ECONNRESET },
+            {ENOBUFS, MW_ENOBUFS },
+            {EISCONN, MW_EISCONN },
+            {ENOTCONN, MW_ENOTCONN },
+            {ESHUTDOWN, MW_ESHUTDOWN },
+            {ETOOMANYREFS, MW_ETOOMANYREFS },
+            {ETIMEDOUT, MW_ETIMEDOUT },
+            {ECONNREFUSED, MW_ECONNREFUSED },
+            {EHOSTDOWN, MW_EHOSTDOWN },
+            {EHOSTUNREACH, MW_EHOSTUNREACH },
+            {EALREADY, MW_EALREADY },
+            {EINPROGRESS, MW_EINPROGRESS },
+            {ESTALE, MW_ESTALE },
+            //{EUCLEAN, MW_EUCLEAN },
+            //{ENOTNAM, MW_ENOTNAM },
+            //{ENAVAIL, MW_ENppAVAIL },
+            //{EISNAM, MW_EISNAM },
+            //{EREMOTEIO, MW_EREMOTEIO },
+            //{EDQUOT, MW_EDQUOT },
+            //{ENOMEDIUM, MW_ENOMEDIUM },
+            //{EMEDIUMTYPE, MW_EMEDIUMTYPE },
+            //{ECANCELED, MW_ECANCELED },
+            //{ENOKEY, MW_ENOKEY },
+            //{EKEYEXPIRED, MW_EKEYEXPIRED },
+            //{EKEYREVOKED, MW_EKEYREVOKED },
+            //{EKEYREJECTED, MW_EKEYREJECTED },
+            //{EOWNERDEAD, MW_EOWNERDEAD },
+            //{ENOTRECOVERABLE, MW_ENOTRECOVERABLE },
+            //{ERFKILL, MW_ERFKILL },
+            //{EHWPOISON, MW_EHWPOISON },
+        };
+    int rc = 0;
+
+    if ( 0 == NativeErrno )
+    {
+        goto ErrorExit;
+    }
+
+    for ( int i = 0; i < NUMBER_OF( _emap ); ++i )
+    {
+        if ( _emap[i].native == NativeErrno )
+        {
+            rc = _emap[i].mwerr;
+            goto ErrorExit;
+        }
+    }
+    // Generic error: EPERM
+    rc = MW_EPERM;
+
+ErrorExit:
+    return rc;
+}
 
 /*
 static struct timespec 
@@ -501,7 +671,17 @@ process_buffer_item( buffer_item_t * BufferItem )
                                      ( mt_response_socket_recvfrom_t* ) &response,
                                      worker );
         break;
-
+    case MtRequestSocketGetName:
+    case MtRequestSocketGetPeer:
+        rc = xe_net_get_name( (mt_request_socket_getname_t *)  request,
+                              (mt_response_socket_getname_t *) &response,
+                              worker );
+        break;
+    case MtRequestSocketFcntl:
+        rc = xe_net_socket_fcntl( (mt_request_socket_fcntl_t *) request,
+                                  (mt_response_socket_fcntl_t *) &response,
+                                  worker );
+        break;
     case MtRequestPollCreate:
         rc = xe_net_poll_create( (mt_request_poll_create_t *) request,
                                  (mt_response_poll_create_t *) &response,
@@ -597,7 +777,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     }
 
     DEBUG_PRINT( "Done with response %lx\n", response.base.id );
-    debug_print_state();
+    //debug_print_state();
 
     return rc;
 }

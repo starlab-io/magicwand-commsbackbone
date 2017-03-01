@@ -22,7 +22,6 @@ mw_epoll_create( void )
 {
     epoll_request_t * req = NULL;
 
-
     req = malloc( sizeof(*req) );
     if ( NULL == req )
     {
@@ -87,7 +86,6 @@ mw_epoll_ctl(int EpFd,
     int rc = 0;
     epoll_request_t * req = NULL;
     int idx = -1;
-    
 
     req = mw_epoll_find( EpFd );
     if ( NULL == req )
@@ -166,9 +164,8 @@ mw_epoll_ctl(int EpFd,
     case EPOLL_CTL_ADD:
         req->events[ idx ] = *Event;
         req->fds[ idx ]    = Fd;
-        req->fdct = MAX( idx, req->fdct );
+        req->fdct          = MAX( idx, req->fdct + 1 );
         break;
-        
     case EPOLL_CTL_MOD:
         req->events[ idx ] = *Event;
         break;
@@ -181,7 +178,10 @@ mw_epoll_ctl(int EpFd,
         errno = EINVAL;
         break;
     }
+
 ErrorExit:
+    DEBUG_PRINT( "Done modifying epoll FD %x: Op %d Fd %x fdct %d\n",
+                 req->pseudofd, Op, Fd, req->fdct );
 
     return rc;
 }

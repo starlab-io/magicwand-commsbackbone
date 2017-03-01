@@ -1421,23 +1421,21 @@ mwchar_init(void)
    rc = register_xenbus_watch(&client_id_watch);
    if (rc)
    {
-      pr_err("Failed to set client id watcher\n");
+       pr_err("Failed to set client id watcher\n");
+       goto ErrorExit;
    }
-   else
-   {
-      client_id_watch_active = true;
-   }
+
+   client_id_watch_active = true;
 
    // 3. Watch for our port being bound
    rc = register_xenbus_watch(&evtchn_bound_watch);
    if (rc)
    {
-      pr_err("Failed to set client local port watcher\n");
+       pr_err("Failed to set client local port watcher\n");
+       goto ErrorExit;
    }
-   else
-   {
-      evtchn_bound_watch_active = true;
-   }
+
+   evtchn_bound_watch_active = true;
 
 ErrorExit:
    if ( rc )
@@ -1447,7 +1445,8 @@ ErrorExit:
    return rc;
 }
 
-/** @brief The driver cleanup function
+/**
+ * @brief The driver cleanup function
  */
 static void mwchar_exit(void)
 {
@@ -1502,14 +1501,14 @@ static void mwchar_exit(void)
        free_pages( (unsigned long) server_region, XENEVENT_GRANT_REF_ORDER );
    }
 
-   if (client_id_watch_active)
-   {
-      unregister_xenbus_watch(&client_id_watch);
-   }
-
    if (evtchn_bound_watch_active)
    {
       unregister_xenbus_watch(&evtchn_bound_watch);
+   }
+
+   if (client_id_watch_active)
+   {
+      unregister_xenbus_watch(&client_id_watch);
    }
 
    initialize_keys();
@@ -1848,7 +1847,7 @@ static int dev_release(struct inode *inodep, struct file *filep)
     pr_debug( "Sleeping..." );
     set_current_state( TASK_INTERRUPTIBLE );
     schedule_timeout( MW_RUNDOWN_DELAY_SECS * HZ );
-    pr_debug( "Done sleeping." );
+    pr_debug( "Done sleeping.\n" );
 
     list_for_each_entry_safe( currtc, nexttc, &active_mapping_head, list )
     {

@@ -1,0 +1,30 @@
+#ifndef common_config_h
+#define common_config_h
+
+/***************************************************************************
+ * Defines configurable values that are used by the entire MW backbone
+ * comms system. Do not include this file directly; rather it is to be
+ * included indirectly via message_types.h or xen_keystore_defs.h.
+ *
+ * To preserve changes, edit common_config.h.template
+ **************************************************************************/
+
+#ifndef _common_config_defined
+#  error "This file should not be included directly"
+#endif
+
+// XXXX do this smartly
+// Set it small for testing - then we can deal with more messages
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN 1500
+
+//
+// Number of grant refs (1/page). This determines how much space we
+// have for our ring buffer. For instance, if the order is 6, we share
+// 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
+// 6. Xen has an upper limit on how many pages can be shared. That
+// limit can be configured by a Xen boot parameter.
+//
+
+#define XENEVENT_GRANT_REF_ORDER  1 // (2^order == page count)
+
+#endif //common_config_h

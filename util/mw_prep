@@ -1,0 +1,25 @@
+#!/bin/bash 
+
+## Prepare the repo for development copying some files to their final
+## destinations. We do this on files that devs change frequently, so
+## those changes aren't constantly shown in the repo history.
+
+
+if [ -z $MWROOT ]; then
+   echo "Failure: MWROOT must be defined in env"
+   exit 1
+fi
+
+mt=Makefile.template
+m=Makefile
+
+# Copy the template Makefiles to regular Makefiles
+for d in $MWROOT/unikernel/rump-xenevent/apps/xenevent_app \
+         $MWROOT/protvm/user/wrapper \
+         $MWROOT/protvm/kernel/char_driver; 
+do
+   cp $d/Makefile.template $d/Makefile
+done
+
+
+cp $MWROOT/common/common_config.h.template $MWROOT/common/common_config.h

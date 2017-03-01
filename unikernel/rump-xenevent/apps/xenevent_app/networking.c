@@ -23,15 +23,42 @@
 extern xenevent_globals_t g_state;
 extern uint16_t client_id;
 
-// Get a negative value, preferably (-1 * errno)
-#define XE_GET_NEG_ERRNO()                              \
-    ( errno > 0 ? (mt_status_t)(-errno) : (mt_status_t)(-1) )
-
 //
 // Upon recv(), should we attempt to receive all the bytes requested?
 //
 #define XE_RECEIVE_ALL 0
 
+
+//
+// @brief Sets or clears the indicated flag on the file descriptor.
+//
+static int
+xe_net_set_fd_flag( IN int  NativeFd,
+                    IN int  Flag,
+                    IN bool Enabled )
+{
+    int flags = 0;
+    int rc = 0;
+
+    DEBUG_PRINT( "%s flag(s) %x on fd %d\n",
+                 Enabled ? "Setting" : "Clearing", Flag, NativeFd );
+
+    flags = fcntl( NativeFd, F_GETFL );
+
+    if ( Enabled )
+    {
+        flags = ( flags | Flag );
+    }
+    else
+    {
+        flags = ( flags & ~Flag );
+    }
+
+    rc = fcntl( NativeFd, F_SETFL, flags );
+    MYASSERT( 0 == rc );
+
+    return rc;
+}
 
 // XXXXXXXX verify that errno values match between Linux and NetBSD
 
@@ -98,6 +125,9 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     WorkerThread->sock_domain    = native_fam;
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
+
+    // Apache hack
+//    (void) xe_net_set_fd_flag( sockfd, O_NONBLOCK, true );
 
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->sock_fd, sockfd );
@@ -327,6 +357,9 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
 
+        // Apache hack
+//        (void) xe_net_set_fd_flag( sockfd, O_NONBLOCK, true );
+
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
                       WorkerThread->sock_fd, WorkerThread->native_sock_fd,
@@ -398,29 +431,45 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     MYASSERT( NULL != WorkerThread );
 
     Response->base.status = 0;
-    
+
     MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
-    
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving %d bytes\n",
+
+// HACK HACK: force the socket to block
+//    (void) xe_net_set_fd_flag( WorkerThread->native_sock_fd, O_NONBLOCK, false );
+    // ==> recv(); errno == EAGAIN (35) [Rump] == EAGAIN (11) [Linux]
+
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving 0x%x bytes\n",
                   WorkerThread->idx,
                   WorkerThread->sock_fd, WorkerThread->native_sock_fd,
                   Request->requested );
 
-#if XE_RECEIVE_ALL
+    // This loop handles both evaulations for XE_RECEIVE_ALL. If any
+    // data is received, it will be returned with a success status.
+
     ssize_t totRecv = 0;
     while ( totRecv < Request->requested )
     {
-        ssize_t rcv = recv( WorkerThread->native_sock_fd,
-                            &Response->bytes[ totRecv ],
-                            Request->requested - totRecv,
-                            0 );
+        ssize_t rcv = 0;
+        do
+        {
+            rcv = recv( WorkerThread->native_sock_fd,
+                        &Response->bytes[ totRecv ],
+                        Request->requested - totRecv,
+                        0 );
+        } while( rcv < 0 && EINTR == errno );
+
+        // recv() returned without being interrupted
+
         if ( rcv < 0 )
         {
-            // Error, even if some data has been received already
-            Response->base.status = XE_GET_NEG_ERRNO();
-            MYASSERT( !"recv" );
+            // This call failed. If any data has been received, let it
+            // succeed. Otherwise fail it.
+            Response->base.status = (totRecv > 0) ? 0 : XE_GET_NEG_ERRNO();
             break;
         }
+
+        DEBUG_PRINT( "recv() got 0x%x bytes, status=%d\n",
+                     (int)rcv, Response->base.status );
 
         // rcv >= 0
         totRecv += rcv;
@@ -433,32 +482,12 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
         }
     }
 
+    DEBUG_PRINT( "recv() got total of 0x%x bytes, status=%d\n",
+                 (int)totRecv, Response->base.status );
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_RECV_SIZE + totRecv,
+                              totRecv + MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *)Response );
-#else
-    uint64_t bytes_read = 0;
-
-    bytes_read = recv( WorkerThread->native_sock_fd,
-                       (void *) Response->bytes,
-                       Request->requested,
-                       Request->flags );
-    if ( bytes_read < 0 )
-    {
-        Response->base.status = XE_GET_NEG_ERRNO();
-        MYASSERT( !"recv" );
-        bytes_read = 0;
-
-    }
-    else
-    {
-        Response->base.status = bytes_read;
-    }
-
-    xe_net_set_base_response( (mt_request_generic_t*) Request,
-                               MT_RESPONSE_SOCKET_RECV_SIZE + bytes_read,
-                              (mt_response_generic_t *) Response);
-#endif // XE_RECEIVE_ALL
     return 0;
 }
 
@@ -594,6 +623,95 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     return 0;
 }
 
+
+// Handles getsockname() and getpeername(), whose message types are
+// equivalent.
+int
+xe_net_get_name( IN mt_request_socket_getname_t  * Request,
+                 IN mt_response_socket_getname_t * Response,
+                 IN  thread_item_t               * WorkerThread )
+{
+    int rc = 0;
+    socklen_t addrlen = Request->maxlen;
+    struct sockaddr addr;
+
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+
+    switch (Request->base.type )
+    {
+    case MtRequestSocketGetPeer:
+        rc = getpeername( WorkerThread->native_sock_fd, &addr, &addrlen );
+        break;
+    case MtRequestSocketGetName:
+        rc = getsockname( WorkerThread->native_sock_fd, &addr, &addrlen );
+        break;
+    default:
+        MYASSERT( !"Invalid request" );
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    Response->base.status = rc;
+    Response->reslen      = (mt_size_t) addrlen;
+
+    populate_mt_sockaddr_in( &Response->sockaddr, (struct sockaddr_in *)&addr );
+
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_GETNAME_SIZE,
+                              (mt_response_generic_t *)Response );
+
+ErrorExit:
+    return rc;
+}
+
+
+int
+xe_net_socket_fcntl( IN  mt_request_socket_fcntl_t  * Request,
+                     OUT mt_response_socket_fcntl_t * Response,
+                     IN  thread_item_t              * WorkerThread )
+{
+    int rc = 0;
+    int flags = 0;
+
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+
+    DEBUG_PRINT( "%s O_NONBLOCK on FD %x\n",
+                 (Request->modify ? "Setting" : "Clearing"),
+                 Request->base.sockfd );
+
+    // F_GETFL
+    if ( !Request->modify )
+    {
+        flags = fcntl( WorkerThread->native_sock_fd, F_GETFL );
+
+        Response->base.status = 0;
+        Response->flags[ MT_SOCK_FCNTL_IDX_NONBLOCK ] = flags & O_NONBLOCK;
+    }
+    else
+    {
+        // F_SETFL: go over all supported flags, one at a time
+        rc = xe_net_set_fd_flag( WorkerThread->native_sock_fd,
+                                 O_NONBLOCK,
+                                 Request->flags[ MT_SOCK_FCNTL_IDX_NONBLOCK ] );
+        if ( rc < 0 )
+        {
+            Response->base.status = XE_GET_NEG_ERRNO();
+        }
+    }
+
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_FCNTL_SIZE,
+                              (mt_response_generic_t *)Response );
+
+//ErrorExit:
+    return rc;
+}
+
+
 // Create a pseudo-fd. The only resource we're reserving is a
 // thread. No network resources are used.
 int
@@ -649,17 +767,16 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     int rc = 0;
     struct pollfd fds[ MAX_POLL_FD_COUNT ] = {0};
     int fdcount = Request->count;
-    int flags = 0;
     int native_fd = 0;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
+    MYASSERT( fdcount > 0 );
 
     if ( Request->base.size
          != (MT_REQUEST_POLL_WAIT_SIZE + fdcount * MT_POLL_INFO_SIZE) )
     {
-        _DEBUG_EMIT_BREAKPOINT();
         MYASSERT( !"The request's size is wrong" );
         Response->base.status = -EINVAL;
         fdcount = 0;
@@ -671,7 +788,6 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
         // Get the native FD and flags from the request
         mt_poll_info_t * pi = &Request->pollinfo[i];
         mw_socket_fd_t mwfd = pi->sockfd;
-
         int thridx = MW_SOCKET_GET_ID( mwfd );
 
         if ( thridx >= MAX_THREAD_COUNT
@@ -682,16 +798,11 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
             goto ErrorExit;
         }
 
-        //On native sockfds call fnctl to set O_NONBLOCK
-        //after poll has returned mark file descriptor as blocking again
+        // On native sockfds call fnctl to set O_NONBLOCK
+//        // after poll has returned mark file descriptor as blocking again
         native_fd = g_state.worker_threads[ thridx ].native_sock_fd;
-        
-        flags = fcntl( native_fd, F_GETFL );
 
-        //make sure this is a blocking flag
-        MYASSERT( !( flags & O_NONBLOCK ) );
-
-        fcntl( native_fd, F_SETFD, ( flags | O_NONBLOCK ) );
+//        (void) xe_net_set_fd_flag( native_fd, O_NONBLOCK, true );
 
         fds[i].fd      = native_fd;
         fds[i].events  = pi->events;
@@ -704,8 +815,6 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
 
     Response->base.status = poll( fds, Request->count, Request->timeout );
     DEBUG_PRINT( "poll() returned %ld\n", (long)Response->base.status );
-    MYASSERT( 0 == Response->base.status );
-
 
     if ( Response->base.status < 0 )
     {
@@ -718,9 +827,7 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
     // only passing FDs.  Return all sockets to a blocking state
     for ( int i = 0; i < fdcount; ++i )
     {   
-        
-        flags = fcntl( native_fd, F_GETFL );
-        fcntl( fds[i].fd, F_SETFD, ( flags & ~O_NONBLOCK ) ); 
+        //(void) xe_net_set_fd_flag( native_fd, O_NONBLOCK, false );
 
         if ( 0 != fds[i].revents )
         {
@@ -728,7 +835,6 @@ xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
         }
         Response->pollinfo[i].events = fds[i].revents;
     } // for
-
     
 ErrorExit:
     xe_net_set_base_response( (mt_request_generic_t *)Request,

@@ -15,10 +15,20 @@ debug.sh
 run.sh
 cscope.out
 tags
-Makefile
-makefile
 GPATH
 GRTAGS
 GSYMS
 GTAGS
 TAGS
+*OLD
+*BAK
+*.pdf
+*.doc
+*.docx
+*.pptx
+*.log
+# Primary makefiles and contentious header filesare templated and 
+# copied into location by util/mw_prep
+Makefile
+makefile
+common_config.h
