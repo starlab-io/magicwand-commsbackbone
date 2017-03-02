@@ -43,9 +43,9 @@
 
 #include "epoll_wrapper.h"
 
+#include "mwcomms-ioctls.h"
 
-
-#define DEV_FILE "/dev/mwchar"
+#define DEV_FILE "/dev/mwcomms"
 
 static int devfd = -1; // FD to MW device
 static int dummy_socket = -1; // socket for get/setsockopt
@@ -503,7 +503,8 @@ socket( int domain,
    mt_request_generic_t  request;
    mt_response_generic_t response;
    ssize_t rc = 0;
-
+   mwsocket_create_args_t create;
+   
    if( AF_INET != domain )
    {
        rc = libc_socket( domain, type, protocol );
@@ -516,7 +517,22 @@ socket( int domain,
    DEBUG_PRINT("Sending socket-create request\n");
 
 #ifndef NODEVICE
+   create.domain   = domain;
+   create.type     = type;
+   create.protocol = protocol;
+   create.outfd = -1;
 
+   rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
+   if ( rc )
+   {
+       MYASSERT( !"ioctl" );
+       goto ErrorExit;
+   }
+
+   
+
+
+   
    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
    {
        goto ErrorExit;
