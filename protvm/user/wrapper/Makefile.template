@@ -7,7 +7,7 @@
 
 CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99 -Wno-missing-braces
-CFLAGS += -I.. -I../../../common
+CFLAGS += -I.. -I../../../common -I../../common
 CFLAGS += -ggdb
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP

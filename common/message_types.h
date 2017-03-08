@@ -30,7 +30,7 @@
 #define MT_STRUCT_ATTRIBS __attribute__ ((__packed__))
 
 typedef uint16_t mt_size_t;
-
+typedef uint8_t  mt_bool_t;
 
 //
 // Request and response types come in pairs. The response types have
@@ -56,8 +56,6 @@ typedef uint64_t mt_id_t;
 
 #define MT_ID_UNSET_VALUE (mt_id_t)-3
 
-
-
 //
 // Possible message types - request and response values run in
 // parallel. Here's the format of the message type:
@@ -70,35 +68,46 @@ typedef uint64_t mt_id_t;
 
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
-#define _MT_TYPE_MASK_CALL_BLOCKS 0x0400
+#define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
+#define _MT_TYPE_MASK_NOBLOCK     0x0800 
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
 
-// The call might block, depending on socket state (including O_NONBLOCK flag)
-#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_CALL_BLOCKS )
+// The call must block on the PVM side, regardless of file's flags
+#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_BLOCK )
+
+// The call should not block on PVM side, regardless of file's flags
+#define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
 
 typedef enum
 {
     MtRequestInvalid        = MT_REQUEST( 0x00 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD     ),
-    MtRequestSocketConnect  = MT_REQUEST( 0x02 | _MT_TYPE_MASK_CALL_BLOCKS  ),
-    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD   ),
-    MtRequestSocketRead     = MT_REQUEST( 0x04 | _MT_TYPE_MASK_CALL_BLOCKS  ),
-    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_CALL_BLOCKS  ),
-    MtRequestSocketBind     = MT_REQUEST( 0x06 ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketConnect  = MT_REQUEST( 0x02 | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketRead     = MT_REQUEST( 0x04 ),
+    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_NOBLOCK ),
+    MtRequestSocketBind     = MT_REQUEST( 0x06 | _MT_TYPE_MASK_BLOCK ),
     MtRequestSocketListen   = MT_REQUEST( 0x07 ),
-    MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD | _MT_TYPE_MASK_CALL_BLOCKS), 
-    MtRequestSocketRecv     = MT_REQUEST( 0x09 | _MT_TYPE_MASK_CALL_BLOCKS  ),
-    MtRequestSocketRecvFrom = MT_REQUEST( 0x0a | _MT_TYPE_MASK_CALL_BLOCKS  ),
+    MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD ), 
+    MtRequestSocketRecv     = MT_REQUEST( 0x09 ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 0x0a ),
 
-    MtRequestSocketGetName  = MT_REQUEST( 0x0b ),
-    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c ),
+    MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_BLOCK ),
 
+    // XXXX: add these, to be handled on both sides by dedicated threads
+    MtRequestPollsetAdd     = MT_REQUEST( 0x30 ),
+    MtRequestPollsetRemove  = MT_REQUEST( 0x31 ),
+    MtRequestPollsetQuery   = MT_REQUEST( 0x32 | _MT_TYPE_MASK_BLOCK ),
+    
+
+    // XXXX: get rid of these ---------------------------------------------
     MtRequestSocketFcntl    = MT_REQUEST( 0x0d ),
 
     MtRequestPollCreate     = MT_REQUEST( 0x20 | _MT_TYPE_MASK_ALLOC_FD ),
-    MtRequestPollWait       = MT_REQUEST( 0x21 | _MT_TYPE_MASK_CALL_BLOCKS),
+    MtRequestPollWait       = MT_REQUEST( 0x21 | _MT_TYPE_MASK_BLOCK),
     MtRequestPollClose      = MT_REQUEST( 0x22 | _MT_TYPE_MASK_DEALLOC_FD ),
 } mt_request_type_t;
 
@@ -120,6 +129,11 @@ typedef enum
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
     MtResponseSocketFcntl       = MT_RESPONSE( MtRequestSocketFcntl    ),
 
+    MtResponsePollsetAdd        = MT_RESPONSE( MtRequestPollsetAdd     ),
+    MtResponsePollsetRemove     = MT_RESPONSE( MtRequestPollsetRemove  ),
+    MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
+
+    //////////////////////////////////////// REMOVE
     MtResponsePollCreate        = MT_RESPONSE( MtRequestPollCreate     ),
     MtResponsePollWait          = MT_RESPONSE( MtRequestPollWait       ),
     MtResponsePollClose         = MT_RESPONSE( MtRequestPollClose      ),
@@ -233,6 +247,11 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // The socket. Used in most requests.
     mw_socket_fd_t sockfd;
 
+    // Will the user thread wait for a response? This does not need to
+    // go over shared memory, but it's more convenient here. An
+    // alternate design would be for non-blocking IO to go through
+    // aio_read()/aio_write().
+    mt_bool_t    pvm_blocked_on_response;
 } mt_request_base_t;
 
 //

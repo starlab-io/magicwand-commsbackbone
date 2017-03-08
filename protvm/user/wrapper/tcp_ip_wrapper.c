@@ -32,8 +32,8 @@
 #include <pthread.h>
 #include <signal.h>
 
-#include <sys/epoll.h>
-#include <poll.h>
+//#include <sys/epoll.h>
+//#include <poll.h>
 
 #include <sys/uio.h>
 
@@ -43,7 +43,7 @@
 
 #include "epoll_wrapper.h"
 
-#include "mwcomms-ioctls.h"
+#include <mwcomms-ioctls.h>
 
 #define DEV_FILE "/dev/mwcomms"
 
@@ -54,6 +54,9 @@ static void * g_dlh_libc = NULL;
 
 static int
 (*libc_socket)(int domain, int type, int protocol);
+
+static int
+(*libc_bind)(int fd, const struct sockaddr * addr, socklen_t addrlen );
 
 static int
 (*libc_read)(int fd, void *buf, size_t count);
@@ -115,37 +118,6 @@ static int
 static int
 (*libc_getpeername)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
-
-static int
-(*libc_epoll_create)( int Size );
-
-static int
-(*libc_epoll_create1)( int Flags );
-
-
-static int
-(*libc_epoll_ctl)( int EpFd,
-                   int Op,
-                   int Fd,
-                   struct epoll_event * Event );
-
-static int
-(*libc_epoll_wait)( int EpFd,
-                    struct epoll_event * Events,
-                    int MaxEvents,
-                    int Timeout );
-
-static int
-(*libc_epoll_pwait)( int EpFd,
-                     struct epoll_event * Events,
-                     int MaxEvents,
-                     int Timeout,
-                     const sigset_t * Sigmask );
-
-static int
-(*libc_poll)(struct pollfd *Fds, nfds_t Nfds, int Timeout);
-
-
 static int
 (*libc_fcntl)(int fd, int cmd, ... );
 
@@ -163,75 +135,147 @@ get_libc_symbol( void ** Addr, const char * Symbol )
     return *Addr;
 }
 
-
-static ssize_t
-read_response( mt_response_generic_t * Response )
+static bool
+mwcomms_is_mwsocket( IN int Fd )
 {
-    ssize_t rc = 0;
+    bool answer = false;
+    int rc = 0;
 
-    while ( 1 )
+#ifdef NODEVICE
+    goto ErrorExit;
+#else
+    mwsocket_verify_args_t verify = { .fd = Fd, };
+
+    rc = ioctl( devfd, MW_IOCTL_IS_MWSOCKET, &verify );
+    if ( rc )
     {
-        rc = libc_read( devfd, Response, sizeof(*Response) );
-        if ( rc < 0 && EINTR == errno )
-        {
-            // Call was interrupted
-            DEBUG_PRINT( "*** read() was interrupted. Trying again.\n" );
-            continue;
-        }
-
-        // Otherwise, give up
-        break;
+        perror( "ioctl" );
+        goto ErrorExit;
     }
 
-    if ( rc > 0 && IS_CRITICAL_ERROR( Response->base.status ) )
+    answer = verify.is_mwsocket;
+#endif // NODEVICE
+
+ErrorExit:
+    return answer;
+}
+
+
+static int
+mwcomms_write_request( IN  int         MwFd,
+                       IN  bool        ReadResponse,
+                       IN  mt_request_generic_t  * Request,
+                       OUT mt_response_generic_t * Response )
+{
+    int rc = 0;
+    ssize_t ct = 0;
+
+#ifdef NODEVICE
+    // no processing at all
+    goto ErrorExit;
+#endif
+    
+    int err = 0;
+
+#ifdef MYDEBUG
+    if ( !mwcomms_is_mwsocket( MwFd ) )
     {
-        DEBUG_PRINT( "Remote side encountered critical error %x, ID=%lx FD=%x\n",
+        MYASSERT( !"Called MW comms API on invalid socket" );
+        rc = EINVAL;
+        goto ErrorExit;
+    }
+#endif // MYDEBUG
+
+    DEBUG_PRINT( "Processing request type %x fd %d\n",
+                 Request->base.type, MwFd );
+
+    // Will we wait for the response?
+    Request->base.pvm_blocked_on_response = (mt_bool_t) ReadResponse;
+
+    // Write the request directly to the MW socket
+    do
+    {
+        ct = libc_write( MwFd, Request, Request->base.size );
+    } while ( ct < 0 && EAGAIN == errno );
+
+    err = errno;
+    
+    if ( ct < 0 )
+    {
+        rc = -1;
+        DEBUG_PRINT( "MWSocket %d: write failed: %d\n", MwFd, err );
+        errno = err;
+        goto ErrorExit;
+    }
+
+    if ( !ReadResponse )
+    {
+        // Do not await the response. We're done.
+        goto ErrorExit;
+    }
+    
+    // Read the response from the MW socket. This may block.
+    do
+    {
+        ct = libc_read( MwFd, Response, sizeof(*Response) );
+    } while ( ct < 0 && EINTR == errno );
+
+    err = errno;
+
+    if ( ct < MT_RESPONSE_BASE_SIZE )
+    {
+        DEBUG_PRINT( "MWSocket %d: read failed or returned too few bytes: "
+                     "rc=%d, errno=%d\n",
+                     MwFd, (int)ct, err );
+        DEBUG_PRINT( "Underflow: returned size less than minimum.\n" );
+        rc = -1;
+        errno = ( ct < 0 ? err : EIO );
+        goto ErrorExit;
+    }
+
+    // Error in response
+    if ( IS_CRITICAL_ERROR( Response->base.status ) )
+    {
+        DEBUG_PRINT( "Remote side encountered critical error %x, ID=%lx LFD=%d\n",
                      (int)Response->base.status,
                      (unsigned long)Response->base.id,
-                     Response->base.sockfd );
+                     MwFd );
         rc = -1;
-        Response->base.status = -EIO;
+        Response->base.status = EIO;
+        goto ErrorExit;
     }
 
+    if ( Response->base.status < 0 )
+    {
+        DEBUG_PRINT( "Error status in response: type %x status %d\n",
+                     Response->base.type, Response->base.status );
+        rc = -1;
+        errno = -Response->base.status;
+        goto ErrorExit;
+    }
+
+    MYASSERT( 0 == rc );
+
+ErrorExit:
     return rc;
 }
 
 
-void
-build_create_socket( mt_request_generic_t * Request )
+static void
+mwcomms_init_request( INOUT mt_request_generic_t * Request,
+                      IN mt_request_type_t         Type,
+                      IN mt_size_t                 Size,
+                      IN mw_socket_fd_t            MwSockFd )
 {
-    mt_request_socket_create_t * create = &(Request->socket_create);
-    
     bzero( Request, sizeof(*Request) );
 
-    create->base.sig = MT_SIGNATURE_REQUEST;
-    create->base.type = MtRequestSocketCreate;
-    create->base.size = MT_REQUEST_SOCKET_CREATE_SIZE;
-    create->base.id = MT_ID_UNSET_VALUE;
-    create->base.sockfd = 0;
-
-    create->sock_fam = MT_PF_INET;
-    create->sock_type = MT_ST_STREAM;
-    create->sock_protocol = 0;
+    Request->base.sig    = MT_SIGNATURE_REQUEST;
+    Request->base.type   = Type;
+    Request->base.size   = Size;
+    Request->base.sockfd = MwSockFd;
 }
 
-void
-build_close_socket( mt_request_generic_t * Request, 
-                    int                    SockFd )
-{
-    mt_request_socket_close_t * csock = &(Request->socket_close);
-
-    bzero( Request, sizeof(*Request) );
-
-    csock->base.sig  = MT_SIGNATURE_REQUEST;
-    csock->base.type = MtRequestSocketClose;
-    csock->base.size = MT_REQUEST_SOCKET_CLOSE_SIZE; 
-    csock->base.id = MT_ID_UNSET_VALUE;
-    csock->base.sockfd = SockFd;
-}
-
-
-
+/*
 void
 build_bind_socket( mt_request_generic_t * Request, 
                    int                    SockFd, 
@@ -257,7 +301,7 @@ build_bind_socket( mt_request_generic_t * Request,
 void
 build_listen_socket( mt_request_generic_t * Request,
                      int                    SockFd,
-                     int                  * backlog)
+                     int                    backlog)
 {
     mt_request_socket_listen_t * listen = &(Request->socket_listen);
     
@@ -334,244 +378,57 @@ build_send_socket( mt_request_generic_t * Request,
 
     send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
 }
+*/
 
 
-void
-build_poll_create( mt_request_poll_create_t * Request )
-{
-    bzero( Request, sizeof(*Request) );
-
-    Request->base.sig  = MT_SIGNATURE_REQUEST;
-    Request->base.type = MtRequestPollCreate;
-    Request->base.id   = MT_ID_UNSET_VALUE;
-    Request->base.sockfd = MT_INVALID_FD;
-    Request->base.size  = MT_REQUEST_POLL_CREATE_SIZE;
-}
-
-void
-build_poll_close( mt_request_poll_close_t * Request,
-                  mw_fd_t PollFd )
-{
-    bzero( Request, sizeof(*Request) );
-
-    Request->base.sig  = MT_SIGNATURE_REQUEST;
-    Request->base.type = MtRequestPollClose;
-    Request->base.id   = MT_ID_UNSET_VALUE;
-    Request->base.sockfd = PollFd;
-    Request->base.size  = MT_REQUEST_POLL_CLOSE_SIZE;
-}
-
-
-void
-build_poll_wait( mt_request_poll_wait_t * Request,
-                 epoll_request_t        * Epoll,
-                 int                      Timeout)
-{
-    MYASSERT( Epoll->fdct > 0 );
-
-    bzero( Request, sizeof(*Request) );
-
-    Request->base.sig  = MT_SIGNATURE_REQUEST;
-    Request->base.type = MtRequestPollWait;
-    Request->base.id   = MT_ID_UNSET_VALUE;
-
-    // Use the sockfd we already have from our call to epoll_create()
-    Request->base.sockfd = Epoll->pseudofd;
-    Request->timeout = Timeout;
-    
-    for ( int i = 0; i < MAX_POLL_FD_COUNT; ++i )
-    {
-        uint32_t * reqflags = &Request->pollinfo[ i ].events;
-        *reqflags = 0;
-
-        // Skip deleted items
-        if ( Epoll->fds[i] == MT_INVALID_SOCKET_FD )
-        {
-            continue;
-        }
-
-        Request->pollinfo[ i ].sockfd = Epoll->fds[ i ];
-        ++Request->count;
-
-        // Ignore events[i].data; that's user-specified data
-
-        if ( Epoll->events[i].events & EPOLLIN )     *reqflags |= MW_POLLIN;
-        if ( Epoll->events[i].events & EPOLLPRI )    *reqflags |= MW_POLLPRI;
-        if ( Epoll->events[i].events & EPOLLOUT )    *reqflags |= MW_POLLOUT;
-        if ( Epoll->events[i].events & EPOLLRDNORM ) *reqflags |= MW_POLLRDNORM;
-        if ( Epoll->events[i].events & EPOLLWRNORM ) *reqflags |= MW_POLLWRNORM;
-        if ( Epoll->events[i].events & EPOLLRDBAND ) *reqflags |= MW_POLLRDBAND;
-        if ( Epoll->events[i].events & EPOLLWRBAND ) *reqflags |= MW_POLLWRBAND;
-        if ( Epoll->events[i].events & EPOLLERR )    *reqflags |= MW_POLLERR;
-        if ( Epoll->events[i].events & EPOLLHUP )    *reqflags |= MW_POLLHUP;
-//        if ( Epoll->events[i].events & EPOLLNVAL )   *reqflags |= MW_POLLNVAL;
-    }
-
-    Request->base.size = MT_REQUEST_POLL_WAIT_SIZE
-        + Request->count * MT_POLL_INFO_SIZE;
-}
-
-int
-populate_epoll_results( IN  mt_response_poll_wait_t * Response,
-                        IN  epoll_request_t         * Epoll,
-                        OUT struct epoll_event      * Events )
-{
-    int ct = 0;
-    mt_response_poll_wait_t * r = Response; // alias for readability
-
-    //
-    // For each item, see if any events were reported. If so, add its
-    // entry to the Events array.
-    //
-    for ( int i = 0; i < r->count; ++i )
-    {
-        uint32_t * destflags = &Events[ct].events;
-        *destflags = 0;
-
-        //
-        // In cases where events are available, Events[i] is populated
-        // with the original data from Epoll
-        //
-        if ( 0 == r->pollinfo[i].events )
-        {
-            // No events to report
-            continue;
-        }
-
-        // Events are available. Copy the user data and translate the flags.
-        Events[ct].data = Epoll->events[ i ].data;
-        
-        if ( r->pollinfo[i].events & MW_POLLIN )     *destflags |= EPOLLIN;
-        if ( r->pollinfo[i].events & MW_POLLPRI )    *destflags |= EPOLLPRI;
-        if ( r->pollinfo[i].events & MW_POLLOUT )    *destflags |= EPOLLOUT;
-        if ( r->pollinfo[i].events & MW_POLLRDNORM ) *destflags |= EPOLLRDNORM;
-        if ( r->pollinfo[i].events & MW_POLLWRNORM ) *destflags |= EPOLLWRNORM;
-        if ( r->pollinfo[i].events & MW_POLLRDBAND ) *destflags |= EPOLLRDBAND;
-        if ( r->pollinfo[i].events & MW_POLLWRBAND ) *destflags |= EPOLLWRBAND;
-        if ( r->pollinfo[i].events & MW_POLLERR )    *destflags |= EPOLLERR;
-        if ( r->pollinfo[i].events & MW_POLLHUP )    *destflags |= EPOLLHUP;
-//        if ( r->pollinfo[i].events & MW_POLLNVAL )   *destflags |= EPOLLNVAL;
-
-        // Record the result
-        ++ct;
-    }
-
-    MYASSERT( r->base.status < 0
-              || ct == r->base.status );
-    return ct;
-}
-
-
-// Perform steps up to epoll_wait as described in Request. Only the
-// local system is modified; no MW requests are generated.
-static int
-do_epoll( epoll_request_t * Epoll,
-          struct epoll_event * Events,
-          int MaxEvents,
-          int Timeout )
-{
-    int fd = -1;
-    int count = 0;
-    
-    fd = libc_epoll_create(1);
-    if ( fd < 0 )
-    {
-        count = -1;
-        goto ErrorExit;
-    }
-
-    for ( int i = 0; i < Epoll->fdct; ++i )
-    {
-        // Struct copy
-        Events[i] = Epoll->events[i];
-    }        
-    count = libc_epoll_wait( fd, Events, MaxEvents, Timeout );
-    
-ErrorExit:
-    if ( fd > 0 )
-    {
-        libc_close( fd );
-    }
-    return count;        
-}
 
 int 
 socket( int domain, 
         int type, 
         int protocol )
 {
-   mt_request_generic_t  request;
-   mt_response_generic_t response;
-   ssize_t rc = 0;
-   mwsocket_create_args_t create;
+    int rc = 0;
+    int err = 0;
+    mwsocket_create_args_t create;
    
-   if( AF_INET != domain )
-   {
-       rc = libc_socket( domain, type, protocol );
-       goto ErrorExit;
-   }
-   
-   // XXXX: args ignored
-   build_create_socket( &request );
+    if ( AF_INET != domain )
+    {
+        rc = libc_socket( domain, type, protocol );
+        goto ErrorExit;
+    }
 
-   DEBUG_PRINT("Sending socket-create request\n");
+    create.domain   = xe_net_get_mt_protocol_family( domain );
+    create.type     = MT_ST_STREAM;
+    create.protocol = protocol;
+    create.outfd = -1;
 
 #ifndef NODEVICE
-   create.domain   = domain;
-   create.type     = type;
-   create.protocol = protocol;
-   create.outfd = -1;
+    rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
+    if ( rc < 0 )
+    {
+        err = errno;
+        MYASSERT( !"ioctl" );
+        errno = err;
+        goto ErrorExit;
+    }
 
-   rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
-   if ( rc )
-   {
-       MYASSERT( !"ioctl" );
-       goto ErrorExit;
-   }
-
-   
-
-
-   
-   if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-
-   if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-    
+    rc = create.outfd;
+    DEBUG_PRINT( "Returning socket %d\n", (int)rc );
 #endif
 
-   if ( (int)response.base.status < 0 )
-   {
-       DEBUG_PRINT( "Error creating socket. Error Number: %x (%d)\n",
-                    (int)response.base.status, (int)response.base.status );
-       errno = -response.base.status;
-
-       rc = -1;
-       goto ErrorExit;
-   }
-
-   DEBUG_PRINT( "Returning socket 0x%x\n", response.base.sockfd );
-   
-    rc = (int)response.base.sockfd;
-
 ErrorExit:
-
-   return rc;
+    return rc;
 }
 
-int
+/*
+  int
 close( int Fd )
 {
     mt_request_generic_t  request;
     mt_response_generic_t response;
     ssize_t rc = 0;
 
-    if ( MW_SOCKET_IS_FD( Fd ) )
+    if ( mwcomms_is_mwsocket( Fd ) )
     {
         build_close_socket( &request, Fd );
         DEBUG_PRINT( "Closing MW Socket %x\n", Fd );
@@ -644,28 +501,25 @@ close( int Fd )
 ErrorExit:
     return rc;
 }
-
+*/
 
 int
-bind( int SockFd,
+bind( int                     SockFd,
       const struct sockaddr * SockAddr, 
-      socklen_t addrlen )
+      socklen_t                AddrLen )
 {
-    mt_request_generic_t request;
-    mt_response_generic_t response;
-    struct sockaddr_in * sockaddr_in;
+    mt_request_generic_t   request;
+    mt_response_generic_t  response = {0};
     ssize_t rc = 0;
     
-    if ( !MW_SOCKET_IS_FD(SockFd) )
+    if ( !mwcomms_is_mwsocket(SockFd) )
     {
-        DEBUG_PRINT("Socket file discriptor value invalid\n");
-        errno = ENOTSOCK;
-        rc = -1;
+        rc = libc_bind( SockFd, SockAddr, AddrLen );
         goto ErrorExit;
     }
 
     if ( SockAddr->sa_family != AF_INET
-         || addrlen != sizeof(struct sockaddr_in) )
+         || AddrLen != sizeof(struct sockaddr_in) )
     {
         perror("Only AF_INET is supported at this time\n");
         errno = EINVAL;
@@ -673,23 +527,19 @@ bind( int SockFd,
         goto ErrorExit;
     }
 
-    sockaddr_in = ( struct sockaddr_in * ) SockAddr;
+    mwcomms_init_request( &request,
+                          MtRequestSocketBind,
+                          MT_REQUEST_SOCKET_BIND_SIZE,
+                          SockFd );
 
-    build_bind_socket( &request, SockFd, sockaddr_in, addrlen);
+    populate_mt_sockaddr_in( &request.socket_bind.sockaddr,
+                             (struct sockaddr_in *)SockAddr );
 
-#ifndef NODEVICE    
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( !rc )
     {
-        goto ErrorExit;
+        rc = response.base.status;
     }
-    
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        goto ErrorExit;
-    }
-#endif
-
-    rc = response.base.status;
 
 ErrorExit:
     return rc;
@@ -697,13 +547,13 @@ ErrorExit:
 
 
 int
-listen( int SockFd, int backlog )
+listen( int SockFd, int BackLog )
 {
-    mt_request_generic_t request;
-    mt_response_generic_t response;
+    mt_request_generic_t   request;
+    mt_response_generic_t  response = {0};
     ssize_t rc = 0;
     
-    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
         errno = ENOTSOCK;
@@ -711,29 +561,27 @@ listen( int SockFd, int backlog )
         goto ErrorExit;
     }
 
-    build_listen_socket( &request, SockFd, &backlog);
+    mwcomms_init_request( &request,
+                          MtRequestSocketListen,
+                          MT_REQUEST_SOCKET_LISTEN_SIZE,
+                          SockFd );
 
-#ifndef NODEVICE
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    request.socket_listen.backlog = BackLog;
+
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( rc )
     {
         goto ErrorExit;
     }
-
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        goto ErrorExit;
-    }
-
-#endif
 
     rc = response.base.status;
-    if ( response.base.status < 0 )
+    if ( rc < 0 )
     {
-        DEBUG_PRINT( "Returning error response with errno=%d\n", -response.base.status );
-        errno = -response.base.status;
+        DEBUG_PRINT( "Returning error response with errno=%d\n", (int)-rc );
+        errno = -rc;
         rc = -1;
     }
-
+    
 ErrorExit:
     return rc;
 }
@@ -744,44 +592,41 @@ accept( int SockFd,
         struct sockaddr * SockAddr, 
         socklen_t * SockLen)
 {
-    mt_request_generic_t request;
-    mt_response_generic_t response;
+    mt_request_generic_t  request;
+    mt_response_generic_t response = {0};
     ssize_t rc = 0;
     
-    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid");
         errno = ENOTSOCK;
         rc = -1;
         goto ErrorExit;
     }
-    
-    build_accept_socket(&request, SockFd);
-    populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
-                          &response.socket_accept.sockaddr);
-    
-#ifndef NODEVICE
-    
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+
+    mwcomms_init_request( &request,
+                          MtRequestSocketAccept,
+                          MT_REQUEST_SOCKET_ACCEPT_SIZE,
+                          SockFd );
+
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( rc )
     {
         goto ErrorExit;
     }
-    
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        rc = -1;
-        goto ErrorExit;
-    }
-#endif
 
     if ( response.base.status < 0 )
     {
-        errno = -response.base.status;
         rc = -1;
+        errno = -response.base.status;
         goto ErrorExit;
     }
 
-    rc = response.base.status;
+    DEBUG_PRINT( "accept() returned sockfd %d\n",
+                 response.base.status );
+    rc = response.base.status; // new socket
+    populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
+                          &response.socket_accept.sockaddr );
 
 ErrorExit:
     return rc;
@@ -798,7 +643,7 @@ accept4( int               SockFd,
     return accept( SockFd, SockAddr, SockLen );
 }
 
-
+/*
 void
 build_recv_socket( mt_request_generic_t * Request, 
                    int SockFd,
@@ -834,6 +679,7 @@ build_recv_socket( mt_request_generic_t * Request,
     
     recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
 }
+*/
 
 ssize_t
 recvfrom( int    SockFd,
@@ -844,13 +690,13 @@ recvfrom( int    SockFd,
           socklen_t       * AddrLen )
 {
     mt_request_generic_t request;
-    mt_response_generic_t response;
+    mt_response_generic_t response = {0};
     
     bzero( &response, sizeof(response) );
 
     ssize_t rc = 0;
 
-    if ( !MW_SOCKET_IS_FD(SockFd) )
+    if ( !mwcomms_is_mwsocket(SockFd) )
     {
         DEBUG_PRINT("Socket file discriptor value invalid\n");
         errno = -ENOTSOCK;
@@ -858,20 +704,26 @@ recvfrom( int    SockFd,
         goto ErrorExit;
     }
 
-    build_recv_socket( &request, SockFd, Len, Flags, SrcAddr, AddrLen );
+    mwcomms_init_request( &request,
+                          MtRequestSocketRecv,
+                          MT_REQUEST_SOCKET_RECV_SIZE,
+                          SockFd );
 
-#ifndef NODEVICE
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    request.socket_recv.flags = Flags;
+    request.socket_recv.requested = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len );
+
+    if ( NULL != SrcAddr )
+    {
+        // RecvFrom
+        request.base.type = MtRequestSocketRecvFrom;
+    }
+
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( rc )
     {
         goto ErrorExit;
     }
     
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        goto ErrorExit;
-    }
-#endif
-
     // Failure: rc = -1, errno set
     if ( response.base.status < 0 )
     {
@@ -895,6 +747,7 @@ recvfrom( int    SockFd,
                     &response.socket_recvfrom.src_addr,
                     sizeof( struct sockaddr ) );
         }
+
         if ( AddrLen )
         {
             memcpy( AddrLen,
@@ -921,7 +774,7 @@ ssize_t
 read( int Fd, void *Buf, size_t count )
 {
     int rc = 0;
-    if ( !MW_SOCKET_IS_FD( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
         if ( ( rc = libc_read( Fd, Buf, count ) ) < 0 )
         {
@@ -933,12 +786,14 @@ read( int Fd, void *Buf, size_t count )
     return recvfrom( Fd, Buf, count, 0,  NULL, NULL );
 }
 
+
+
 ssize_t
 readv( int Fd, const struct iovec * Iov, int IovCt )
 {
     ssize_t rc = 0;
 
-    if ( !MW_SOCKET_IS_FD( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_readv( Fd, Iov, IovCt );
         goto ErrorExit;
@@ -965,10 +820,10 @@ connect( int SockFd,
          socklen_t AddrLen )
 {
    mt_request_generic_t request;
-   mt_response_generic_t response;
+   mt_response_generic_t response = {0};
    ssize_t rc = 0;
    
-   if ( !MW_SOCKET_IS_FD( SockFd ) )
+   if ( !mwcomms_is_mwsocket( SockFd ) )
    {
        DEBUG_PRINT("Socket file discriptor value invalid\n");
        errno = ENOTSOCK;
@@ -976,23 +831,20 @@ connect( int SockFd,
        goto ErrorExit;
    }
 
-   build_connect_socket( &request, SockFd, (struct sockaddr_in *) Addr );
+   mwcomms_init_request( &request,
+                         MtRequestSocketConnect,
+                         MT_REQUEST_SOCKET_CONNECT_SIZE,
+                         SockFd );
 
-   DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
-   DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
+   populate_mt_sockaddr_in( &request.socket_connect.sockaddr,
+                            (struct sockaddr_in *) Addr );
 
-#ifndef NODEVICE
-   if( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+   // XXXX: block?
+   rc = mwcomms_write_request( SockFd, true, &request, &response );
+   if ( rc )
    {
        goto ErrorExit;
    }
-   
-   if( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-
-#endif
 
    DEBUG_PRINT("Connect-socket response returned %d\n",
                (int) response.base.status );
@@ -1015,65 +867,55 @@ ErrorExit:
 }
 
 ssize_t 
-send( int         SockFd, 
-      const void *Buff, 
-      size_t      Len,
-      int         Flags )
+send( int          SockFd, 
+      const void * Buff, 
+      size_t       Len,
+      int          Flags )
 {
-   mt_request_generic_t request;
-   mt_response_socket_send_t response;
-   ssize_t rc = 0;
-   ssize_t totSent = 0;
-   const uint8_t *buff_ptr = Buff;
+    mt_request_generic_t request;
+    mt_response_generic_t response = {0};
+    ssize_t rc = 0;
+    ssize_t totSent = 0;
+    const uint8_t *buff_ptr = Buff;
 
-   if ( !MW_SOCKET_IS_FD( SockFd ) )
-   {
-       DEBUG_PRINT( "send() received invalid FD 0x%x\n", SockFd );
-       errno = EINVAL;
-       rc =  -1;
-       goto ErrorExit;
-   }
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        DEBUG_PRINT( "send() received invalid FD 0x%x\n", SockFd );
+        errno = EINVAL;
+        rc =  -1;
+        goto ErrorExit;
+    }
 
-   while ( totSent < Len )
-   {
-       build_send_socket( &request, 
-                          SockFd, 
-                          ( buff_ptr + totSent ), 
-                          Len - totSent );
+    mwcomms_init_request( &request,
+                          MtRequestSocketSend,
+                          MT_REQUEST_SOCKET_SEND_SIZE,
+                          SockFd );
 
-       DEBUG_PRINT("Sending write-socket request on socket number: %x\n", SockFd);
-       DEBUG_PRINT("\tSize of request base: %lu\n", sizeof(request));
-       DEBUG_PRINT("\t\tSize of payload: %d\n", request.base.size);
+    while ( totSent < Len )
+    {
+        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len );
 
-#ifndef NODEVICE
+        request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
+        memcpy( request.socket_send.bytes, &buff_ptr[ totSent ], chunksz );
 
-       if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-       {
-           rc = -1;
-           goto ErrorExit;
-       }
+        rc = mwcomms_write_request( SockFd, false, &request, &response );
+        if ( rc )
+        {
+            goto ErrorExit;
+        }
 
-       if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-       {
-           rc = -1;
-           goto ErrorExit;
-       }
-#endif
-
-       DEBUG_PRINT("Write-socket response returned status %d len %ld\n",
-                   (int)response.base.status, rc );
-       DEBUG_PRINT("\tSize of response base: %lu\n", sizeof(response));
-       DEBUG_PRINT("\t\tSize of payload: %d\n", response.base.size);
-       
-       if ( (int)response.base.status < 0 )
-       {
+        if ( response.base.status < 0 )
+        {
            errno = -response.base.status;
            rc = -1;
            goto ErrorExit;
-       }
+        }
 
-       totSent += (int)response.sent;
-   }
+        totSent += chunksz;
+
+        DEBUG_PRINT("* Sent %d bytes, tot %d of %d\n",
+                    (int)chunksz, (int)totSent, (int)Len );
+    }
 
     rc = totSent;
 
@@ -1087,7 +929,7 @@ write( int Fd, const void *Buf, size_t count )
 {
     ssize_t rc = 0;
 
-    if ( !MW_SOCKET_IS_FD( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_write( Fd, Buf, count );
         goto ErrorExit;
@@ -1104,7 +946,7 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
 {
     ssize_t rc = 0;
 
-    if ( !MW_SOCKET_IS_FD( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_writev( Fd, Iov, IovCt );
         goto ErrorExit;
@@ -1138,7 +980,7 @@ getsockopt( int Fd,
                  Fd, Level, OptName, OptVal, OptLen );
 
     // Never call getsockopt on an mw_sock
-    if ( MW_SOCKET_IS_FD( Fd ) )
+    if ( mwcomms_is_mwsocket( Fd ) )
     {
         targetFd = dummy_socket;
     }
@@ -1167,7 +1009,7 @@ setsockopt( int Fd,
                  Fd, Level, OptName, OptVal, *(uint32_t *)OptVal, OptLen );
 
     // Never call getsockopt on an mw_sock
-    if ( MW_SOCKET_IS_FD( Fd ) )
+    if ( mwcomms_is_mwsocket( Fd ) )
     {
         targetFd = dummy_socket;
     }
@@ -1184,49 +1026,45 @@ int
 getsockname(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
 {
     int rc = 0;
-    mt_request_socket_getname_t request = {0};
-    mt_response_socket_getname_t response = {0};
+    mt_request_generic_t request = {0};
+    mt_response_generic_t response = {0};
 
     DEBUG_PRINT( "getsockname( %x, ... )\n", SockFd );
 
-    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    if ( !mwcomms_is_mwsocket( SockFd ) )
     {
-        rc = libc_getpeername( SockFd, Addr, AddrLen );
+        rc = libc_getsockname( SockFd, Addr, AddrLen );
         goto ErrorExit;
     }
 
-    request.base.sig    = MT_SIGNATURE_REQUEST;
-    request.base.type   = MtRequestSocketGetName;
-    request.base.size   = MT_REQUEST_SOCKET_GETNAME_SIZE;
-    request.base.sockfd = SockFd;
-    request.maxlen       = (mt_size_t ) *AddrLen;
+    mwcomms_init_request( &request,
+                          MtRequestSocketGetName,
+                          MT_REQUEST_SOCKET_GETNAME_SIZE,
+                          SockFd );
+    request.socket_getname.maxlen = (mt_size_t ) *AddrLen;
 
-#ifndef NODEVICE
-   if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
-   if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-#endif
+    if ( (int)response.base.status < 0 )
+    {
+        DEBUG_PRINT( "Error calling getsockname() on socket %d: error %x (%d)\n",
+                     SockFd, (int)response.base.status,
+                     (int)response.base.status );
+        errno = -response.base.status;
+        rc = -1;
+        goto ErrorExit;
+    }
 
-   if ( (int)response.base.status < 0 )
-   {
-       DEBUG_PRINT( "Error calling getsockname() on socket 0x%x: error %x (%d)\n",
-                    SockFd, (int)response.base.status, (int)response.base.status );
-       errno = -response.base.status;
-       rc = -1;
-       goto ErrorExit;
-   }
+    populate_sockaddr_in( (struct sockaddr_in *) Addr,
+                          &response.socket_getname.sockaddr );
 
-   populate_sockaddr_in( (struct sockaddr_in *) Addr, &response.sockaddr );
-
-   DEBUG_PRINT( "Returning %s:%d\n",
-                inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
-                ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
+    DEBUG_PRINT( "Returning %s:%d\n",
+                 inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
+                 ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
 
 ErrorExit:
     return rc;
@@ -1237,265 +1075,46 @@ int
 getpeername(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
 {
     int rc = 0;
-    mt_request_socket_getpeer_t request = {0};
-    mt_response_socket_getpeer_t response = {0};
+    mt_request_generic_t request = {0};
+    mt_response_generic_t response = {0};
 
     DEBUG_PRINT( "getpeername( %x, ... )\n", SockFd );
 
-    if ( !MW_SOCKET_IS_FD( SockFd ) )
+    if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         rc = libc_getpeername( SockFd, Addr, AddrLen );
         goto ErrorExit;
     }
 
-    request.base.sig    = MT_SIGNATURE_REQUEST;
-    request.base.type   = MtRequestSocketGetPeer;
-    request.base.size   = MT_REQUEST_SOCKET_GETPEER_SIZE;
-    request.base.sockfd = SockFd;
-    request.maxlen      = (mt_size_t ) *AddrLen;
+    mwcomms_init_request( &request,
+                          MtRequestSocketGetPeer,
+                          MT_REQUEST_SOCKET_GETPEER_SIZE,
+                          SockFd );
+    request.socket_getname.maxlen = (mt_size_t ) *AddrLen;
 
-#ifndef NODEVICE
-   if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-
-   if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-#endif
+    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
    if ( (int)response.base.status < 0 )
    {
-       DEBUG_PRINT( "Error calling getpeername() on socket 0x%x: error %x (%d)\n",
+       DEBUG_PRINT( "Error calling getpeername() on socket %d: error %x (%d)\n",
                     SockFd, (int)response.base.status, (int)response.base.status );
        errno = -response.base.status;
        rc = -1;
        goto ErrorExit;
    }
 
-   populate_sockaddr_in( (struct sockaddr_in *) Addr, &response.sockaddr );
+   populate_sockaddr_in( (struct sockaddr_in *) Addr,
+                         &response.socket_getpeer.sockaddr );
 
    DEBUG_PRINT( "Returning %s:%d\n",
                 inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
                 ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
 
 ErrorExit:
-    return rc;
-}
-
-
-// XXXX: handle Flags & EPOLL_CLOEXEC correctly
-int
-epoll_create1( int Flags )
-{
-    int rc = 0;
-    mt_request_poll_create_t request;
-    mt_response_poll_create_t response;
-    
-    epoll_request_t * req = mw_epoll_create();
-    if ( NULL == req )
-    {
-        errno = ENOMEM;
-        rc = -1;
-        goto ErrorExit;
-    }
-
-    build_poll_create( &request );
-
-#ifndef NODEVICE
-   if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-   {
-       MYASSERT( !"write" );
-       goto ErrorExit;
-   }
-
-   if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-   {
-       goto ErrorExit;
-   }
-#endif
-
-   if ( (int)response.base.status < 0 )
-   {
-       DEBUG_PRINT( "Error creating epoll FD. Error Number: %x (%d)\n",
-                    (int)response.base.status, (int)response.base.status );
-       errno = -response.base.status;
-       rc = -1;
-       goto ErrorExit;
-   }
-    
-   req->createflags = Flags;
-   rc = req->pseudofd = response.base.sockfd;
-
-   DEBUG_PRINT( "Created epoll FD %x\n", rc );
-   
-ErrorExit:
-    return rc;
-}
-
-
-int
-epoll_create( int Size )
-{
-    return epoll_create1( 0 );
-}
-
-int
-epoll_ctl( int EpFd,
-           int Op,
-           int Fd,
-           struct epoll_event * Event )
-{
-    int rc = 0;
-
-    rc = mw_epoll_ctl( EpFd, Op, Fd, Event );
-
-    return rc;
-}
-
-int
-epoll_wait( int EpFd,
-            struct epoll_event * Events,
-            int MaxEvents,
-            int Timeout )
-{
-    int rc = 0;
-    mt_request_poll_wait_t mreq;
-    epoll_request_t * ereq = NULL;
-
-    ereq = mw_epoll_find( EpFd );
-    if ( NULL == ereq )
-    {
-        rc = -1;
-        errno = EBADFD;
-        goto ErrorExit;
-    }
-
-    if ( ereq->is_mw )
-    {
-        mt_response_poll_wait_t mres;
-        
-        build_poll_wait( &mreq, ereq, Timeout );
-
-#ifndef NODEVICE
-       if ( ( rc = libc_write( devfd, &mreq, sizeof( mreq ) ) ) < 0 )
-       {
-           rc = -1;
-           goto ErrorExit;
-       }
-
-       if ( ( rc = read_response( (mt_response_generic_t *) &mres ) ) < 0 )
-       {
-           rc = -1;
-           goto ErrorExit;
-       }
-
-       rc = populate_epoll_results( &mres, ereq, Events );
-       goto ErrorExit;
-#endif
-    }
-
-    // Non-MW case
-    rc = do_epoll( ereq, Events, MaxEvents, Timeout );
-    
-ErrorExit:
-
-    return rc;
-}
-
-int
-epoll_pwait( int EpFd,
-             struct epoll_event * Events,
-             int MaxEvents,
-             int Timeout,
-             const sigset_t * Sigmask )
-{
-    DEBUG_PRINT( "epoll_pwait( %x, %p, %d, %d, %p )\n",
-                 EpFd, Events, MaxEvents, Timeout, Sigmask );
-
-    return libc_epoll_pwait( EpFd, Events, MaxEvents, Timeout, Sigmask );
-}
-
-
-int
-poll( struct pollfd *Fds, nfds_t Nfds, int Timeout )
-{
-    int rc = 0;
-    bool mwapi = false;
-    int epollfd = -1;
-    struct epoll_event outevents[ MAX_POLL_FD_COUNT ];
-
-    if ( 0 == Nfds )
-    {
-        rc = libc_poll( Fds, Nfds, Timeout );
-        goto ErrorExit;
-    }
-
-    mwapi = MW_SOCKET_IS_FD( Fds[0].fd );
-
-    for ( int i = 1; i < Nfds; ++i )
-    {
-        if ( MW_SOCKET_IS_FD( Fds[i].fd ) != mwapi )
-        {
-            MYASSERT( !"Can't combine MW sockets with other FDs" );
-            rc = -1;
-            errno = EINVAL;
-            goto ErrorExit;
-        }
-    }
-
-    if ( !mwapi )
-    {
-        rc = libc_poll( Fds, Nfds, Timeout );
-        goto ErrorExit;
-    }
-
-    // MW case: Use epoll() interface, which will go through our wrappers
-    epollfd = epoll_create( Nfds );
-    if ( epollfd < 0 )
-    {
-        goto ErrorExit;
-    }
-
-    for ( int i = 1; i < Nfds; ++i )
-    {
-        struct epoll_event epevt;
-        epevt.data.fd = Fds[i].fd;
-        rc = epoll_ctl( epollfd, EPOLL_CTL_ADD, Fds[i].fd, &epevt );
-        if ( rc < 0 )
-        {
-            goto ErrorExit;
-        }
-    }
-
-    rc = epoll_wait( epollfd, outevents, MAX_POLL_FD_COUNT, Timeout );
-    if ( rc < 0 )
-    {
-        goto ErrorExit;
-    }
-
-    // Process the output: iterate over both arrays
-    for ( int i = 0; i < rc; ++i ) // for all ready FDs
-    {
-        for ( int j = 0; j < Nfds; ++j ) // for all FDs in set
-        {
-            if ( outevents[i].data.fd != Fds[i].fd )
-            {
-                continue;
-            }
-
-            // This FD is flagged
-            Fds[i].revents = outevents[i].events;
-        }
-    }
-
-ErrorExit:
-    if ( epollfd > 0 )
-    {
-        (void) close( epollfd );
-    }
     return rc;
 }
 
@@ -1507,76 +1126,49 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     va_list ap;
     void * arg = NULL;
 
-    mt_request_socket_fcntl_t   request = {0};
-    mt_response_socket_fcntl_t response = {0};
+    mwsocket_modify_pollset_args_t pollset = {0};
 
     va_start( ap, Cmd );
     arg = va_arg( ap, void * );
     va_end( ap );
 
-    if ( !MW_SOCKET_IS_FD( Fd ) )
-    {
-        rc = libc_fcntl( Fd, Cmd, arg );
-        goto ErrorExit;
-    }
-
     DEBUG_PRINT( "fcntl( %x, %d, %p )\n",
                  Fd, Cmd, arg );
 
-    request.base.sig    = MT_SIGNATURE_REQUEST;
-    request.base.type   = MtRequestSocketFcntl;
-    request.base.size   = MT_REQUEST_SOCKET_FCNTL_SIZE;
-    request.base.sockfd = Fd;
-
-    switch( Cmd )
+    rc = libc_fcntl( Fd, Cmd, arg );
+    if ( rc < 0 )
     {
-    case F_GETFL:
-        request.modify = 0;
-        break;
-    case F_SETFL:
-        request.modify = 1;
-        request.flags[ MT_SOCK_FCNTL_IDX_NONBLOCK ] =
-            ( 0 != (((unsigned long)arg) & O_NONBLOCK) );
-        break;
-    default:
-        DEBUG_PRINT( "fnctl() arguments unsupported by MW sockets\n" );
-        rc = -1;
+        DEBUG_PRINT( "fcntl() failed: %d\n", rc );
+        goto ErrorExit;
+    }
+    
+    if ( !mwcomms_is_mwsocket( Fd )
+        || F_SETFL != Cmd )
+    {
         goto ErrorExit;
     }
 
-#ifndef NODEVICE
-    if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
+    // Handle MW socket: update pollset only
+    pollset.fd = Fd;
+    pollset.add = (bool) ( ((unsigned long)arg) & O_NONBLOCK );
+
+    rc = ioctl( devfd, MW_IOCTL_MOD_POLLSET, &pollset );
+    if ( rc )
     {
-        rc = -1;
+        DEBUG_PRINT( "ioctl() failed: %d\n", rc );
         goto ErrorExit;
     }
-
-    if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-    {
-        rc = -1;
-        goto ErrorExit;
-    }
-#endif
-
-    if ( !request.modify ) // F_GETFL
-    {
-        rc = ( response.flags[MT_SOCK_FCNTL_IDX_NONBLOCK] ? O_NONBLOCK : 0 );
-        goto ErrorExit;
-    }
-
-    // F_SETFL
-    rc = response.base.status;
-
 ErrorExit:
     DEBUG_PRINT( "fcntl( %x, %d, %p ) ==> %x\n",
                  Fd, Cmd, arg, rc );
-
     return rc;
 }
 
-void 
-_init( void )
+void __attribute__((constructor))
+init_wrapper( void )
 {
+    int rc = 0;
+
     DEBUG_PRINT("Intercept module loaded\n");
 
 #ifdef NODEVICE
@@ -1602,6 +1194,7 @@ _init( void )
     }
 
     get_libc_symbol( (void **) &libc_socket,   "socket"   );
+    get_libc_symbol( (void **) &libc_bind,     "bind"     );
     get_libc_symbol( (void **) &libc_read,     "read"     );
     get_libc_symbol( (void **) &libc_readv,    "readv"    );
     get_libc_symbol( (void **) &libc_write,    "write"    );
@@ -1618,30 +1211,40 @@ _init( void )
     get_libc_symbol( (void **) &libc_getsockname, "getsockname" );
     get_libc_symbol( (void **) &libc_getpeername, "getpeername" );
 
-    get_libc_symbol( (void **) &libc_epoll_create, "epoll_create" );
-    get_libc_symbol( (void **) &libc_epoll_create1, "epoll_create1" );
-
-    get_libc_symbol( (void **) &libc_epoll_ctl,   "epoll_ctl" );
-    get_libc_symbol( (void **) &libc_epoll_wait,  "epoll_wait" );
-    get_libc_symbol( (void **) &libc_epoll_pwait, "epoll_pwait" );
-
-    get_libc_symbol( (void **) &libc_poll,        "poll" );
-
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
 
+    DEBUG_PRINT( "Creating dummy socket\n" );
     dummy_socket = libc_socket( AF_INET, SOCK_STREAM, 0 );
     if ( dummy_socket < 0 )
     {
         perror("socket");
         exit(1);
     }
+    DEBUG_PRINT( "Got dummy socket FD %d\n", dummy_socket );
 
-    mw_epoll_init();
+    //mw_epoll_init();
+
+    // TEST TEST
+    mwsocket_create_args_t create = {
+        .domain   = MT_PF_INET,
+        .type     = MT_ST_STREAM,
+        .protocol = 0,
+    };
+
+    rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
+    if ( rc )
+    {
+        perror( "ioctl" );
+        exit(1);
+    }
+
+    DEBUG_PRINT( "Got socket FD %d\n", create.outfd );
+    close( create.outfd );
 }
 
 
-void
-_fini( void )
+void __attribute__((destructor))
+fini_wrapper( void )
 {
     if ( dummy_socket > 0 )
     {
@@ -1652,6 +1255,11 @@ _fini( void )
     {
         dlclose( g_dlh_libc );
         g_dlh_libc = NULL;
+    }
+
+    if ( devfd > 0 )
+    {
+        close( devfd );
     }
 
     DEBUG_PRINT("Intercept module unloaded\n");

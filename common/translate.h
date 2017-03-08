@@ -64,7 +64,7 @@ static inline
 int 
 xe_net_get_native_sock_type( mt_sock_type_t Type )
 {
-    int stype = -1; 
+    int stype = -1;
 
     switch( Type )
     {   

@@ -36,25 +36,33 @@
 #include "mwcomms-xen-iface.h"
 
 int
-mw_socket_init( mw_region_t * SharedMem,
-                struct completion * RingShared );
+mwsocket_init( mw_region_t * SharedMem );
 
 void
-mw_socket_fini( void );
+mwsocket_notify_ring_ready( void );
+
+void
+mwsocket_fini( void );
 
 
 int
-mw_socket_create( OUT mwsocket_t * SockFd,
+mwsocket_create( OUT mwsocket_t * SockFd,
                   IN  int          Domain,
                   IN  int          Type,
                   IN  int          Protocol );
 
 
-mw_xen_event_handler_cb_t mw_socket_event_cb;
+mw_xen_event_handler_cb_t mwsocket_event_cb;
 
 
 // @brief Returns whether the given file descriptor is backed by an MW socket.
 bool
-mw_socket_verify( const struct file * File );
+mwsocket_verify( const struct file * File );
+
+
+// @brief Modifies the pollset for the async notification thread
+int
+mwsocket_modify_pollset( IN int  MwFd,
+                         IN bool AddFd );
 
 #endif // mwcomms_socket_h
