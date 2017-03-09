@@ -275,112 +275,6 @@ mwcomms_init_request( INOUT mt_request_generic_t * Request,
     Request->base.sockfd = MwSockFd;
 }
 
-/*
-void
-build_bind_socket( mt_request_generic_t * Request, 
-                   int                    SockFd, 
-                   struct sockaddr_in   * SockAddr, 
-                   socklen_t              Addrlen )
-{
-
-    mt_request_socket_bind_t * bind = &(Request->socket_bind);
-
-    bzero( Request, sizeof(*Request) );
-
-    populate_mt_sockaddr_in( &bind->sockaddr, SockAddr );
-
-    bind->base.sig  = MT_SIGNATURE_REQUEST;
-    bind->base.type = MtRequestSocketBind;
-    bind->base.id = MT_ID_UNSET_VALUE;
-    bind->base.sockfd = SockFd;
-
-    bind->base.size = MT_REQUEST_SOCKET_BIND_SIZE; 
-}
-
-
-void
-build_listen_socket( mt_request_generic_t * Request,
-                     int                    SockFd,
-                     int                    backlog)
-{
-    mt_request_socket_listen_t * listen = &(Request->socket_listen);
-    
-    bzero( Request, sizeof(*Request) );
-
-    listen->backlog = *backlog;
-    listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
-
-    listen->base.sig = MT_SIGNATURE_REQUEST;
-    listen->base.type = MtRequestSocketListen;
-    listen->base.id = MT_ID_UNSET_VALUE;
-    listen->base.sockfd = SockFd;
-
-    listen->base.size = MT_REQUEST_SOCKET_LISTEN_SIZE;
-}
-
-void build_accept_socket( mt_request_generic_t * Request,
-                          int                    SockFd)
-{
-    mt_request_socket_accept_t * accept = &(Request->socket_accept);
-
-    bzero( Request, sizeof(*Request) );
-
-    accept->base.sig = MT_SIGNATURE_REQUEST;
-    accept->base.type = MtRequestSocketAccept;
-    accept->base.id = MT_ID_UNSET_VALUE;
-    accept->base.sockfd = SockFd;
-
-    accept->base.size = MT_REQUEST_SOCKET_ACCEPT_SIZE;
-}
-
-
-void
-build_connect_socket( mt_request_generic_t * Request, 
-                      int SockFd,
-                      struct sockaddr_in *SockAddr )
-{
-    mt_request_socket_connect_t * connect = &(Request->socket_connect);
-
-    bzero( Request, sizeof(*Request) );
-
-    connect->base.sig  = MT_SIGNATURE_REQUEST;
-    connect->base.type = MtRequestSocketConnect;
-    connect->base.id = MT_ID_UNSET_VALUE;
-    connect->base.sockfd = SockFd;
-
-    populate_mt_sockaddr_in( &Request->socket_connect.sockaddr, SockAddr );
-    
-    connect->base.size = MT_REQUEST_SOCKET_CONNECT_SIZE;
-}
-
-void
-build_send_socket( mt_request_generic_t * Request, 
-                   int                    SockFd,
-                   const void           * Bytes,
-                   size_t                 Len )
-{
-    mt_request_socket_send_t * send = &(Request->socket_send);
-    size_t actual_len = Len;
-
-    bzero( Request, sizeof(*Request) );
-
-    send->base.sig  = MT_SIGNATURE_REQUEST;
-    send->base.type = MtRequestSocketSend;
-    send->base.id = MT_ID_UNSET_VALUE;
-    send->base.sockfd = SockFd;
-    
-    if( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
-    {
-        actual_len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
-    }
-
-    memcpy(send->bytes, Bytes, actual_len);
-
-    send->base.size = MT_REQUEST_SOCKET_SEND_SIZE + actual_len;
-}
-*/
-
-
 
 int 
 socket( int domain, 
@@ -420,88 +314,6 @@ ErrorExit:
     return rc;
 }
 
-/*
-  int
-close( int Fd )
-{
-    mt_request_generic_t  request;
-    mt_response_generic_t response;
-    ssize_t rc = 0;
-
-    if ( mwcomms_is_mwsocket( Fd ) )
-    {
-        build_close_socket( &request, Fd );
-        DEBUG_PRINT( "Closing MW Socket %x\n", Fd );
-    
-#ifndef NODEVICE
-        if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-        {
-            goto ErrorExit;
-        }
-    
-        if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-        {
-            goto ErrorExit;
-        }
-#endif
-        if ( response.base.status )
-        {
-            DEBUG_PRINT( "\t\tError closing socket. Error Number: %lu\n",
-                         (long) -response.base.status );
-            errno = -response.base.status;
-            // Returns -1 on error
-            rc = -1;
-            goto ErrorExit;
-        }
-
-        // Returns 0 on success
-        rc = 0;
-    }
-    else if ( MW_EPOLL_IS_FD( Fd ) )
-    {
-        DEBUG_PRINT( "Closing epoll FD %x\n", Fd );
-
-        epoll_request_t * req = mw_epoll_find( Fd );
-        if ( NULL == req )
-        {
-            rc = -1;
-            goto ErrorExit;
-        }
-
-        build_poll_close( (mt_request_poll_close_t *)&request,
-                          req->pseudofd );
-        mw_epoll_destroy( req );
-        
-#ifndef NODEVICE
-        if ( ( rc = libc_write( devfd, &request, sizeof( request ) ) ) < 0 )
-        {
-            goto ErrorExit;
-        }
-    
-        if ( ( rc = read_response( (mt_response_generic_t *) &response ) ) < 0 )
-        {
-            goto ErrorExit;
-        }
-#endif
-        if ( response.base.status )
-        {
-            DEBUG_PRINT( "\t\tError closing poll FD. Error Number: %lu\n",
-                         (long)response.base.status );
-            errno = -response.base.status;
-            rc = -1;
-            goto ErrorExit;
-        }
-    }
-    else
-    {
-        rc = libc_close( Fd );
-        goto ErrorExit;
-    }
-
-ErrorExit:
-    return rc;
-}
-*/
 
 int
 bind( int                     SockFd,
@@ -639,47 +451,11 @@ accept4( int               SockFd,
          socklen_t       * SockLen,
          int               Flags )
 {
-    // Drop flags for now
+    // XXXX: Drop flags for now, could be O_NONBLOCK or CLOEXEC
+
     return accept( SockFd, SockAddr, SockLen );
 }
 
-/*
-void
-build_recv_socket( mt_request_generic_t * Request, 
-                   int SockFd,
-                   size_t Len,
-                   int Flags,
-                   struct sockaddr *SrcAddr,
-                   socklen_t *AddrLen )
-{
-   mt_request_socket_recv_t * recieve = &(Request->socket_recv);
-
-    bzero( Request, sizeof( *Request ) );
-    
-    recieve->base.sig  = MT_SIGNATURE_REQUEST;
-    recieve->base.id = MT_ID_UNSET_VALUE;
-    recieve->base.sockfd = SockFd;
-
-    if( NULL == SrcAddr )
-    {
-        recieve->base.type = MtRequestSocketRecv;
-    }
-    else
-    {
-        recieve->base.type = MtRequestSocketRecvFrom;
-    }
-
-    if ( Len > MESSAGE_TYPE_MAX_PAYLOAD_LEN )
-    {
-       Len = MESSAGE_TYPE_MAX_PAYLOAD_LEN;
-    } 
-
-    recieve->requested = MIN( Len, MESSAGE_TYPE_MAX_PAYLOAD_LEN );
-    recieve->flags     = Flags;
-    
-    recieve->base.size = MT_REQUEST_SOCKET_RECV_SIZE;
-}
-*/
 
 ssize_t
 recvfrom( int    SockFd,
@@ -893,7 +669,7 @@ send( int          SockFd,
 
     while ( totSent < Len )
     {
-        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len );
+        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
 
         request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
         memcpy( request.socket_send.bytes, &buff_ptr[ totSent ], chunksz );

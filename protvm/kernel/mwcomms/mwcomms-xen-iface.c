@@ -63,7 +63,7 @@ mw_xen_write_to_key(const char * dir, const char * node, const char * value)
    bool                  txnstarted = false;
    int                   term = 0;
    
-   pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
+   //pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
    
    err = xenbus_transaction_start(&txn);
    if (err)
@@ -111,7 +111,7 @@ mw_xen_read_from_key( const char * dir, const char * node )
    char                       *str;
    int                         err;
 
-   pr_debug( "Begin read %s/%s <== ?\n", dir, node );
+   //pr_debug( "Begin read %s/%s <== ?\n", dir, node );
 
    err = xenbus_transaction_start(&txn);
    if (err) {
@@ -129,7 +129,7 @@ mw_xen_read_from_key( const char * dir, const char * node )
 
    err = xenbus_transaction_end(txn, 0);
 
-   pr_debug( "End read %s/%s <== %s\n", dir, node, str );
+   //pr_debug( "End read %s/%s <== %s\n", dir, node, str );
    
    return str;
 }
@@ -151,7 +151,7 @@ mw_xen_write_server_id_to_key(void)
        goto ErrorExit;
    }
 
-   pr_debug("Read my Dom Id Key: %s\n", dom_id_str);
+   pr_debug( "Running within Xen domid=%s\n", dom_id_str);
 
    err = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT, SERVER_ID_KEY, dom_id_str );
    if ( err )
@@ -193,13 +193,13 @@ mw_xen_create_unbound_evt_chn(void)
        pr_err("Failed to set up event channel\n");
        goto ErrorExit;
    }
-   
-   pr_debug("Event Channel Port (%d <=> %d): %d\n",
-          alloc_unbound.dom, g_mwxen_state.remote_domid, alloc_unbound.port);
 
    g_mwxen_state.common_evtchn = alloc_unbound.port;
 
-   pr_debug( "Event channel's local port: %d\n", g_mwxen_state.common_evtchn );
+   pr_debug("Event Channel Port (%d <=> %d): %d\n",
+            alloc_unbound.dom, g_mwxen_state.remote_domid,
+            g_mwxen_state.common_evtchn );
+
    memset( str, 0, MAX_GNT_REF_WIDTH );
    snprintf( str, MAX_GNT_REF_WIDTH,
              "%u", g_mwxen_state.common_evtchn );
@@ -235,10 +235,6 @@ mw_xen_send_event( void )
    {
       pr_err("Failed to send event\n");
    }
-   /*else
-   {
-      pr_info("Sent Event. Port: %u\n", send.port);
-   }*/
 }
 
 
@@ -280,26 +276,10 @@ mw_xen_free_unbound_evt_chn( void )
    }
    else
    {
-      pr_debug("Closed Event Channel Port: %d\n", close.port);
+      pr_debug("Closed event channel port=%d\n", close.port);
    }
 }
 
-
-
-/*
-///////////////////////////////////////////////////
-static void
-mw_xen_init_shared_ring( void )
-{
-    
-    SHARED_RING_INIT( g_mwxen_state.xen_shmem );
-    FRONT_RING_INIT( &front_ring, shared_ring, shared_mem_size);
-
-   ring_prepared = true;
-   complete( &ring_ready );
-}
-////////
-*/
 static int 
 mw_xen_offer_grant( domid_t ClientId )
 {
@@ -397,12 +377,8 @@ mw_xen_client_id_state_changed( struct xenbus_watch *w,
     //
     // Get the client Id 
     // 
-    pr_debug("Client Id changed value:\n");
-    pr_debug("\tRead Client Id Key: %s\n", client_id_str);
-
     g_mwxen_state.remote_domid = simple_strtol(client_id_str, NULL, 10);
-
-    pr_debug("\t\tuint form: %u\n", g_mwxen_state.remote_domid );
+    pr_debug( "Discovered client ID: %u\n", g_mwxen_state.remote_domid );
 
     kfree(client_id_str);
 
@@ -431,6 +407,7 @@ mw_xen_client_id_state_changed( struct xenbus_watch *w,
     //
     // Complete: the handshake is done
     //
+    pr_debug( "Handshake with client is complete\n" );
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
 }
 
@@ -449,7 +426,7 @@ mw_xen_vm_port_is_bound(struct xenbus_watch *w,
 {
    char * is_bound_str = NULL; 
 
-   pr_debug( "Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH );
+   //pr_debug( "Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH );
 
    is_bound_str = (char *) mw_xen_read_from_key( XENEVENT_XENSTORE_ROOT,
                                                  VM_EVT_CHN_BOUND_KEY );

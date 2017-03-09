@@ -226,6 +226,15 @@ typedef struct _mt_sockaddr_in
 #define MT_INADDR_ANY ((unsigned long int) 0x00000000)
 
 
+// The PVM wrapper will read the response
+#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
+
+// This request is to be processed only when IO is available 
+#define _MT_FLAGS_DELAYED_IO                 0x02
+
+//#define _MT_FLAGS_ASSOCIATED_IO              0x01
+
+
 //
 // The preamble for every request.
 //
@@ -250,7 +259,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // Will the user thread wait for a response? This does not need to
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
-    // aio_read()/aio_write().
+    // aio_read()/aio_write(). XXXX: change to flags.
     mt_bool_t    pvm_blocked_on_response;
 } mt_request_base_t;
 

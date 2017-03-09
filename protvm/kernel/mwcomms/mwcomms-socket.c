@@ -108,12 +108,16 @@ typedef struct _mwsocket_instance
     // Non-zero indicates error condition
     int pending_errno;
     
-    // How many active requests are using this mwsocket?
+    // How many active requests are using this mwsocket? Keep this
+    // instance around until this reaches 0. N.B. Responses can be
+    // received out-of-order in case of release() - to use this refct
+    // to destroy rather than doing it immediately upon release().
     atomic_t            user_ct;
 
     // The (singular) ID of the blocking request.
     mt_id_t             blockid;
 
+    // Did the user indicate that a read would follow the write?
     bool                read_expected;
 
     // Valid only while an accept() against this FD is in-flight
@@ -130,13 +134,14 @@ typedef struct _mwsocket_active_request
 {
     mt_id_t id;
 
-    // Will the requestor wait
-    bool   requestor_consumes_response;
+    // Will the (user) requestor wait? If so, we deliver the response
+    // to the user
+    bool   deliver_response;
 
     // Track whether it was delivered?
     
     // Signaled when the response arrives and is available in the
-    // response field. Only signaled if requestor_consumes_response is true.
+    // response field. Only signaled if deliver_response is true.
     struct completion arrived;
 
     // These are large, and we only need one at a time.
@@ -372,24 +377,49 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
     return rc;
 }
 
-
-// @brief Releases SockInst that was successfully built
+// @breif Reference the socket instance
 static void
-mwsocket_destroy_sockinst( mwsocket_instance_t * SockInst )
+mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 {
+    int val = 0;
+    
+    MYASSERT( SockInst );
+
+    val = atomic_inc_return( &SockInst->user_ct );
+
+    pr_debug( "Referenced socket instance %p fd=%d, refct=%d\n",
+              SockInst, SockInst->local_fd, val );
+
+}
+
+// @brief Dereferences the socket instance, destroying upon 0 reference count
+static void
+mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
+{
+    int val = 0;
+    
     if ( NULL == SockInst )
     {
+        pr_debug( "Called with NULL\n" );
         return;
     }
 
-    MYASSERT( 0 == atomic_read( &SockInst->user_ct ) );
-
+    val = atomic_dec_return( &SockInst->user_ct );
+    if ( val )
+    {
+        pr_debug( "Dereferenced socket instance %p fd=%d, refct=%d\n",
+                  SockInst, SockInst->local_fd, val );
+        return;
+    }
+    
     mutex_lock( &g_mwsocket_state.sockinst_lock );
     list_del( &SockInst->list_all );
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
-    pr_debug( "Destroyed socket instance %d\n", SockInst->local_fd );
-    
+    pr_debug( "Destroyed socket instance %p fd=%d\n",
+              SockInst, SockInst->local_fd );
+
+    bzero( SockInst, sizeof(*SockInst) );
     kmem_cache_free( g_mwsocket_state.sockinst_cache, SockInst );
 }
 
@@ -471,17 +501,19 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst )
     // Success
     sockinst->local_fd = fd;
 
-    pr_debug( "Installing mwsocket FD %d\n", fd );
     fd_install( fd, sockinst->file );
 
+    // refct starts at 1; an extra put() is done upon close()
+    atomic_set( &sockinst->user_ct, 1 );
     *SockInst = sockinst;
 
     mutex_lock( &g_mwsocket_state.sockinst_lock );
     list_add( &sockinst->list_all, &g_mwsocket_state.sockinst_list );
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
-    pr_debug( "Created socket instance %d\n", fd );
-    
+    pr_debug( "Created socket instance %p, file=%p inode=%p fd=%d\n",
+              sockinst, file, inode, fd );
+
 ErrorExit:
     if ( rc )
     {
@@ -498,6 +530,7 @@ ErrorExit:
     return rc;
 }
 
+
 // @brief Close the remote socket.
 //
 // @return 0 on success, or error, which could be either local or remote
@@ -509,6 +542,13 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     mwsocket_active_request_t * actreq = NULL;
     mt_request_socket_close_t * close = NULL;
 
+    if ( !MW_SOCKET_IS_FD( SockInst->remote_fd ) )
+    {
+        MYASSERT( !"Not an MW socket" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
     actreq = mwsocket_create_active_request( SockInst );
     if ( NULL == actreq )
     {
@@ -516,7 +556,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
         goto ErrorExit;
     }
 
-    actreq->requestor_consumes_response = WaitForResponse;
+    actreq->deliver_response = WaitForResponse;
     close = &actreq->request.socket_close;
     close->base.sig    = MT_SIGNATURE_REQUEST;
     close->base.type   = MtRequestSocketClose;
@@ -549,10 +589,11 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
 {
     if ( NULL == Request )
     {
+        pr_debug( "Called with NULL\n" );
         return;
     }
 
-    atomic_dec( &Request->sockinst->user_ct );
+    mwsocket_put_sockinst( Request->sockinst );
 
     // Dereference the file ????
     //put_filp( Request->sockinst->file );
@@ -562,7 +603,8 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
     list_del( &Request->list_all );
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 
-    pr_debug( "Destroyed active request %lx\n", (unsigned long) Request->id );
+    pr_debug( "Destroyed active request %p id=%lx\n",
+              Request, (unsigned long) Request->id );
 
     kmem_cache_free( g_mwsocket_state.active_request_cache, Request );
 }
@@ -593,7 +635,7 @@ mwsocket_create_active_request( mwsocket_instance_t * SockInst )
 
     init_completion( &actreq->arrived );
 
-    atomic_inc( &SockInst->user_ct );
+    mwsocket_get_sockinst( SockInst );
     actreq->sockinst = SockInst;
 
     // Add the new active request to the global list
@@ -604,7 +646,8 @@ mwsocket_create_active_request( mwsocket_instance_t * SockInst )
 
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 
-    pr_debug( "Created active request %lx\n", (unsigned long)id );
+    pr_debug( "Created active request %p id=%lx\n",
+              actreq, (unsigned long)id );
 ErrorExit:
     return actreq;
 }
@@ -656,7 +699,7 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
 
     // Do not use ActRequest->response; it might not be valid yet.
     
-    if ( failed && !ActRequest->requestor_consumes_response )
+    if ( failed && !ActRequest->deliver_response )
     {
         // There is an error and the caller doesn't consume the response.
         MYASSERT( !"Failure not consumed by requestor" );
@@ -666,6 +709,9 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
         // next synchronous call. An alternative is SIGPIPE if the
         // process expects it.
 
+        // XXXX: in case accept() failed permanently (and won't be
+        // called again??), destroy the local fd.
+
         ActRequest->sockinst->pending_errno = Response->base.status;
         goto ErrorExit;
     }
@@ -673,9 +719,6 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
 
     switch( Response->base.type )
     {
-        // The accept() call was sent with a new local FD already in
-        // place. Map it here, just like for socket().
-
     case MtResponseSocketCreate:
         pr_debug( "Associating local fd %d to remote fd %x\n",
                   ActRequest->sockinst->local_fd, Response->base.sockfd );
@@ -683,6 +726,8 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
         break;
         
     case MtResponseSocketAccept:
+        // The accept() call was sent with a new local FD already in
+        // place. Map it here, just like for socket(). vvvvvvvv
         MYASSERT( ActRequest->sockinst->accept_inst );
 
         ActRequest->sockinst->accept_inst->remote_fd = Response->base.sockfd;
@@ -691,12 +736,12 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
                   ActRequest->sockinst->accept_inst->local_fd,
                   Response->base.sockfd );
 
-        // Inform the caller of the new DF
+        // Inform the caller of the new FD
         Response->base.sockfd
             = Response->base.status
             = ActRequest->sockinst->accept_inst->local_fd;
 
-        // We're done with the accept()
+        // We're done with the accept(). The originating instance can forget about it.
         ActRequest->sockinst->accept_inst = NULL;
         break;
     default:
@@ -707,7 +752,7 @@ ErrorExit:
     return rc;
 }
 
-
+#if 0
 // @brief Calculates return state based on blocked status and request type.
 static int
 mwsocket_derive_return( IN  mwsocket_active_request_t * ActReq,
@@ -720,7 +765,7 @@ mwsocket_derive_return( IN  mwsocket_active_request_t * ActReq,
     MYASSERT( ActReq );
     MYASSERT( ReturnVal );
     MYASSERT( ErrNo   );
-    MYASSERT( !ActReq->requestor_consumes_response );
+    MYASSERT( !ActReq->deliver_response );
     
     // The requestor has stated that it will not block on the
     // response's arrival. 
@@ -761,25 +806,10 @@ mwsocket_derive_return( IN  mwsocket_active_request_t * ActReq,
         rc = -EINVAL;
         break;
     }
-/*    
 
-    request = &actreq->request;
-    if ( MT_BLOCKS( request->base.type ) )
-    {
-        block = true;
-    }
-    else if ( MT_NOBLOCK( request->base.type ) )
-    {
-        block = false;
-    }
-    else
-    {
-        block = sockinst->file->f_flag & O_NONBLOCK;
-    }
-*/
     return rc;    
 }
-
+#endif
 
 static int
 mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq )
@@ -824,8 +854,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq )
         goto ErrorExit;
     }
 
+    if ( request->base.type == MtRequestSocketSend )
+    {
+        if ( strstr( request->socket_send.bytes, "Chrome" ) ) DEBUG_BREAK();
+    }
+
     // Copy the request, update shared memory and notify remote side
-    DEBUG_BREAK();
     memcpy( dest, request, request->base.size );
     ++g_mwsocket_state.front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
@@ -942,11 +976,11 @@ mwsocket_response_consumer( void * Arg )
             response->base.status = rc;
         }
 
-        if ( actreq->requestor_consumes_response )
+        if ( actreq->deliver_response )
         {
             memcpy( &actreq->response, response, response->base.size );
             // Indicate that more blocking IO can occur on this socket
-            actreq->sockinst->blockid = MWSOCKET_UNASSIGNED_ID;
+            //actreq->sockinst->blockid = MWSOCKET_UNASSIGNED_ID;
             complete_all( &actreq->arrived );
         }
 
@@ -954,7 +988,7 @@ mwsocket_response_consumer( void * Arg )
         RING_CONSUME_RESPONSE();
 
         // If nobody will consume this active request's response, destroy it
-        if ( !actreq->requestor_consumes_response )
+        if ( !actreq->deliver_response )
         {
             mwsocket_destroy_active_request( actreq );
         }
@@ -1016,7 +1050,7 @@ mwsocket_create( OUT mwsocket_t * SockFd,
     create->sock_type     = Type;
     create->sock_protocol = Protocol;
     // Will we wait for response?
-    actreq->requestor_consumes_response = true;
+    actreq->deliver_response = true;
 
     rc = mwsocket_send_request( actreq );
     if ( rc )
@@ -1036,7 +1070,7 @@ ErrorExit:
     if ( rc )
     {
         // Failure: release socket instance
-        mwsocket_destroy_sockinst( sockinst );
+        mwsocket_put_sockinst( sockinst );
     }
     else
     {
@@ -1111,7 +1145,7 @@ mwsocket_read( struct file * File,
         goto ErrorExit;
     }
 
-    if ( !actreq->requestor_consumes_response )
+    if ( !actreq->deliver_response )
     {
         MYASSERT( !"Request was marked as non-blocking. No data is available." );
         rc = -EINVAL;
@@ -1121,6 +1155,8 @@ mwsocket_read( struct file * File,
     if ( wait_for_completion_interruptible( &actreq->arrived ) )
     {
         MYASSERT( !"read() was interrupted\n" );
+        // Keep the request alive. The user will not consume it.
+        actreq->deliver_response = false;
         rc = -EINTR;
         goto ErrorExit;
     }
@@ -1146,8 +1182,12 @@ mwsocket_read( struct file * File,
     rc = response->base.size;
 
 ErrorExit:
-    // The "active" request is now dead
-    mwsocket_destroy_active_request( actreq );
+    if ( -EINTR != rc )
+    {
+        // The "active" request is now dead
+        mwsocket_destroy_active_request( actreq );
+    }
+
     return rc;
 }
 
@@ -1164,9 +1204,10 @@ mwsocket_write( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
     mt_request_base_t base;
-    int retval = 0;
     int lerrno = 0;
     bool sent = false;
+    // Do not expect a read() after this if we return -EAGAIN
+    bool completed = false;
     
     pr_debug( "Processing write()\n" );
 
@@ -1204,15 +1245,7 @@ mwsocket_write( struct file * File,
         if ( rc )    goto ErrorExit;
         sockinst->accept_inst = acceptinst;
     }
-    /*
-    if ( MWSOCKET_UNASSIGNED_ID != sockinst->blockid )
-    {
-        MYASSERT( !"There's outstanding blocking IO on this socket. "
-                  "Writing not permitted\n" );
-        rc = -EPERM;
-        goto ErrorExit;
-    }
-    */
+
     // Is there a pending error on this socket? If so, return it.
     if ( 0 != sockinst->pending_errno )
     {
@@ -1253,11 +1286,11 @@ mwsocket_write( struct file * File,
 
     if ( request->base.pvm_blocked_on_response )
     {
-        // This write() will be followed by a read(). Indicate the ID
-        // that blocks the calling thread.
+        // This write() will be followed immediately by a
+        // read(). Indicate the ID that blocks the calling thread.
         sockinst->read_expected = true;
-        actreq->requestor_consumes_response = true;
-        actreq->sockinst->blockid = actreq->id;         // ????
+        sockinst->blockid = actreq->id;
+        actreq->deliver_response = true;
     }
 
     // Write to the ring
@@ -1269,25 +1302,19 @@ mwsocket_write( struct file * File,
 
     sent = true;
 
-    // The caller is writing this request and will not read the response.
-    if ( !request->base.pvm_blocked_on_response )
-    {
-        // Handle return from non-blocking IO
-        //rc = mwsocket_derive_return( actreq, &retval, &lerrno );
-        //mwsocket_destroy_active_request( actreq );
-        // Fall-through with rc
-    }
-
 ErrorExit:
+    // We're returning an error - don't expect a read
+    if (rc )
+    {
+        sockinst->read_expected = false;
+    }
+    
     if ( rc && !sent )
     {
         mwsocket_destroy_active_request( actreq );
-        mwsocket_destroy_sockinst( acceptinst );
+        mwsocket_put_sockinst( acceptinst );
     }
-    else
-    {
-        rc = lerrno;
-    }
+
     return rc;
 }
 
@@ -1310,8 +1337,6 @@ mwsocket_release( struct inode *Inode,
     int rc = 0;
     mwsocket_instance_t * sockinst = NULL;
 
-    pr_debug( "Processing release()\n" );
-
     // Do not incur a decrement against our module for this close(),
     // since the file we're closing was not opened via an open() call.
     __module_get( THIS_MODULE );
@@ -1324,11 +1349,22 @@ mwsocket_release( struct inode *Inode,
         goto ErrorExit;
     }
 
-    rc = mwsocket_close_remote( sockinst, true );
-    // fall-through
-    
+    pr_debug( "Processing release() on fd=%d\n",
+              sockinst->local_fd );
+
+    // Close the remote socket only if it exists. It won't exist in
+    // the case where accept() was called but hasn't returned yet. In
+    // that case, we've created a local sockinst, but the remote
+    // socket does not yet exist.
+    if ( MW_SOCKET_IS_FD( sockinst->remote_fd ) )
+    {
+        rc = mwsocket_close_remote( sockinst, true );
+        // fall-through
+    }
+
 ErrorExit:
-    mwsocket_destroy_sockinst( sockinst );
+    // release reference that was taken at instance creation
+    mwsocket_put_sockinst( sockinst );
     return rc;
 }
 
@@ -1347,6 +1383,10 @@ mwsocket_init( mw_region_t * SharedMem )
     mutex_init( &g_mwsocket_state.request_lock );
     mutex_init( &g_mwsocket_state.active_request_lock );
     mutex_init( &g_mwsocket_state.sockinst_lock );
+
+    sema_init( &g_mwsocket_state.event_channel_sem, 0 );
+    init_completion( &g_mwsocket_state.response_reader_done );
+    init_completion( &g_mwsocket_state.ring_ready );
 
     INIT_LIST_HEAD( &g_mwsocket_state.active_request_list );
     INIT_LIST_HEAD( &g_mwsocket_state.sockinst_list );
@@ -1371,7 +1411,7 @@ mwsocket_init( mw_region_t * SharedMem )
     }
 
     g_mwsocket_state.active_request_cache =
-        kmem_cache_create( "Active Requests",
+        kmem_cache_create( "mw_active_requests",
                            sizeof( mwsocket_active_request_t ),
                            0, 0, NULL );
 
@@ -1383,7 +1423,7 @@ mwsocket_init( mw_region_t * SharedMem )
     }
 
     g_mwsocket_state.sockinst_cache =
-        kmem_cache_create( "Socket Instances",
+        kmem_cache_create( "mw_socket_instances",
                            sizeof( mt_request_generic_t ),
                            0, 0, NULL );
 
@@ -1393,10 +1433,6 @@ mwsocket_init( mw_region_t * SharedMem )
         rc = -ENOMEM;
         goto ErrorExit;
     }
-
-    sema_init( &g_mwsocket_state.event_channel_sem, 0 );
-    init_completion( &g_mwsocket_state.response_reader_done );
-    init_completion( &g_mwsocket_state.ring_ready );
 
     g_mwsocket_state.response_reader_thread =
         kthread_run( &mwsocket_response_consumer,
@@ -1419,25 +1455,16 @@ ErrorExit:
 void
 mwsocket_fini( void )
 {
-    if ( NULL != g_mwsocket_state.active_request_cache )
-    {
-        kmem_cache_destroy( g_mwsocket_state.active_request_cache );
-    }
-
-    if ( NULL != g_mwsocket_state.fs_mount )
-    {
-        kern_unmount( g_mwsocket_state.fs_mount );
-    }
-
-    if ( g_mwsocket_state.fs_registered )
-    {
-        unregister_filesystem( &mwsocket_fs_type );
-    }
+    mwsocket_active_request_t * currar = NULL;
+    mwsocket_active_request_t * nextar = NULL;
+    
+    mwsocket_instance_t * currsi = NULL;
+    mwsocket_instance_t * nextsi = NULL;
 
     // Destroy worker thread: kick it. It might be waiting for the
     // ring to become ready, or it might be waiting for responses to
     // arrive on the ring. Wait for it to complete so shared resources
-    // can be destroyed.
+    // can be safely destroyed below.
 
     g_mwsocket_state.pending_exit = true;
     complete_all( &g_mwsocket_state.ring_ready );
@@ -1448,4 +1475,48 @@ mwsocket_fini( void )
         wait_for_completion( &g_mwsocket_state.response_reader_done );
     }
     
+    // Active requests cleanup
+    mutex_lock( &g_mwsocket_state.active_request_lock );
+    list_for_each_entry_safe( currar, nextar,
+                              &g_mwsocket_state.active_request_list, list_all )
+    {
+        pr_err( "Harvesting leaked active request id=%lx type=%x\n",
+                (unsigned long)currar->id, currar->request.base.type );
+        list_del( &currar->list_all );
+        kmem_cache_free( g_mwsocket_state.active_request_cache, currar );
+    }
+    mutex_unlock( &g_mwsocket_state.active_request_lock );
+    
+    if ( NULL != g_mwsocket_state.active_request_cache )
+    {
+        kmem_cache_destroy( g_mwsocket_state.active_request_cache );
+    }
+
+    // Socket instances cleanup
+    mutex_lock( &g_mwsocket_state.sockinst_lock );
+    list_for_each_entry_safe( currsi, nextsi,
+                              &g_mwsocket_state.sockinst_list, list_all )
+    {
+        pr_err( "Harvesting leaked socket instance for FD %d\n",
+                currsi->local_fd );
+        list_del( &currsi->list_all );
+        kmem_cache_free( g_mwsocket_state.sockinst_cache, currsi );
+    }
+    mutex_unlock( &g_mwsocket_state.sockinst_lock );
+
+    if ( NULL != g_mwsocket_state.sockinst_cache )
+    {
+        kmem_cache_destroy( g_mwsocket_state.sockinst_cache );
+    }
+
+    // Pseudo-filesystem cleanup
+    if ( NULL != g_mwsocket_state.fs_mount )
+    {
+        kern_unmount( g_mwsocket_state.fs_mount );
+    }
+
+    if ( g_mwsocket_state.fs_registered )
+    {
+        unregister_filesystem( &mwsocket_fs_type );
+    }
 }

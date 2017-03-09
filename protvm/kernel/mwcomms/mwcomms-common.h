@@ -13,7 +13,6 @@
 
 #include <linux/kernel.h>         
 
-
 typedef struct _mw_region
 {
     void * ptr;
@@ -48,10 +47,11 @@ typedef struct _mw_region
 #define DEBUG_BREAK() DEBUG_EMIT_BREAKPOINT()
 
 
+// dump_stack() might be of use here
 #define MYASSERT(x)                                                     \
     do { if (x) break;                                                  \
         pr_emerg( "### ASSERTION FAILED %s: %s: %d: %s\n",              \
-                  __FILE__, __func__, __LINE__, #x); dump_stack();      \
+                  __FILE__, __func__, __LINE__, #x);                    \
         DEBUG_BREAK();                                                  \
     } while (0)
 

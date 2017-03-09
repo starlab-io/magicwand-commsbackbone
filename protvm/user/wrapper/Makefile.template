@@ -1,6 +1,6 @@
 # To preserve changes to Makefile, edit Makefile.template
 
-# Standard no-strings-attched compilation of the test TCP/IP app and
+# Standard no-strings-attached compilation of the test TCP/IP app and
 # its accompanying shared library.  The shared library preloads the
 # app and intercepts selected TCP/IP calls to the network stack.
 # 

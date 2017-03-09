@@ -12,9 +12,9 @@ ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
 
 # For debugging
 ccflags-y += -ggdb
-ccflags-y += -DMYDEBUG
-ccflags-y += -DMYTRAP
-ccflags-y +=  -DDEBUG # enable pr_debug
+#ccflags-y += -DMYDEBUG
+#ccflags-y += -DMYTRAP
+#ccflags-y +=  -DDEBUG # enable pr_debug
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules
