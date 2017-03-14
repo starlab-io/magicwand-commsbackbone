@@ -52,7 +52,20 @@ typedef struct _thread_item
     // The exported socket value. We do not export our native socket
     // value. See mwsocket.h for details.
     //
-    mw_socket_fd_t sock_fd;
+    mw_socket_fd_t  sock_fd;
+
+    //
+    // Is the socket blocking? If it's non-blocking: (1) it has been
+    // set to O_NONBLOCK via fcntl(), (2) it is this socket in the
+    // active pollset?
+    //
+    bool           blocking;
+
+    //
+    // For pollset's internal usage
+    //
+    void         * pollset_data;
+
     
     //
     // The native socket under management - save it's metadata for

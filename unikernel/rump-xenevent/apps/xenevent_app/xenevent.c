@@ -76,6 +76,7 @@
 
 #include "networking.h"
 #include "user_common.h"
+#include "pollset.h"
 
 #include "xenevent_app_common.h"
 
@@ -94,6 +95,16 @@ xenevent_globals_t g_state;
 
 // What's my domid? Needed by networking.c
 uint16_t   client_id;
+
+
+#define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
+    ( MtRequestSocketCreate == _mytype ||         \
+      MtRequestPollsetMod   == _mytype ||         \
+      MtRequestPollsetQuery == _mytype )
+
+#define XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( _mytype )  \
+    ( MtRequestPollsetMod   == _mytype ||               \
+      MtRequestPollsetQuery == _mytype )
 
 
 //
@@ -265,21 +276,6 @@ ErrorExit:
     return rc;
 }
 
-/*
-static struct timespec 
-diff(struct timespec start, struct timespec end)
-{
-    struct timespec temp;
-    if ((end.tv_nsec-start.tv_nsec)<0) {
-        temp.tv_sec = end.tv_sec-start.tv_sec-1;
-        temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
-    } else {
-        temp.tv_sec = end.tv_sec-start.tv_sec;
-        temp.tv_nsec = end.tv_nsec-start.tv_nsec;
-    }
-    return temp;
-}
-*/
 
 static inline void
 xe_yield( void )
@@ -463,7 +459,7 @@ release_buffer_item( buffer_item_t * BufferItem )
 // MT_INVALID_SOCKET_FD, we find an unused thread. Otherwise, we find
 // the thread that has already been assigned to work on Socket.
 //
-static int
+int
 get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
                           OUT thread_item_t ** WorkerThread )
 {
@@ -611,10 +607,6 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
     
-    //struct timespec t1,t2,t3;
-        
-    MYASSERT( NULL != worker );
-    
     DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
@@ -677,29 +669,15 @@ process_buffer_item( buffer_item_t * BufferItem )
                               (mt_response_socket_getname_t *) &response,
                               worker );
         break;
-    case MtRequestSocketFcntl:
-        rc = xe_net_socket_fcntl( (mt_request_socket_fcntl_t *) request,
-                                  (mt_response_socket_fcntl_t *) &response,
-                                  worker );
+    case MtRequestPollsetMod:
+        rc = xe_pollset_mod( (mt_request_pollset_mod_t *)  request,
+                             (mt_response_pollset_mod_t *) &response );
         break;
-    case MtRequestPollCreate:
-        rc = xe_net_poll_create( (mt_request_poll_create_t *) request,
-                                 (mt_response_poll_create_t *) &response,
-                                 worker );
+    case MtRequestPollsetQuery:
+        rc = xe_pollset_query( (mt_request_pollset_query_t *)  request,
+                               (mt_response_pollset_query_t *) &response );
         break;
 
-    case MtRequestPollClose:
-        rc = xe_net_poll_close( (mt_request_poll_close_t *) request,
-                                (mt_response_poll_close_t *) &response,
-                                worker );
-        break;
-        
-    case MtRequestPollWait:
-        rc = xe_net_poll_wait( ( mt_request_poll_wait_t*) request,
-                               ( mt_response_poll_wait_t* ) &response,
-                               worker );
-        break;
-        
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
@@ -724,7 +702,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     {
         thread_item_t * accept_thread = NULL;
         DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
-        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, &accept_thread );
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD,  &accept_thread );
         if ( rc )
         {
             // Destroy the new socket and fail the request
@@ -802,7 +780,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
 {
     int rc = 0;
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
-    mt_request_type_t request_type = MT_RESPONSE_GET_TYPE( request );
+    mt_request_type_t request_type = MT_REQUEST_GET_TYPE( request );
 
     // Typically the caller needs to do more work on this buffer. When
     // this is false we release the buffer item.
@@ -814,45 +792,32 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
-    if ( MtRequestSocketCreate == request_type
-         ||  MtRequestPollCreate == request_type )
+    if ( XE_PROCESS_IN_MAIN_THREAD( request_type ) )
     {
-        // Request requires a new thread, which we procure by getting
-        // requesting the thread for an invalid socket. The thread and
-        // socket are bound for the lifetime of the socket.
-
-        // If we're creating a socket FD or an epoll pseudo-FD, we
-        // process the request here so that future work goes to the
-        // right thread. The operation is cheap in both these cases.
-        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
-        if ( rc )
+        if ( !XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( request_type ) )
         {
-            // No worker thread is available. We could yield and try
-            // again. For now, give up.
-            goto ErrorExit;
+            // Request requires a new thread, which we procure by getting
+            // requesting the thread for an invalid socket. The thread and
+            // socket are bound for the lifetime of the socket.
+
+            // If we're creating a socket FD or an epoll pseudo-FD, we
+            // process the request here so that future work goes to the
+            // right thread. The operation is cheap in both these cases.
+            rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
+            if ( rc )
+            {
+                // No worker thread is available. We could yield and try
+                // again. For now, give up.
+                goto ErrorExit;
+            }
+            BufferItem->assigned_thread = *AssignedThread;
         }
 
-        BufferItem->assigned_thread = *AssignedThread;
+        // Process here, in main thread
         *ProcessFurther = false;
         rc = process_buffer_item( BufferItem );
     }
     
-#if 0
-    // Process immediately to debug scheduling problems
-    else if ( MtRequestSocketConnect == request_type ||
-              MtRequestSocketWrite   == request_type || 
-              MtRequestSocketClose   == request_type )
-    {
-        *ProcessFurther = false;
-
-        // Assign thread 0 and comment out next two statements
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-
-        BufferItem->assigned_thread = *AssignedThread;
-
-        rc = process_buffer_item( BufferItem );
-    }
-#endif
     else if ( MtRequestSocketClose == request_type )
     {
         // This socket's thread could be stuck awaiting connect() or
@@ -867,13 +832,14 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         }
         
         BufferItem->assigned_thread = *AssignedThread;
-
+        xe_pollset_handle_close( *AssignedThread );
         rc = process_buffer_item( BufferItem );
     }
     else
     {
         // This request is for an existing FD/thread. Find the thread
-        // that services the connection and assign it.
+        // that services the connection and assign it. It will be
+        // processed by that thread later.
         rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
         if ( rc )
         {
@@ -888,8 +854,11 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         }
     }
 
-    DEBUG_PRINT( "Work item %d assigned to thread %d\n",
-                 BufferItem->idx, (*AssignedThread)->idx );
+    if ( *ProcessFurther )
+    {
+        DEBUG_PRINT( "Work item %d assigned to thread %d\n",
+                     BufferItem->idx, (*AssignedThread)->idx );
+    }
 
 ErrorExit:
     // Something here failed. Report the error. The worker thread will
@@ -903,6 +872,7 @@ ErrorExit:
 
     if ( ! *ProcessFurther )
     {
+        // may have already been released in process_buffer_item()
         release_buffer_item( BufferItem );
     }
 
@@ -1003,6 +973,13 @@ init_state( void )
     }
 
     //
+    // Init polling subsystem, which spawns a dedicated thread
+    //
+    rc = xe_pollset_init();
+    if ( rc ) goto ErrorExit;
+        
+    
+    //
     // Init the threads' state, so that posting to the semaphores
     // works as soon as the threads start up.
     //
@@ -1022,8 +999,6 @@ init_state( void )
         }
 
         sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
-        //sem_init( &curr->awaiting_work_sem, 0, 1 );
-        //sem_init( &curr->awaiting_work_sem, 0, 0 );
     }
 
     //
@@ -1085,6 +1060,8 @@ fini_state( void )
     DEBUG_PRINT( "Shutting down all threads\n" );
     
     g_state.shutdown_pending = true;
+
+    xe_pollset_fini();
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
@@ -1223,85 +1200,6 @@ ErrorExit:
 
 } // message_dispatcher
 
-
-#if 0 // test code
-
-//
-// Simulates messages to the threads while we're testing this system
-//
-static int
-test_message_dispatcher( void )
-{
-    int rc = 0;
-    int ct = 0;
-    bool more_processing = false;
-    
-    while( ct++ < 3 )
-    {
-        thread_item_t * assigned_thread = NULL;
-        buffer_item_t * myitem = NULL;
-        
-        // Identify the next available buffer item
-        rc = reserve_available_buffer_item( &myitem );
-        if ( rc )
-        {
-            // Failed to find an available buffer item. We should
-            // yield this thread and try again.
-            MYASSERT( !"No buffer items are available" );
-            xe_yield();
-            continue;
-        }
-
-        //
-        // We have a buffer item. Read the next command into its
-        // its region. Block until a command arrives.
-        //
-
-        // Simulated block.
-        memset( myitem->region, 'a' + ct, ONE_REQUEST_REGION_SIZE );
-        
-        // Assign the buffer to a thread
-        rc = assign_work_to_thread( myitem, &assigned_thread, &more_processing );
-        if ( rc )
-        {
-            MYASSERT( !"No thread is available to work on this request." );
-            goto ErrorExit;
-        }
-
-        if ( more_processing )
-        {
-            // Tell the thread to process the buffer
-            DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
-            sem_post( &assigned_thread->awaiting_work_sem );
-        }
-    } // while
-
-    
-ErrorExit:
-    return rc;
-} // test_message_dispatcher
-
-static int
-test_message_dispatcher2( void )
-{
-    int rc = 0;
-    int ct = 0;
-    char buf[100];
-
-    while( ct++ < 10 )
-    {
-        // Read just sends an event -
-        ssize_t size = read( g_state.input_fd, buf, sizeof(buf) );
-
-        DEBUG_PRINT( "Read %ld bytes from input_fd. Waiting a bit\n", size );
-        sleep(5);
-        
-    } // while
-
-    return rc;
-} // test_message_dispatcher2
-
-#endif // 0
 
 int main(void)
 {

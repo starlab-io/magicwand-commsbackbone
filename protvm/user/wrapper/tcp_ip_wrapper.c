@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -41,7 +42,7 @@
 #include <translate.h>
 #include <user_common.h>
 
-#include "epoll_wrapper.h"
+//#include "epoll_wrapper.h"
 
 #include <mwcomms-ioctls.h>
 
@@ -190,8 +191,11 @@ mwcomms_write_request( IN  int         MwFd,
                  Request->base.type, MwFd );
 
     // Will we wait for the response?
-    Request->base.pvm_blocked_on_response = (mt_bool_t) ReadResponse;
-
+    if ( ReadResponse )
+    {
+        MT_REQUEST_SET_CALLER_WAITS( Request );
+    }
+    
     // Write the request directly to the MW socket
     do
     {
@@ -494,12 +498,15 @@ recvfrom( int    SockFd,
         request.base.type = MtRequestSocketRecvFrom;
     }
 
+    DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
     rc = mwcomms_write_request( SockFd, true, &request, &response );
     if ( rc )
     {
         goto ErrorExit;
     }
-    
+
+    DEBUG_PRINT( "Receiving done, status %d, size %d\n",
+                 response.base.status, response.base.size );
     // Failure: rc = -1, errno set
     if ( response.base.status < 0 )
     {
@@ -928,7 +935,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     pollset.fd = Fd;
     pollset.add = (bool) ( ((unsigned long)arg) & O_NONBLOCK );
 
-    rc = ioctl( devfd, MW_IOCTL_MOD_POLLSET, &pollset );
+    rc = ioctl( devfd, MW_IOCTL_SYNC_FLAGS, &pollset );
     if ( rc )
     {
         DEBUG_PRINT( "ioctl() failed: %d\n", rc );

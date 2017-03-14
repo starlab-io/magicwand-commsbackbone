@@ -463,7 +463,7 @@ mwbase_dev_ioctl( struct file  * File,
         
         break;
     }
-
+/*
     case MW_IOCTL_MOD_POLLSET:
     {
         mwsocket_modify_pollset_args_t pollset;
@@ -478,6 +478,7 @@ mwbase_dev_ioctl( struct file  * File,
         rc = mwsocket_modify_pollset( pollset.fd, pollset.add );
         goto ErrorExit;
     }
+    */
     default:
         pr_err( "Received invalid IOCTL code\n" );
         rc = -EINVAL;

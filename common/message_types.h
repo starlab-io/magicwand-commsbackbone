@@ -69,7 +69,8 @@ typedef uint64_t mt_id_t;
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
 #define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
-#define _MT_TYPE_MASK_NOBLOCK     0x0800 
+#define _MT_TYPE_MASK_NOBLOCK     0x0800
+//#define _MT_TYPE_MASK_INS_MAIN    0x1000 // INS should process in main thread
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
@@ -80,10 +81,12 @@ typedef uint64_t mt_id_t;
 // The call should not block on PVM side, regardless of file's flags
 #define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
 
+// The INS should process this request in its main thread - there is no thread assignment
+
 typedef enum
 {
     MtRequestInvalid        = MT_REQUEST( 0x00 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 |  _MT_TYPE_MASK_ALLOC_FD ),
     MtRequestSocketConnect  = MT_REQUEST( 0x02 | _MT_TYPE_MASK_BLOCK ),
     MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD | _MT_TYPE_MASK_BLOCK ),
     MtRequestSocketRead     = MT_REQUEST( 0x04 ),
@@ -97,18 +100,9 @@ typedef enum
     MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_BLOCK ),
     MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_BLOCK ),
 
-    // XXXX: add these, to be handled on both sides by dedicated threads
-    MtRequestPollsetAdd     = MT_REQUEST( 0x30 ),
-    MtRequestPollsetRemove  = MT_REQUEST( 0x31 ),
-    MtRequestPollsetQuery   = MT_REQUEST( 0x32 | _MT_TYPE_MASK_BLOCK ),
-    
-
-    // XXXX: get rid of these ---------------------------------------------
-    MtRequestSocketFcntl    = MT_REQUEST( 0x0d ),
-
-    MtRequestPollCreate     = MT_REQUEST( 0x20 | _MT_TYPE_MASK_ALLOC_FD ),
-    MtRequestPollWait       = MT_REQUEST( 0x21 | _MT_TYPE_MASK_BLOCK),
-    MtRequestPollClose      = MT_REQUEST( 0x22 | _MT_TYPE_MASK_DEALLOC_FD ),
+    // XXXX: add these, to be handled on both sides by dedicated threads?????????
+    MtRequestPollsetMod     = MT_REQUEST( 0x30   ),
+    MtRequestPollsetQuery   = MT_REQUEST( 0x31 ),
 } mt_request_type_t;
 
 
@@ -127,17 +121,9 @@ typedef enum
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
     MtResponseSocketGetName     = MT_RESPONSE( MtRequestSocketGetName  ),
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
-    MtResponseSocketFcntl       = MT_RESPONSE( MtRequestSocketFcntl    ),
 
-    MtResponsePollsetAdd        = MT_RESPONSE( MtRequestPollsetAdd     ),
-    MtResponsePollsetRemove     = MT_RESPONSE( MtRequestPollsetRemove  ),
+    MtResponsePollsetMod        = MT_RESPONSE( MtRequestPollsetMod     ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
-
-    //////////////////////////////////////// REMOVE
-    MtResponsePollCreate        = MT_RESPONSE( MtRequestPollCreate     ),
-    MtResponsePollWait          = MT_RESPONSE( MtRequestPollWait       ),
-    MtResponsePollClose         = MT_RESPONSE( MtRequestPollClose      ),
-
 } mt_response_id_t;
 
 typedef uint32_t mt_addrlen_t;
@@ -234,6 +220,11 @@ typedef struct _mt_sockaddr_in
 
 //#define _MT_FLAGS_ASSOCIATED_IO              0x01
 
+#define MT_REQUEST_CALLER_WAITS(_req)                                   \
+    ( (_req)->base.flags & _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE )
+
+#define MT_REQUEST_SET_CALLER_WAITS(_req)                               \
+    ( (_req)->base.flags |= _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE )
 
 //
 // The preamble for every request.
@@ -260,8 +251,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
     // aio_read()/aio_write(). XXXX: change to flags.
-    mt_bool_t    pvm_blocked_on_response;
+    uint32_t     flags;
 } mt_request_base_t;
+
 
 //
 // The preamble for every response
@@ -362,7 +354,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 {
     mt_request_base_t base;
-
+    uint32_t          flags; // flags, from accept4()
 } mt_request_socket_accept_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
@@ -503,80 +495,67 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 
 
 //
-// fcntl
+// Poll sets: only these (Linux-based) values will be in shared memory
 //
+#define MW_POLLIN     0x001
+#define MW_POLLPRI    0x002
+#define MW_POLLOUT    0x004
 
-#define MT_SOCK_FCNTL_FLAG_CT 1
-#define MT_SOCK_FCNTL_IDX_NONBLOCK 0
+#define MW_POLLRDNORM 0x040
+#define MW_POLLRDBAND 0x080
+#define MW_POLLWRNORM 0x100
+#define MW_POLLWRBAND 0x200
 
-// Potentially required: O_NDELAY, FNDELAY (See apr sockopt.c)
-typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_fcntl
+#define MW_POLLERR    0x008
+#define MW_POLLHUP    0x010
+#define MW_POLLNVAL   0x020
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_mod
 {
     mt_request_base_t base;
-    uint8_t           modify; // we're using F_SETFL
-    uint8_t           flags[MT_SOCK_FCNTL_FLAG_CT];
-} mt_request_socket_fcntl_t;
+    uint8_t           blocking;
+} mt_request_pollset_mod_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_fcntl
+typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_mod
 {
     mt_response_base_t base;
-    uint8_t           flags[MT_SOCK_FCNTL_FLAG_CT];
-} mt_response_socket_fcntl_t;
+} mt_response_pollset_mod_t;
 
-#define MT_REQUEST_SOCKET_FCNTL_SIZE sizeof(mt_request_socket_fcntl_t)
-#define MT_RESPONSE_SOCKET_FCNTL_SIZE sizeof(mt_response_socket_fcntl_t)
+#define MT_REQUEST_POLLSET_MOD_SIZE sizeof(mt_request_pollset_mod_t)
+#define MT_RESPONSE_POLLSET_MOD_SIZE sizeof(mt_response_pollset_mod_t)
 
 
-//
-// Poll: call epoll() on a set of socket MW FDs.
-//
-typedef struct MT_STRUCT_ATTRIBS _mt_request_poll_create
+typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_query
 {
-    mt_request_base_t   base;
-} mt_request_poll_create_t;
+    mt_request_base_t base;
+} mt_request_pollset_query_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_response_poll_create
-{
-    mt_response_base_t   base;
-} mt_response_poll_create_t;
-
-#define MT_REQUEST_POLL_CREATE_SIZE sizeof(mt_request_base_t)
-#define MT_RESPONSE_POLL_CREATE_SIZE sizeof(mt_response_base_t)
-
-#define mt_request_poll_close_t  mt_request_poll_create_t
-#define mt_response_poll_close_t mt_response_poll_create_t
-#define MT_REQUEST_POLL_CLOSE_SIZE  MT_REQUEST_POLL_CREATE_SIZE
-#define MT_RESPONSE_POLL_CLOSE_SIZE MT_RESPONSE_POLL_CREATE_SIZE
+#define MT_REQUEST_POLLSET_QUERY_SIZE MT_REQUEST_BASE_SIZE
 
 
-typedef struct MT_STRUCT_ATTRIBS _mt_poll_info
+typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_query_item
 {
     mw_socket_fd_t sockfd;
-    uint32_t       events; // in and out
-} mt_poll_info_t;
+    uint32_t       events; // MW_POLL*
+} mt_response_pollset_query_item_t;
 
-#define MT_POLL_INFO_SIZE sizeof(mt_poll_info_t)
+#define MT_RESPONSE_POLLSET_QUERY_ITEM_SIZE \
+    sizeof( mt_response_pollset_query_item_t )
 
-typedef struct MT_STRUCT_ATTRIBS _mt_request_poll_wait
+#define MT_POLLSET_QUERY_MAX_ITEMS \
+    (MESSAGE_TYPE_MAX_PAYLOAD_LEN / MT_RESPONSE_POLLSET_QUERY_ITEM_SIZE )
+
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_query
 {
-    mt_request_base_t   base;
-    uint32_t            count;
-    uint32_t            timeout;
-    mt_poll_info_t      pollinfo[ MAX_POLL_FD_COUNT ];
-} mt_request_poll_wait_t;
+    mt_response_base_t base;
+    uint32_t           count;
+    mt_response_pollset_query_item_t items[1];
+} mt_response_pollset_query_t;
 
-typedef struct MT_STRUCT_ATTRIBS _mt_response_poll_wait
-{
-    mt_response_base_t  base;
-    uint32_t            count;
-    mt_poll_info_t      pollinfo[ MAX_POLL_FD_COUNT ];
-} mt_response_poll_wait_t;
-
-#define MT_REQUEST_POLL_WAIT_SIZE                               \
-    ( sizeof(mt_request_base_t) + 2 * sizeof(uint32_t) )
-
-#define MT_RESPONSE_POLL_WAIT_SIZE                      \
-    ( sizeof(mt_response_base_t) + sizeof(uint32_t) )
+// Base size: size of items needed too
+#define MT_RESPONSE_POLLSET_QUERY_SIZE                  \
+    ( sizeof( mt_response_base_t) + sizeof(uint32_t) )
 
 
 //
@@ -596,11 +575,9 @@ typedef union _mt_request_generic
     mt_request_socket_recv_t    socket_recv;
     mt_request_socket_getname_t socket_getname;
     mt_request_socket_getpeer_t socket_getpeer;
-    mt_request_socket_fcntl_t   socket_fcntl;
 
-    mt_request_poll_create_t    poll_create;
-    mt_request_poll_close_t     poll_close;
-    mt_request_poll_wait_t      poll_wait;
+    mt_request_pollset_mod_t    pollset_mod;
+    mt_request_pollset_query_t  pollset_query;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -625,12 +602,9 @@ typedef union _mt_response_generic
     mt_response_socket_recvfrom_t   socket_recvfrom;
     mt_response_socket_getname_t    socket_getname;
     mt_response_socket_getpeer_t    socket_getpeer;
-    mt_response_socket_fcntl_t      socket_fcntl;
 
-    mt_response_poll_create_t    poll_create;
-    mt_response_poll_close_t     poll_close;
-    mt_response_poll_wait_t      poll_wait;
-
+    mt_response_pollset_mod_t       pollset_mod;
+    mt_response_pollset_query_t     pollset_query;
 } mt_response_generic_t;
 
 #define MT_RESPONSE_BASE_GET_TYPE(rqb) ((rqb)->type)

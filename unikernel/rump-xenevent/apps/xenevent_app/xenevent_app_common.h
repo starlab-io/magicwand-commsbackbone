@@ -33,10 +33,6 @@ typedef struct _xenevent_globals
     int        input_fd;
     int        output_fd;
 
-    //pthread_attr_t attr;
-
-    //struct sched_param schedparam;
-    
 } xenevent_globals_t;
 
 
@@ -50,6 +46,11 @@ int xe_get_mwerrno( int NativeErrno );
     ( (__err) > 0 ? -(mt_status_t)xe_get_mwerrno((__err)) : (mt_status_t)(-1) )
 
 #define XE_GET_NEG_ERRNO()   XE_GET_NEG_ERRNO_VAL( errno )
+
+// Given mwsocket, find its thread_item_t structure
+int
+get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
+                          OUT thread_item_t ** WorkerThread );
 
 
 #endif //xenevent_app_common_h

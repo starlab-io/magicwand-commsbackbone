@@ -29,6 +29,7 @@ extern uint16_t client_id;
 #define XE_RECEIVE_ALL 0
 
 
+/*
 //
 // @brief Sets or clears the indicated flag on the file descriptor.
 //
@@ -59,10 +60,9 @@ xe_net_set_fd_flag( IN int  NativeFd,
 
     return rc;
 }
+*/
 
-// XXXXXXXX verify that errno values match between Linux and NetBSD
-
-static void
+void
 xe_net_set_base_response( IN mt_request_generic_t   * Request,
                           IN size_t                   PayloadLen,
                           OUT mt_response_generic_t * Response )
@@ -665,184 +665,4 @@ xe_net_get_name( IN mt_request_socket_getname_t  * Request,
 ErrorExit:
     return rc;
 }
-
-
-int
-xe_net_socket_fcntl( IN  mt_request_socket_fcntl_t  * Request,
-                     OUT mt_response_socket_fcntl_t * Response,
-                     IN  thread_item_t              * WorkerThread )
-{
-    int rc = 0;
-    int flags = 0;
-
-    MYASSERT( NULL != Request );
-    MYASSERT( NULL != Response );
-    MYASSERT( NULL != WorkerThread );
-
-    DEBUG_PRINT( "%s O_NONBLOCK on FD %x\n",
-                 (Request->modify ? "Setting" : "Clearing"),
-                 Request->base.sockfd );
-
-    // F_GETFL
-    if ( !Request->modify )
-    {
-        flags = fcntl( WorkerThread->native_sock_fd, F_GETFL );
-
-        Response->base.status = 0;
-        Response->flags[ MT_SOCK_FCNTL_IDX_NONBLOCK ] = flags & O_NONBLOCK;
-    }
-    else
-    {
-        // F_SETFL: go over all supported flags, one at a time
-        rc = xe_net_set_fd_flag( WorkerThread->native_sock_fd,
-                                 O_NONBLOCK,
-                                 Request->flags[ MT_SOCK_FCNTL_IDX_NONBLOCK ] );
-        if ( rc < 0 )
-        {
-            Response->base.status = XE_GET_NEG_ERRNO();
-        }
-    }
-
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_FCNTL_SIZE,
-                              (mt_response_generic_t *)Response );
-
-//ErrorExit:
-    return rc;
-}
-
-
-// Create a pseudo-fd. The only resource we're reserving is a
-// thread. No network resources are used.
-int
-xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
-                    OUT mt_response_poll_create_t * Response,
-                    IN  thread_item_t             * WorkerThread )
-{
-    int rc = 0;
-    mw_socket_fd_t fd = 0;
-    
-    MYASSERT( NULL != Request );
-    MYASSERT( NULL != Response );
-    MYASSERT( NULL != WorkerThread );
-
-    fd = MW_EPOLL_CREATE_FD( client_id, WorkerThread->idx );
-
-    // Set up Response; clobbers base.sockfd
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_POLL_CREATE_SIZE,
-                              (mt_response_generic_t *)Response );
-
-    Response->base.status = 0;
-    Response->base.sockfd = fd;
-    WorkerThread->sock_fd = fd;
-    WorkerThread->native_sock_fd = MT_INVALID_FD;
-
-    DEBUG_PRINT ( "**** Thread %d <== epoll fd %x\n",
-                  WorkerThread->idx, fd );
-
-    return rc;
-}
-
-
-int
-xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
-                   OUT mt_response_poll_create_t * Response,
-                   IN  thread_item_t             * WorkerThread )
-{
-    Response->base.status = 0;
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_CLOSE_SIZE,
-                              (mt_response_generic_t *)Response );
-    return 0;
-}
-
-
-
-int
-xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
-                  OUT mt_response_poll_wait_t * Response,
-                  IN  thread_item_t           * WorkerThread )
-{
-    int rc = 0;
-    struct pollfd fds[ MAX_POLL_FD_COUNT ] = {0};
-    int fdcount = Request->count;
-    int native_fd = 0;
-
-    MYASSERT( NULL != Request );
-    MYASSERT( NULL != Response );
-    MYASSERT( NULL != WorkerThread );
-    MYASSERT( fdcount > 0 );
-
-    if ( Request->base.size
-         != (MT_REQUEST_POLL_WAIT_SIZE + fdcount * MT_POLL_INFO_SIZE) )
-    {
-        MYASSERT( !"The request's size is wrong" );
-        Response->base.status = -EINVAL;
-        fdcount = 0;
-        goto ErrorExit;
-    }
-
-    for ( int i = 0; i < fdcount; ++i )
-    {
-        // Get the native FD and flags from the request
-        mt_poll_info_t * pi = &Request->pollinfo[i];
-        mw_socket_fd_t mwfd = pi->sockfd;
-        int thridx = MW_SOCKET_GET_ID( mwfd );
-
-        if ( thridx >= MAX_THREAD_COUNT
-            || 0 == g_state.worker_threads[ thridx ].in_use )
-        {
-            Response->base.status = -EINVAL;
-            MYASSERT( !"Invalid FD passed in" );
-            goto ErrorExit;
-        }
-
-        // On native sockfds call fnctl to set O_NONBLOCK
-//        // after poll has returned mark file descriptor as blocking again
-        native_fd = g_state.worker_threads[ thridx ].native_sock_fd;
-
-//        (void) xe_net_set_fd_flag( native_fd, O_NONBLOCK, true );
-
-        fds[i].fd      = native_fd;
-        fds[i].events  = pi->events;
-        fds[i].revents = 0;
-
-        Response->pollinfo[i].sockfd = MT_INVALID_SOCKET_FD;
-    } // for
-
-    Response->count = fdcount; // Copy input count
-
-    Response->base.status = poll( fds, Request->count, Request->timeout );
-    DEBUG_PRINT( "poll() returned %ld\n", (long)Response->base.status );
-
-    if ( Response->base.status < 0 )
-    {
-        Response->base.status = XE_GET_NEG_ERRNO();
-        MYASSERT( !"poll" );
-        goto ErrorExit;
-    }
-
-    // Pass back all the elements given. Report all return events but
-    // only passing FDs.  Return all sockets to a blocking state
-    for ( int i = 0; i < fdcount; ++i )
-    {   
-        //(void) xe_net_set_fd_flag( native_fd, O_NONBLOCK, false );
-
-        if ( 0 != fds[i].revents )
-        {
-            Response->pollinfo[i].sockfd = Request->pollinfo[i].sockfd;
-        }
-        Response->pollinfo[i].events = fds[i].revents;
-    } // for
-    
-ErrorExit:
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_POLL_WAIT_SIZE
-                              + fdcount * MT_POLL_INFO_SIZE ,
-                              (mt_response_generic_t *)Response );
-
-    return rc;
-}
-
 

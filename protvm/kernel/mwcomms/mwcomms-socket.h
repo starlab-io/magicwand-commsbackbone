@@ -46,7 +46,7 @@ mwsocket_fini( void );
 
 
 int
-mwsocket_create( OUT mwsocket_t * SockFd,
+mwsocket_create( OUT mwsocket_t  * SockFd,
                   IN  int          Domain,
                   IN  int          Type,
                   IN  int          Protocol );
@@ -58,11 +58,5 @@ mw_xen_event_handler_cb_t mwsocket_event_cb;
 // @brief Returns whether the given file descriptor is backed by an MW socket.
 bool
 mwsocket_verify( const struct file * File );
-
-
-// @brief Modifies the pollset for the async notification thread
-int
-mwsocket_modify_pollset( IN int  MwFd,
-                         IN bool AddFd );
 
 #endif // mwcomms_socket_h
