@@ -99,12 +99,17 @@ uint16_t   client_id;
 
 #define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
     ( MtRequestSocketCreate == _mytype ||         \
-      MtRequestPollsetMod   == _mytype ||         \
+      MtRequestSocketAttrib == _mytype ||         \
       MtRequestPollsetQuery == _mytype )
 
 #define XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( _mytype )  \
-    ( MtRequestPollsetMod   == _mytype ||               \
-      MtRequestPollsetQuery == _mytype )
+    ( MtRequestPollsetQuery == _mytype )
+
+
+// These are the request types we don't want stomping on each other.
+#define REQUEST_REQUIRES_OPLOCK( _req )                 \
+    ( MtRequestSocketSend == (_req)->base.type ||       \
+      MtRequestSocketClose == (_req)->base.type )
 
 
 //
@@ -444,7 +449,9 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 static void
 release_buffer_item( buffer_item_t * BufferItem )
 {
-    int prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
+    int prev = 0;
+
+    prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
 
     if ( prev )
     {
@@ -543,6 +550,9 @@ release_worker_thread( thread_item_t * ThreadItem )
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
+    ThreadItem->sock_fd        = MT_INVALID_SOCKET_FD;
+    ThreadItem->native_sock_fd = MT_INVALID_SOCKET_FD;
+
     // N.B. The thread might have never been reserved    
     prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     if ( prev )
@@ -614,68 +624,64 @@ process_buffer_item( buffer_item_t * BufferItem )
     switch( request->base.type )
     {
     case MtRequestSocketCreate:
-        rc = xe_net_create_socket( (mt_request_socket_create_t *) request,
-                                   (mt_response_socket_create_t *) &response,
+        rc = xe_net_create_socket( &request->socket_create,
+                                   &response.socket_create,
                                    worker );
         break;
     case MtRequestSocketConnect:
-        rc = xe_net_connect_socket( (mt_request_socket_connect_t *) request,
-                                    (mt_response_socket_connect_t *) &response,
+        rc = xe_net_connect_socket( &request->socket_connect,
+                                    &response.socket_connect,
                                     worker );
         break;
     case MtRequestSocketClose:
-        rc = xe_net_close_socket( (mt_request_socket_close_t *) request,
-                                  (mt_response_socket_close_t *) &response,
+        rc = xe_net_close_socket( &request->socket_close,
+                                  &response.socket_close,
                                   worker );
         break;
-//    case MtRequestSocketRead:
-//        rc = xe_net_read_socket( (mt_request_socket_read_t *) request,
-//                                 (mt_response_socket_read_t *) &response,
-//                                 worker );
-//        break;
     case MtRequestSocketSend:
-        rc = xe_net_send_socket( (mt_request_socket_send_t *)  request,
-                                  (mt_response_socket_send_t *) &response,
-                                  worker );
+        rc = xe_net_send_socket( &request->socket_send,
+                                 &response.socket_send,
+                                 worker );
         break;
     case MtRequestSocketBind: 
-        rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
-                                 (mt_response_socket_bind_t *) &response,
+        rc = xe_net_bind_socket( &request->socket_bind,
+                                 &response.socket_bind,
                                  worker );
         break;
     case MtRequestSocketListen:
-        rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
-                                   (mt_response_socket_listen_t *) &response,
+        rc = xe_net_listen_socket( &request->socket_listen,
+                                   &response.socket_listen,
                                    worker );
         break;
     case MtRequestSocketAccept:
-        rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
-                                   (mt_response_socket_accept_t *) &response,
+        rc = xe_net_accept_socket( &request->socket_accept,
+                                   &response.socket_accept,
                                    worker );
         break;
     case MtRequestSocketRecv:
-        rc = xe_net_recv_socket( (mt_request_socket_recv_t*) request,
-                                 (mt_response_socket_recv_t*) &response,
-                                  worker );
+        rc = xe_net_recv_socket( &request->socket_recv,
+                                 &response.socket_recv,
+                                 worker );
         break;
     case MtRequestSocketRecvFrom:
-        rc = xe_net_recvfrom_socket( ( mt_request_socket_recv_t*) request,
-                                     ( mt_response_socket_recvfrom_t* ) &response,
+        rc = xe_net_recvfrom_socket( &request->socket_recv,
+                                     &response.socket_recvfrom,
                                      worker );
         break;
     case MtRequestSocketGetName:
     case MtRequestSocketGetPeer:
-        rc = xe_net_get_name( (mt_request_socket_getname_t *)  request,
-                              (mt_response_socket_getname_t *) &response,
+        rc = xe_net_get_name( &request->socket_getname,
+                              &response.socket_getname,
                               worker );
         break;
-    case MtRequestPollsetMod:
-        rc = xe_pollset_mod( (mt_request_pollset_mod_t *)  request,
-                             (mt_response_pollset_mod_t *) &response );
+    case MtRequestSocketAttrib:
+        rc = xe_net_sock_attrib( &request->socket_attrib,
+                                 &response.socket_attrib,
+                                 worker );
         break;
     case MtRequestPollsetQuery:
-        rc = xe_pollset_query( (mt_request_pollset_query_t *)  request,
-                               (mt_response_pollset_query_t *) &response );
+        rc = xe_pollset_query( &request->pollset_query,
+                               &response.pollset_query );
         break;
 
     case MtRequestInvalid:
@@ -687,13 +693,19 @@ process_buffer_item( buffer_item_t * BufferItem )
         break;
     }
 
+    if ( worker && worker->oplock_acquired )
+    {
+        worker->oplock_acquired = false;
+        sem_post( &worker->oplock );
+    }
+
     // No matter the results of the network operation, we sent the
     // response back over the device. Write the entire response.
     // XXXXXXXXXX Optimize data written - we don't need to write all of it!
     
     MYASSERT( 0 == rc );
     MYASSERT( MT_IS_RESPONSE( &response ) );
-    
+
     //clock_gettime(CLOCK_REALTIME, &t1);
 
     // In accept's success case, assign the new socket to an available thread
@@ -744,9 +756,10 @@ process_buffer_item( buffer_item_t * BufferItem )
     release_buffer_item( BufferItem );
 
     // Release the worker thread if: (1) we are releasing an FD, or
-    // (2) we were allocating an FD and that failed.
+    // (2) we were allocating an FD and that failed (accept is handled
+    // above).
     if ( MT_DEALLOCATES_FD( reqtype )
-         || (MT_ALLOCATES_FD( reqtype ) && response.base.status < 0 ) )
+         || (MtRequestSocketCreate == reqtype && response.base.status < 0 ) )
     {
         DEBUG_PRINT( "Releasing thread due to request type or response: "
                      "ID %lx type %x status %d\n",
@@ -781,7 +794,8 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     int rc = 0;
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
     mt_request_type_t request_type = MT_REQUEST_GET_TYPE( request );
-
+    bool process_now = false;
+    
     // Typically the caller needs to do more work on this buffer. When
     // this is false we release the buffer item.
     *ProcessFurther = true;
@@ -789,14 +803,102 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
+
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
+
+    switch( request_type )
+    {
+        // Processed in current thread without a worker
+    case MtRequestPollsetQuery:
+        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        *AssignedThread = NULL;
+        process_now = true;
+        break;
+
+        // Processed in current thread with existing worker
+    case MtRequestSocketClose:
+    case MtRequestSocketBind:
+    case MtRequestSocketListen:
+    case MtRequestSocketAttrib:
+        MYASSERT( MT_INVALID_SOCKET_FD != request->base.sockfd );
+        process_now = true;
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        if ( rc ) goto ErrorExit;
+        break;
+
+        // Processed in current thread, acquire a new worker
+    case MtRequestSocketCreate:
+        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        process_now = true;
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
+        if ( rc ) goto ErrorExit;
+        break;
+
+        // Processed in worker thread (already assigned)
+    case MtRequestSocketConnect:
+    case MtRequestSocketSend:
+    case MtRequestSocketAccept:
+    case MtRequestSocketRecv:
+    case MtRequestSocketRecvFrom:
+    case MtRequestSocketGetName:
+    case MtRequestSocketGetPeer:
+        MYASSERT( MT_INVALID_SOCKET_FD != request->base.sockfd );
+        process_now = false;
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        if ( rc ) goto ErrorExit;
+        break;
+
+    case MtRequestInvalid:
+    default:
+        MYASSERT( !"Invalid request type" );
+        rc = EINVAL;
+        // Send back an internal error
+        goto ErrorExit;
+        break;
+    }
+
+    BufferItem->assigned_thread = *AssignedThread;
+
+    // Acquire oplock in main thread now. It is released by
+    // process_buffer_item().
+    if ( REQUEST_REQUIRES_OPLOCK( request ) )
+    {
+        MYASSERT( *AssignedThread );
+        sem_wait( &(*AssignedThread)->oplock );
+        (*AssignedThread)->oplock_acquired = true;
+    }
+
+    if ( process_now )
+    {
+        *ProcessFurther = false;
+        rc = process_buffer_item( BufferItem );
+    }
+    else
+    {
+        *ProcessFurther = true;
+        rc = workqueue_enqueue( (*AssignedThread)->work_queue, BufferItem->idx );
+        if ( rc )
+        {
+            if ( (*AssignedThread)->oplock_acquired )
+            {
+                (*AssignedThread)->oplock_acquired = false;
+                sem_post( &(*AssignedThread)->oplock );
+            }
+        }
+    }
+    
+/*    
+    if ( MtRequestSocketAttrib == request_type )
+    {
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        
     if ( XE_PROCESS_IN_MAIN_THREAD( request_type ) )
     {
         if ( !XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( request_type ) )
         {
-            // Request requires a new thread, which we procure by getting
+            // Request requires a new thread, which we procure by
             // requesting the thread for an invalid socket. The thread and
             // socket are bound for the lifetime of the socket.
 
@@ -853,7 +955,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
             goto ErrorExit;
         }
     }
-
+*/
     if ( *ProcessFurther )
     {
         DEBUG_PRINT( "Work item %d assigned to thread %d\n",
@@ -861,6 +963,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     }
 
 ErrorExit:
+
     // Something here failed. Report the error. The worker thread will
     // not release the buffer item, so do it here.
     if ( rc )
@@ -999,6 +1102,8 @@ init_state( void )
         }
 
         sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
+        sem_init( &curr->oplock, 0, 1 );
+        curr->oplock_acquired = false;
     }
 
     //

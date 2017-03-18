@@ -16,6 +16,10 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                       OUT mt_response_socket_create_t * Response,
                       OUT thread_item_t               * WorkerThread );
 
+int
+xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
+                    OUT mt_response_socket_attrib_t * Response,
+                    IN  thread_item_t               * WorkerThread );
 
 int
 xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,

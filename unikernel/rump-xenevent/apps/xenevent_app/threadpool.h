@@ -36,6 +36,15 @@ typedef struct _thread_item
     // can wait for work to arrive.
     //
     sem_t awaiting_work_sem;
+
+    //
+    // Synchronizes operations on the thread item during certain
+    // operations, e.g. prevents a close() to occur while a send() is
+    // in progress.
+    //
+    sem_t oplock;
+    bool  oplock_acquired;
+
     
     //
     // A fixed-size queue of indices into the buffer item array. The

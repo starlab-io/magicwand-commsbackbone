@@ -49,7 +49,6 @@
 #define DEV_FILE "/dev/mwcomms"
 
 static int devfd = -1; // FD to MW device
-static int dummy_socket = -1; // socket for get/setsockopt
 
 static void * g_dlh_libc = NULL;
 
@@ -750,6 +749,54 @@ ErrorExit:
 }
 
 
+static int
+mwcomms_set_sockattr( IN int Level,
+                      IN int OptName,
+                      INOUT mwsocket_attrib_t * Attribs )
+{
+    int rc = 0;
+
+    switch( Level )
+    {
+    case SOL_SOCKET:
+        switch( OptName )
+        {
+        case SO_REUSEADDR:
+            Attribs->attrib = MtSockAttribReuseaddr;
+            break;
+        case SO_KEEPALIVE:
+            Attribs->attrib = MtSockAttribKeepalive;
+            break;
+        default:
+            DEBUG_PRINT( "Failing on unsupported SOL_SOCKET option %d\n", OptName );
+            rc = EINVAL;
+            break;
+        }
+        break;
+    case SOL_TCP:
+        switch( OptName )
+        {
+        case TCP_DEFER_ACCEPT:
+            // Linux-only option.
+            Attribs->attrib = MtSockAttribDeferAccept;
+            break;
+        case TCP_NODELAY:
+            Attribs->attrib = MtSockAttribNodelay;
+            break;
+        default:
+            DEBUG_PRINT( "Failing on unsupported SOL_TCP option %d\n", OptName );
+            rc = EINVAL;
+            break;
+        }
+        break;
+    default:
+        MYASSERT( !"Unrecognized level for setsockopt\n" );
+    }
+
+    return rc;
+}
+
+
 int
 getsockopt( int Fd,
             int Level,
@@ -757,22 +804,48 @@ getsockopt( int Fd,
             void * OptVal,
             socklen_t  *OptLen )
 {
-    int targetFd = 0;
-    
+    int rc = 0;
+    int err = 0;
+    mwsocket_attrib_t attribs = {0};
+
     DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p )\n",
                  Fd, Level, OptName, OptVal, OptLen );
 
-    // Never call getsockopt on an mw_sock
-    if ( mwcomms_is_mwsocket( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
-        targetFd = dummy_socket;
+        rc = libc_getsockopt( Fd, Level, OptName, OptVal, OptLen );
+        err = errno;
+        goto ErrorExit;
     }
-    else
+
+    rc = mwcomms_set_sockattr( Level, OptName, &attribs );
+    if ( rc )
     {
-        targetFd = Fd;
+        err = rc;
+        rc = -1;
+        goto ErrorExit;
     }
     
-    return libc_getsockopt( targetFd, Level, OptName, OptVal, OptLen );
+    attribs.modify = false;
+
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attribs );
+    if ( rc )
+    {
+        err = errno;
+        DEBUG_PRINT( "ioctl() failed: %d\n", rc );
+        goto ErrorExit;
+    }
+
+    if ( OptLen > 0 )
+    {
+        *(uint32_t *) OptVal = attribs.value;
+    }
+
+ErrorExit:
+    DEBUG_PRINT( "getsockopt( 0x%x, %d, %d, %p, %p ) => %d\n",
+                 Fd, Level, OptName, OptVal, OptLen, rc );
+    errno = err;
+    return rc;
 }
 
 
@@ -783,25 +856,46 @@ setsockopt( int Fd,
             const void * OptVal,
             socklen_t OptLen )
 {
-    int targetFd = 0;
-
-    // XXXX: this drops all socket options on MW sockets, including
-    // TCP_DEFER_ACCEPT
+    int rc = 0;
+    mwsocket_attrib_t attrib = {0};
+    int err = 0;
 
     DEBUG_PRINT( "setsockopt( 0x%x, %d, %d, %p=%x, %d )\n",
                  Fd, Level, OptName, OptVal, *(uint32_t *)OptVal, OptLen );
 
-    // Never call getsockopt on an mw_sock
-    if ( mwcomms_is_mwsocket( Fd ) )
+    if ( !mwcomms_is_mwsocket( Fd ) )
     {
-        targetFd = dummy_socket;
+        rc = libc_setsockopt( Fd, Level, OptName, OptVal, OptLen );
+        err = errno;
+        goto ErrorExit;
     }
-    else
+
+    rc = mwcomms_set_sockattr( Level, OptName, &attrib );
+    if ( rc )
     {
-        targetFd = Fd;
+        err = rc;
+        rc = -1;
+        goto ErrorExit;
     }
     
-    return libc_setsockopt( targetFd, Level, OptName, OptVal, OptLen );
+    attrib.modify = true;
+    if ( OptLen > 0 )
+    {
+        attrib.value = *(uint32_t *) OptVal;
+    }
+
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
+    if ( rc )
+    {
+        err = errno;
+        DEBUG_PRINT( "ioctl() failed: %d\n", rc );
+    }
+
+ErrorExit:
+    DEBUG_PRINT( "setsockopt( 0x%x, %d, %d, %p=%x, %d ) => %d\n",
+                 Fd, Level, OptName, OptVal, *(uint32_t *)OptVal, OptLen, rc );
+    errno = err;
+    return rc;
 }
 
 
@@ -908,8 +1002,10 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     int rc = 0;
     va_list ap;
     void * arg = NULL;
-
-    mwsocket_modify_pollset_args_t pollset = {0};
+    int err = 0;
+    mwsocket_attrib_t attrib = {0};
+    int oldflags = 0;
+    int newflags = 0;
 
     va_start( ap, Cmd );
     arg = va_arg( ap, void * );
@@ -918,40 +1014,64 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     DEBUG_PRINT( "fcntl( %x, %d, %p )\n",
                  Fd, Cmd, arg );
 
-    rc = libc_fcntl( Fd, Cmd, arg );
-    if ( rc < 0 )
+    // We only handle F_SETFL. Anything else is only passed directly
+    // to VFS.
+    if ( !mwcomms_is_mwsocket( Fd )   // This is not an mwsocket, or
+         || Cmd != F_SETFL          ) // This is not a F_SETFL command 
     {
-        DEBUG_PRINT( "fcntl() failed: %d\n", rc );
-        goto ErrorExit;
-    }
-    
-    if ( !mwcomms_is_mwsocket( Fd )
-        || F_SETFL != Cmd )
-    {
+        rc = libc_fcntl( Fd, Cmd, arg );
+        err = errno;
         goto ErrorExit;
     }
 
-    // Handle MW socket: update pollset only
-    pollset.fd = Fd;
-    pollset.add = (bool) ( ((unsigned long)arg) & O_NONBLOCK );
+    //
+    // This is a F_SETFL on an mwsocket:
+    // (1) get the old flags, (2) set the new ones, (3) inform
+    // mwsocket of new value
+    //
 
-    rc = ioctl( devfd, MW_IOCTL_SYNC_FLAGS, &pollset );
+    oldflags = libc_fcntl( Fd, F_GETFL );
+    newflags = (int) (unsigned long) arg;
+
+    // Set the new flags
+    rc = libc_fcntl( Fd, F_SETFL, newflags );
+    if ( rc )
+    {
+        err = errno;
+        MYASSERT( !"fcntl()" );
+        goto ErrorExit;
+    }
+
+    // if the change doesn't involve O_NONBLOCK, we don't care
+    if ( (oldflags & O_NONBLOCK) == (newflags & O_NONBLOCK) )
+    {
+        goto ErrorExit;
+    }
+        
+    attrib.modify = true;
+    attrib.attrib = MtSockAttribNonblock;
+    attrib.value  = (uint32_t) (bool) ( newflags & O_NONBLOCK );
+
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
     if ( rc )
     {
         DEBUG_PRINT( "ioctl() failed: %d\n", rc );
         goto ErrorExit;
     }
+    
 ErrorExit:
     DEBUG_PRINT( "fcntl( %x, %d, %p ) ==> %x\n",
                  Fd, Cmd, arg, rc );
+    if ( rc )
+    {
+        errno = err;
+    }
     return rc;
 }
 
 void __attribute__((constructor))
 init_wrapper( void )
 {
-    int rc = 0;
-
     DEBUG_PRINT("Intercept module loaded\n");
 
 #ifdef NODEVICE
@@ -996,16 +1116,10 @@ init_wrapper( void )
 
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
 
+#if 0
+    int rc = 0;
+        
     DEBUG_PRINT( "Creating dummy socket\n" );
-    dummy_socket = libc_socket( AF_INET, SOCK_STREAM, 0 );
-    if ( dummy_socket < 0 )
-    {
-        perror("socket");
-        exit(1);
-    }
-    DEBUG_PRINT( "Got dummy socket FD %d\n", dummy_socket );
-
-    //mw_epoll_init();
 
     // TEST TEST
     mwsocket_create_args_t create = {
@@ -1022,17 +1136,23 @@ init_wrapper( void )
     }
 
     DEBUG_PRINT( "Got socket FD %d\n", create.outfd );
+
+    int val = 1;
+    rc = setsockopt( create.outfd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val) );
+    MYASSERT( 0 == rc );
+
+    rc = fcntl( create.outfd, F_SETFL, O_NONBLOCK );
+    MYASSERT( 0 == rc );
+    
     close( create.outfd );
+    exit(1);
+#endif 
 }
 
 
 void __attribute__((destructor))
 fini_wrapper( void )
 {
-    if ( dummy_socket > 0 )
-    {
-        libc_close( dummy_socket );
-    }
     
     if ( g_dlh_libc )
     {

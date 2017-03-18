@@ -2,13 +2,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
+
 #include <netinet/in.h>
 #include <netdb.h> 
 #include <errno.h>
-#include <netinet/in.h>
+
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
+//#include <sys/tcp.h>
+#include <netinet/tcp.h>
 
 #include <poll.h>
 #include <fcntl.h>
@@ -134,6 +139,106 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     return 0;
 }
 
+
+int
+xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
+                    OUT mt_response_socket_attrib_t * Response,
+                    IN  thread_item_t               * WorkerThread )
+{
+    int flags = 0;
+    int rc    = 0;
+    int level = 0;
+    int name  = 0;
+    int err   = 0;
+    
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+    MYASSERT( 1 == WorkerThread->in_use );
+    MYASSERT( WorkerThread->idx >= 0 );
+
+    if ( MtSockAttribNonblock == Request->attrib )
+    {
+        flags = fcntl( WorkerThread->native_sock_fd, F_GETFL );
+        if ( Request->modify )
+        {
+            if ( Request->value )
+            {
+                flags |= O_NONBLOCK;
+            }
+            else
+            {
+                flags &= ~O_NONBLOCK;
+            }
+            rc = fcntl( WorkerThread->native_sock_fd, F_SETFL, flags );
+            err = errno;
+            MYASSERT( 0 == rc );
+        }
+        else
+        {
+            Response->outval = (uint32_t) (flags & O_NONBLOCK);
+        }
+        goto ErrorExit;
+    }
+
+    switch( Request->attrib )
+    {
+    case MtSockAttribReuseaddr:
+        level = SOL_SOCKET;
+        name = SO_REUSEADDR;
+        break;
+    case MtSockAttribKeepalive:
+        level = SOL_SOCKET;
+        name = SO_KEEPALIVE;
+        break;
+    case MtSockAttribNodelay:
+        level = IPPROTO_TCP; //SOL_TCP;
+        name  = TCP_NODELAY;
+    case MtSockAttribDeferAccept:
+        //level = SOL_TCP;
+        // This option is not supported on Rump. We'll drop it.
+        rc = 0;
+        goto ErrorExit;
+    default:
+        MYASSERT( !"Unrecognized attribute given" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
+                  WorkerThread->idx,
+                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  level, name, Request->value );
+
+    socklen_t len = sizeof(Request->value);
+    if ( Request->modify )
+    {
+        rc = setsockopt( WorkerThread->native_sock_fd,
+                         level, name,
+                         &Request->value, len );
+    }
+    else
+    {
+        rc = getsockopt( WorkerThread->native_sock_fd,
+                         level, name,
+                         &Request->value, &len );
+    }
+
+    if ( rc )
+    {
+        err = errno;
+        MYASSERT( !"getsockopt/setsockopt" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    xe_net_set_base_response( (mt_request_generic_t *)  Request,
+                              MT_RESPONSE_SOCKET_ATTRIB_SIZE,
+                              (mt_response_generic_t *) Response );
+    Response->base.status = rc ? XE_GET_NEG_ERRNO_VAL( err ) : 0;
+
+    return 0;
+}
 
 int
 xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
@@ -299,7 +404,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     // HACK HACK HACK
 #endif
 
-#if 1
+#if 0
     uint32_t val = 1;
     int rc = 0;
     rc = setsockopt( WorkerThread->native_sock_fd,
@@ -350,6 +455,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         Response->base.sockfd = -1;
+        // This happens frequently in non-blocking IO
         //MYASSERT( !"accept" );
     }
     else
@@ -471,7 +577,6 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
         DEBUG_PRINT( "recv() got 0x%x bytes, status=%d\n",
                      (int)rcv, Response->base.status );
 
-        // rcv >= 0
         totRecv += rcv;
 
         if ( !XE_RECEIVE_ALL || 0 == rcv )

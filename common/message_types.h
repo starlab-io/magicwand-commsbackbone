@@ -66,6 +66,7 @@ typedef uint64_t mt_id_t;
 // s = side (0 = request, 1 = response), f = flags, t = type
 //
 
+// XXXX: reexamine these
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
 #define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
@@ -100,8 +101,10 @@ typedef enum
     MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_BLOCK ),
     MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_BLOCK ),
 
+    MtRequestSocketAttrib   = MT_REQUEST( 0x20 ),    
     // XXXX: add these, to be handled on both sides by dedicated threads?????????
-    MtRequestPollsetMod     = MT_REQUEST( 0x30   ),
+    
+    //MtRequestPollsetMod     = MT_REQUEST( 0x30   ),
     MtRequestPollsetQuery   = MT_REQUEST( 0x31 ),
 } mt_request_type_t;
 
@@ -122,7 +125,8 @@ typedef enum
     MtResponseSocketGetName     = MT_RESPONSE( MtRequestSocketGetName  ),
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
 
-    MtResponsePollsetMod        = MT_RESPONSE( MtRequestPollsetMod     ),
+    MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
+    //MtResponsePollsetMod        = MT_RESPONSE( MtRequestPollsetMod     ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
 } mt_response_id_t;
 
@@ -250,7 +254,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // Will the user thread wait for a response? This does not need to
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
-    // aio_read()/aio_write(). XXXX: change to flags.
+    // aio_read()/aio_write().
     uint32_t     flags;
 } mt_request_base_t;
 
@@ -278,7 +282,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
     // Status returned from the call. 0 or an errno. The number of
     // bytes read/written is tracked elsewhere.
     mt_status_t status;
-
 } mt_response_base_t;
 
 #define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
@@ -313,13 +316,11 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_bind
 {
     mt_request_base_t base;
     mt_sockaddr_in_t sockaddr;  // Hard coded for now, but should be a union of all sockaddr types.
-
 } mt_request_socket_bind_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_bind
 {
     mt_response_base_t base;
-
 } mt_response_socket_bind_t;
 
 #define MT_REQUEST_SOCKET_BIND_SIZE sizeof(mt_request_socket_bind_t)
@@ -334,13 +335,11 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_listen
 {
     mt_request_base_t base;
     int backlog;
-
 } mt_request_socket_listen_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 {
     mt_response_base_t base;
-
 } mt_response_socket_listen_t;
 
 #define MT_REQUEST_SOCKET_LISTEN_SIZE sizeof(mt_request_socket_listen_t)
@@ -361,7 +360,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
     mt_sockaddr_in_t sockaddr;
-
 } mt_response_socket_accept_t;
 
 #define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t)
@@ -410,14 +408,11 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_connect
 {
     mt_request_base_t base;
     mt_sockaddr_in_t sockaddr;
-
 } mt_request_socket_connect_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_connect
 {
     mt_response_base_t base;
-
-    // nothing else
 } mt_response_socket_connect_t;
 
 #define MT_REQUEST_SOCKET_CONNECT_SIZE sizeof( mt_request_socket_connect_t )
@@ -436,8 +431,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_close
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 {
     mt_response_base_t base;
-
-    // nothing else
 } mt_response_socket_close_t;
 
 #define MT_REQUEST_SOCKET_CLOSE_SIZE  sizeof(mt_request_socket_close_t)
@@ -481,7 +474,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
     mt_response_base_t base;
     mt_size_t          reslen;
     mt_sockaddr_in_t sockaddr;  // Hard coded for now, but should be a union of all sockaddr types.
-
 } mt_response_socket_getname_t;
 
 #define mt_request_socket_getpeer_t  mt_request_socket_getname_t
@@ -492,6 +484,66 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 
 #define MT_REQUEST_SOCKET_GETPEER_SIZE MT_REQUEST_SOCKET_GETNAME_SIZE
 #define MT_RESPONSE_SOCKET_GETPEER_SIZE MT_RESPONSE_SOCKET_GETNAME_SIZE
+
+
+//
+// Socket behavioral attributes, normally set via setsockopt() and fcntl()
+//
+/*
+typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_mod
+{
+    mt_request_base_t base;
+    uint8_t           blocking;
+} mt_request_pollset_mod_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_mod
+{
+    mt_response_base_t base;
+} mt_response_pollset_mod_t;
+
+#define MT_REQUEST_POLLSET_MOD_SIZE sizeof(mt_request_pollset_mod_t)
+#define MT_RESPONSE_POLLSET_MOD_SIZE sizeof(mt_response_pollset_mod_t)
+*/
+
+/*
+// Possible attributes that we might set
+#define MW_SOCK_ATTRIBS_MASK_NONBLOCK     0x0001 // O_NONBLOCK
+#define MW_SOCK_ATTRIBS_MASK_REUSEADDR    0x0002 // SOL_SOCKET SO_REUSEADDR
+#define MW_SOCK_ATTRIBS_MASK_KEEPALIVE    0x0004 // SOL_SOCKET SO_KEEPALIVE
+#define MW_SOCK_ATTRIBS_MASK_DEFER_ACCEPT 0x0008 // SOL_TCP TCP_DEFER_ACCEPT
+*/
+
+
+// The socket attributes handled by Magic Wand
+typedef enum
+{
+    MtSockAttribNone,
+    MtSockAttribNonblock,
+    MtSockAttribReuseaddr,
+    MtSockAttribKeepalive,
+    MtSockAttribDeferAccept,
+    MtSockAttribNodelay,
+} mt_socket_attrib_t;
+
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_attrib
+{
+    mt_request_base_t   base;
+    uint32_t            modify;  // bool: true => set, false => get
+    mt_socket_attrib_t  attrib;  // value of the single attribute of interest
+    uint32_t            value;   // value of specified attribute
+} mt_request_socket_attrib_t;
+
+#define MT_REQUEST_SOCKET_ATTRIB_SIZE sizeof(mt_request_socket_attrib_t)
+
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_attrib
+{
+    mt_response_base_t base;
+    uint32_t           outval; // optional value of requested attrib
+} mt_response_socket_attrib_t;
+
+#define MT_RESPONSE_SOCKET_ATTRIB_SIZE sizeof(mt_response_socket_attrib_t)
 
 
 //
@@ -509,20 +561,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 #define MW_POLLERR    0x008
 #define MW_POLLHUP    0x010
 #define MW_POLLNVAL   0x020
-
-typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_mod
-{
-    mt_request_base_t base;
-    uint8_t           blocking;
-} mt_request_pollset_mod_t;
-
-typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_mod
-{
-    mt_response_base_t base;
-} mt_response_pollset_mod_t;
-
-#define MT_REQUEST_POLLSET_MOD_SIZE sizeof(mt_request_pollset_mod_t)
-#define MT_RESPONSE_POLLSET_MOD_SIZE sizeof(mt_response_pollset_mod_t)
 
 
 typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_query
@@ -576,7 +614,8 @@ typedef union _mt_request_generic
     mt_request_socket_getname_t socket_getname;
     mt_request_socket_getpeer_t socket_getpeer;
 
-    mt_request_pollset_mod_t    pollset_mod;
+    mt_request_socket_attrib_t  socket_attrib;
+//    mt_request_pollset_mod_t    pollset_mod;
     mt_request_pollset_query_t  pollset_query;
 } mt_request_generic_t;
 
@@ -603,7 +642,8 @@ typedef union _mt_response_generic
     mt_response_socket_getname_t    socket_getname;
     mt_response_socket_getpeer_t    socket_getpeer;
 
-    mt_response_pollset_mod_t       pollset_mod;
+    mt_response_socket_attrib_t     socket_attrib;
+    //mt_response_pollset_mod_t       pollset_mod;
     mt_response_pollset_query_t     pollset_query;
 } mt_response_generic_t;
 

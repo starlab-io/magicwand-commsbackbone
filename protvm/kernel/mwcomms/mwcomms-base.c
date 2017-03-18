@@ -409,10 +409,7 @@ mwbase_dev_ioctl( struct file  * File,
                                create.domain,
                                create.type,
                                create.protocol );
-        if ( rc )
-        {
-            goto ErrorExit;
-        }
+        if ( rc ) goto ErrorExit;
 
         // Copy the resulting FD back to the user
         rc = copy_to_user( &((mwsocket_create_args_t *)Arg)->outfd,
@@ -460,25 +457,9 @@ mwbase_dev_ioctl( struct file  * File,
             rc = -EFAULT;
             goto ErrorExit;
         }
-        
+
         break;
     }
-/*
-    case MW_IOCTL_MOD_POLLSET:
-    {
-        mwsocket_modify_pollset_args_t pollset;
-        rc = copy_from_user( &pollset, (void *)Arg, sizeof(pollset) );
-        if ( rc )
-        {
-            MYASSERT( !"Invalid memory provided\n" );
-            rc = -EFAULT;
-            goto ErrorExit;
-        }
-
-        rc = mwsocket_modify_pollset( pollset.fd, pollset.add );
-        goto ErrorExit;
-    }
-    */
     default:
         pr_err( "Received invalid IOCTL code\n" );
         rc = -EINVAL;
