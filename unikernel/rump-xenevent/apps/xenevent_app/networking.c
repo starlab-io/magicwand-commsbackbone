@@ -125,8 +125,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     // this session
 
     Response->base.sockfd        = extsock;
-    WorkerThread->sock_fd        = extsock;
-    WorkerThread->native_sock_fd = sockfd;
+    WorkerThread->public_fd      = extsock;
+    WorkerThread->local_fd       = sockfd;
     WorkerThread->sock_domain    = native_fam;
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
@@ -135,7 +135,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 //    (void) xe_net_set_fd_flag( sockfd, O_NONBLOCK, true );
 
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
-                  WorkerThread->idx, WorkerThread->sock_fd, sockfd );
+                  WorkerThread->idx, WorkerThread->public_fd, sockfd );
     return 0;
 }
 
@@ -159,7 +159,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
 
     if ( MtSockAttribNonblock == Request->attrib )
     {
-        flags = fcntl( WorkerThread->native_sock_fd, F_GETFL );
+        flags = fcntl( WorkerThread->local_fd, F_GETFL );
         if ( Request->modify )
         {
             if ( Request->value )
@@ -170,7 +170,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
             {
                 flags &= ~O_NONBLOCK;
             }
-            rc = fcntl( WorkerThread->native_sock_fd, F_SETFL, flags );
+            rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
             err = errno;
             MYASSERT( 0 == rc );
         }
@@ -207,19 +207,19 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
                   level, name, Request->value );
 
     socklen_t len = sizeof(Request->value);
     if ( Request->modify )
     {
-        rc = setsockopt( WorkerThread->native_sock_fd,
+        rc = setsockopt( WorkerThread->local_fd,
                          level, name,
                          &Request->value, len );
     }
     else
     {
-        rc = getsockopt( WorkerThread->native_sock_fd,
+        rc = getsockopt( WorkerThread->local_fd,
                          level, name,
                          &Request->value, &len );
     }
@@ -257,7 +257,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
     
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
     MYASSERT( 1 == WorkerThread->in_use );
     
 //    serverHints.ai_family    = WorkerThread->sock_domain;
@@ -269,11 +269,11 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is connecting to %s:%d\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
     // Request->hostname, Request->port );
 
-    rc = connect( WorkerThread->native_sock_fd,
+    rc = connect( WorkerThread->local_fd,
                   (const struct sockaddr * ) &sockaddr,
                   sizeof( sockaddr ) );
     if ( rc < 0 )
@@ -307,7 +307,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     {
         if ( serverIter->ai_family != WorkerThread->sock_domain ) continue;
 
-        rc = connect( WorkerThread->native_sock_fd,
+        rc = connect( WorkerThread->local_fd,
                       serverIter->ai_addr,
                       serverIter->ai_addrlen );
         if ( rc < 0 )
@@ -342,7 +342,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
                     IN thread_item_t                * WorkerThread )
 {
     
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
     MYASSERT( 1 == WorkerThread->in_use );
 
     struct sockaddr_in sockaddr;
@@ -352,10 +352,10 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding on %s:%d\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
 
-    Response->base.status = bind( WorkerThread->native_sock_fd,
+    Response->base.status = bind( WorkerThread->local_fd,
                                   (const struct sockaddr*) &sockaddr,
                                   addrlen );
     if ( Response->base.status < 0 )
@@ -377,14 +377,14 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
                       OUT   mt_response_socket_listen_t * Response,
                       IN    thread_item_t               * WorkerThread)
 {
-    MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
+    MYASSERT( Request->base.sockfd == WorkerThread->public_fd );
     MYASSERT( 1 == WorkerThread->in_use );
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is listening\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd );
+                  WorkerThread->public_fd, WorkerThread->local_fd );
 
-    Response->base.status = listen( WorkerThread->native_sock_fd,
+    Response->base.status = listen( WorkerThread->local_fd,
                                     Request->backlog);
     if( Response->base.status < 0 )
     {
@@ -395,7 +395,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 #if 0
     // HACK HACK HACK
     uint32_t val = 30;
-    int rc = setsockopt( WorkerThread->native_sock_fd,
+    int rc = setsockopt( WorkerThread->local_fd,
                          SOL_TCP,
                          TCP_DEFER_ACCEPT, 
                          &val,
@@ -407,15 +407,15 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 #if 0
     uint32_t val = 1;
     int rc = 0;
-    rc = setsockopt( WorkerThread->native_sock_fd,
+    rc = setsockopt( WorkerThread->local_fd,
                      SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val) );
     MYASSERT( 0 == rc );
 
-    rc = setsockopt( WorkerThread->native_sock_fd,
+    rc = setsockopt( WorkerThread->local_fd,
                      SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val) );
     MYASSERT( 0 == rc );
 
-    //rc = setsockopt( WorkerThread->native_sock_fd,
+    //rc = setsockopt( WorkerThread->local_fd,
     //SOL_TCP, TCP_NODELAY, &val, sizeof(val) );
     //MYASSERT( 0 == rc );
     
@@ -434,7 +434,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                       OUT  mt_response_socket_accept_t *Response,
                       IN   thread_item_t               *WorkerThread )
 {
-    MYASSERT( Request->base.sockfd == WorkerThread->sock_fd );
+    MYASSERT( Request->base.sockfd == WorkerThread->public_fd );
     MYASSERT( 1 == WorkerThread->in_use );
     struct sockaddr_in sockaddr;
     int sockfd = 0;
@@ -445,9 +445,9 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
     DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is accepting.\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd );
+                  WorkerThread->public_fd, WorkerThread->local_fd );
 
-    sockfd = accept( WorkerThread->native_sock_fd,
+    sockfd = accept( WorkerThread->local_fd,
                      (struct sockaddr *) &sockaddr,
                      (socklen_t *) &addrlen );
 
@@ -468,7 +468,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
-                      WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                      WorkerThread->public_fd, WorkerThread->local_fd,
                       inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
     }
 
@@ -495,16 +495,16 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
 
     Response->base.status = 0;
     
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
-    bytes_read = recvfrom( WorkerThread->native_sock_fd,
+    bytes_read = recvfrom( WorkerThread->local_fd,
                            (void *) Response->bytes,
                            Request->requested,
                            Request->flags,
                            ( struct sockaddr * ) &src_addr,
                            &addrlen );
 
-    if( bytes_read < 0 )
+    if( bytes_read <= 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         MYASSERT( !"recvfrom" );
@@ -538,15 +538,15 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 
     Response->base.status = 0;
 
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
 // HACK HACK: force the socket to block
-//    (void) xe_net_set_fd_flag( WorkerThread->native_sock_fd, O_NONBLOCK, false );
+//    (void) xe_net_set_fd_flag( WorkerThread->local_fd, O_NONBLOCK, false );
     // ==> recv(); errno == EAGAIN (35) [Rump] == EAGAIN (11) [Linux]
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving 0x%x bytes\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
                   Request->requested );
 
     // This loop handles both evaulations for XE_RECEIVE_ALL. If any
@@ -558,7 +558,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
         ssize_t rcv = 0;
         do
         {
-            rcv = recv( WorkerThread->native_sock_fd,
+            rcv = recv( WorkerThread->local_fd,
                         &Response->bytes[ totRecv ],
                         Request->requested - totRecv,
                         0 );
@@ -566,11 +566,12 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 
         // recv() returned without being interrupted
 
-        if ( rcv < 0 )
+        if ( rcv <= 0 )
         {
             // This call failed. If any data has been received, let it
             // succeed. Otherwise fail it.
             Response->base.status = (totRecv > 0) ? 0 : XE_GET_NEG_ERRNO();
+            MYASSERT( !"recv" );
             break;
         }
 
@@ -598,28 +599,40 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 
 
 int
+xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
+{
+    int rc = 0;
+
+    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
+                  WorkerThread->idx,
+                  WorkerThread->public_fd, WorkerThread->local_fd );
+
+    rc = close( WorkerThread->local_fd );
+    if ( rc )
+    {
+        rc = XE_GET_NEG_ERRNO();
+        MYASSERT( !"close" );
+    }
+
+    WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
+    WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
+
+    return rc;
+}
+
+
+int
 xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread )
 {
-
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
-                  WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd );
-
-    Response->base.status = close( WorkerThread->native_sock_fd );
-
-    if ( Response->base.status < 0 )
-    {
-        Response->base.status = XE_GET_NEG_ERRNO();
-        MYASSERT( !"close" );
-    }
+    Response->base.status = xe_net_internal_close_socket( WorkerThread );
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CLOSE_SIZE,
@@ -642,10 +655,10 @@ xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
     Response->base.status = 0;
     Response->base.size   = MT_RESPONSE_SOCKET_READ_SIZE;
     
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
     
     DEBUG_PRINT ( "Worker thread %d (socket %d) is reading %d bytes\n",
-                  WorkerThread->idx, WorkerThread->sock_fd, Request->requested);
+                  WorkerThread->idx, WorkerThread->public_fd, Request->requested);
 
     while ( totRead < Request->requested )
     {
@@ -694,22 +707,22 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
     Response->base.status = 0;
 
-    MYASSERT( WorkerThread->sock_fd == Request->base.sockfd );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is writing %ld bytes\n",
                   WorkerThread->idx,
-                  WorkerThread->sock_fd, WorkerThread->native_sock_fd,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
                   maxExpected );
 
     // base.size is the total size of the request; account for the
     // header.
     while ( totSent < maxExpected )
     {   
-        ssize_t sent = send( WorkerThread->native_sock_fd,
+        ssize_t sent = send( WorkerThread->local_fd,
                              &Request->bytes[ totSent ],
                              maxExpected - totSent,
                              (int) Request->flags );
-        if ( sent < 0 )
+        if ( sent <= 0 )
         {
             Response->base.status = XE_GET_NEG_ERRNO();
             MYASSERT( !"send" );
@@ -747,10 +760,10 @@ xe_net_get_name( IN mt_request_socket_getname_t  * Request,
     switch (Request->base.type )
     {
     case MtRequestSocketGetPeer:
-        rc = getpeername( WorkerThread->native_sock_fd, &addr, &addrlen );
+        rc = getpeername( WorkerThread->local_fd, &addr, &addrlen );
         break;
     case MtRequestSocketGetName:
-        rc = getsockname( WorkerThread->native_sock_fd, &addr, &addrlen );
+        rc = getsockname( WorkerThread->local_fd, &addr, &addrlen );
         break;
     default:
         MYASSERT( !"Invalid request" );

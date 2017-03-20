@@ -324,7 +324,7 @@ debug_print_state( void )
         
         printf("  %d: used %d sock %x/%d, pending items %d\n",
                curr->idx, curr->in_use,
-               curr->sock_fd, curr->native_sock_fd,
+               curr->public_fd, curr->local_fd,
                pending );
 
         if ( curr->in_use )
@@ -485,7 +485,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
             curr = &g_state.worker_threads[i];
 
             DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
-                         i, curr->in_use, curr->sock_fd );
+                         i, curr->in_use, curr->public_fd );
 
             // Look for any available thread and secure ownership of it.
             if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
@@ -517,7 +517,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
             goto ErrorExit;
         }
 
-        if ( Fd != curr->sock_fd )
+        if ( Fd != curr->public_fd )
         {
             MYASSERT( !"Internal error: socket's ID mismatches internal one\n" );
             rc = EINVAL;
@@ -550,8 +550,8 @@ release_worker_thread( thread_item_t * ThreadItem )
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
-    ThreadItem->sock_fd        = MT_INVALID_SOCKET_FD;
-    ThreadItem->native_sock_fd = MT_INVALID_SOCKET_FD;
+    ThreadItem->public_fd        = MT_INVALID_SOCKET_FD;
+    ThreadItem->local_fd = MT_INVALID_SOCKET_FD;
 
     // N.B. The thread might have never been reserved    
     prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
@@ -599,6 +599,97 @@ send_dispatch_error_response( mt_request_generic_t * Request )
         MYASSERT( !"Failed to send response" );
     }
 
+    return rc;
+}
+
+
+//
+// Perform internal steps required after a buffer item has been
+// processed.
+//
+static int
+post_process_response( mt_request_generic_t  * Request,
+                       mt_response_generic_t * Response,
+                       thread_item_t         * Worker )
+{
+    int rc = 0;
+
+    // Handle the case where the other side closed. Teardown
+    // immediately and relay EPIPE status to PVM. The return code from
+    // close is dropped.
+
+    if ( -MW_EPIPE == Response->base.status )
+    {
+        DEBUG_PRINT( "%x / %d: remote side closed -- closing local side now.\n",
+                     Worker->public_fd,  Worker->local_fd );
+        (void) xe_net_internal_close_socket( Worker );
+        release_worker_thread( Worker );
+    }
+
+    // In accept's success case, assign the new socket to an available thread
+    if ( MtRequestSocketAccept == Request->base.type
+         && Response->base.status >= 0 )
+    {
+        thread_item_t * accept_thread = NULL;
+        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD,  &accept_thread );
+        if ( rc )
+        {
+            // Destroy the new socket and fail the request
+            close( Response->base.status );
+            Response->base.status = MT_STATUS_INTERNAL_ERROR;
+        }
+        else
+        {
+            // A thread was available - record the assignment now
+            accept_thread->public_fd =
+                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+            accept_thread->local_fd = Response->base.status;
+
+            // Mask the native FD with the exported one
+            Response->base.status = accept_thread->public_fd;
+            Response->base.sockfd = accept_thread->public_fd;
+        }
+    }
+    switch( Response->base.type )
+    {
+    case MtResponseSocketRecv:
+        if ( Worker->poll_events & MW_POLLIN
+             && MT_RESPONSE_SOCKET_RECV_SIZE == Response->base.size )
+        {
+            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
+                         Response->base.sockfd );
+            DEBUG_BREAK();
+            Response->base.status = -EPIPE;
+        }
+        break;
+    case MtResponseSocketRecvFrom:
+        // Readable data was indicated. Was anything read? If not,
+        // the socket closed. Applies to next case too.
+        if ( Worker->poll_events & MW_POLLIN
+             &&  MT_RESPONSE_SOCKET_RECVFROM_SIZE == Response->base.size )
+        {
+            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
+                         Response->base.sockfd );
+            DEBUG_BREAK();
+            Response->base.status = -EPIPE;
+        }
+        break;
+    case MtResponseSocketSend:
+        // Socket was writable but last write() didn't write
+        // anything. Therefore it has closed.
+        if ( Worker->poll_events & MW_POLLOUT
+             && 0 == Response->socket_send.sent )
+        {
+            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
+                         Response->base.sockfd );
+            DEBUG_BREAK();
+            Response->base.status = -EPIPE;
+        }
+        break;
+    default:
+        break;
+    }
     return rc;
 }
 
@@ -708,31 +799,8 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     //clock_gettime(CLOCK_REALTIME, &t1);
 
-    // In accept's success case, assign the new socket to an available thread
-    if ( MtRequestSocketAccept == request->base.type
-         && response.base.status >= 0 )
-    {
-        thread_item_t * accept_thread = NULL;
-        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
-        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD,  &accept_thread );
-        if ( rc )
-        {
-            // Destroy the new socket and fail the request
-            close( response.base.status );
-            response.base.status = -1;
-        }
-        else
-        {
-            // A thread was available - record the assignment now
-            accept_thread->sock_fd =
-                MW_SOCKET_CREATE( client_id, accept_thread->idx );
-            accept_thread->native_sock_fd = response.base.status;
-
-            // Mask the native FD with the exported one
-            response.base.status = accept_thread->sock_fd;
-            response.base.sockfd = accept_thread->sock_fd;
-        }
-    }
+    // How to handle failure?
+    (void) post_process_response( request, &response, worker );
 
     DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );

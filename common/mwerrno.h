@@ -12,7 +12,7 @@
 #define	MW_ENOENT		 2	/* No such file or directory */
 #define	MW_ESRCH		 3	/* No such process */
 #define	MW_EINTR		 4	/* Interrupted system call */
-#define	MW_EIO		 5	/* I/O error */
+#define	MW_EIO			 5	/* I/O error */
 #define	MW_ENXIO		 6	/* No such device or address */
 #define	MW_E2BIG		 7	/* Argument list too long */
 #define	MW_ENOEXEC		 8	/* Exec format error */
@@ -40,7 +40,7 @@
 #define	MW_EROFS		30	/* Read-only file system */
 #define	MW_EMLINK		31	/* Too many links */
 #define	MW_EPIPE		32	/* Broken pipe */
-#define	MW_EDOM		33	/* Math argument out of domain of func */
+#define	MW_EDOM			33	/* Math argument out of domain of func */
 #define	MW_ERANGE		34	/* Math result not representable */
 
 

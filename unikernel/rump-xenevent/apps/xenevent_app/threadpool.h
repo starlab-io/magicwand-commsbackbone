@@ -61,7 +61,7 @@ typedef struct _thread_item
     // The exported socket value. We do not export our native socket
     // value. See mwsocket.h for details.
     //
-    mw_socket_fd_t  sock_fd;
+    mw_socket_fd_t  public_fd;
 
     //
     // Is the socket blocking? If it's non-blocking: (1) it has been
@@ -71,16 +71,15 @@ typedef struct _thread_item
     bool           blocking;
 
     //
-    // For pollset's internal usage
+    // Current events from poll() on socket. Flags are MW_POLL*
     //
-    void         * pollset_data;
-
+    int            poll_events;
     
     //
     // The native socket under management - save it's metadata for
     // easy state lookup.
     //
-    int            native_sock_fd;
+    int            local_fd;
 
     //
     // This socket metadata is the native NetBSD values, e.g. for AF_INET6.

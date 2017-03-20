@@ -553,14 +553,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_attrib
 #define MW_POLLPRI    0x002
 #define MW_POLLOUT    0x004
 
+#define MW_POLLERR    0x008
+#define MW_POLLHUP    0x010
+#define MW_POLLNVAL   0x020
+
 #define MW_POLLRDNORM 0x040
 #define MW_POLLRDBAND 0x080
 #define MW_POLLWRNORM 0x100
 #define MW_POLLWRBAND 0x200
-
-#define MW_POLLERR    0x008
-#define MW_POLLHUP    0x010
-#define MW_POLLNVAL   0x020
 
 
 typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_query

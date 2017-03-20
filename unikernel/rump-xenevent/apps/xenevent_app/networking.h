@@ -27,6 +27,9 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
                        IN  thread_item_t                * WorkerThread );
 
 int
+xe_net_internal_close_socket( IN thread_item_t * WorkerThread );
+
+int
 xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread );
