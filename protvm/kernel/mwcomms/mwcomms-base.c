@@ -440,6 +440,7 @@ mwbase_dev_ioctl( struct file  * File,
         {
             pr_err( "User passed bad file descriptor %d\n", verify.fd );
             rc = -EBADFD;
+            MYASSERT( !"Bad FD" );
             goto ErrorExit;
         }
         

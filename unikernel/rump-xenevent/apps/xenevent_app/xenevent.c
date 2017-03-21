@@ -550,9 +550,22 @@ release_worker_thread( thread_item_t * ThreadItem )
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
-    ThreadItem->public_fd        = MT_INVALID_SOCKET_FD;
-    ThreadItem->local_fd = MT_INVALID_SOCKET_FD;
+    MYASSERT( !ThreadItem->oplock_acquired );
+    
+    // Clean up the struct for the next usage
+    
+    ThreadItem->public_fd = MT_INVALID_SOCKET_FD;
+    ThreadItem->local_fd  = MT_INVALID_SOCKET_FD;
 
+    ThreadItem->poll_events = 0;
+    ThreadItem->state_flags = 0;
+    ThreadItem->sock_domain = 0;
+    ThreadItem->sock_type   = 0;
+    ThreadItem->sock_protocol = 0;
+    ThreadItem->port_num    = 0;
+
+    bzero( &ThreadItem->remote_host, sizeof(ThreadItem->remote_host) );
+    
     // N.B. The thread might have never been reserved    
     prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     if ( prev )
@@ -618,12 +631,20 @@ post_process_response( mt_request_generic_t  * Request,
     // immediately and relay EPIPE status to PVM. The return code from
     // close is dropped.
 
+/*    
     if ( -MW_EPIPE == Response->base.status )
     {
         DEBUG_PRINT( "%x / %d: remote side closed -- closing local side now.\n",
                      Worker->public_fd,  Worker->local_fd );
         (void) xe_net_internal_close_socket( Worker );
         release_worker_thread( Worker );
+    }
+*/
+
+    // Propogate state, including remote closure status
+    if ( NULL != Worker )
+    {
+        Response->base.flags = Worker->state_flags;
     }
 
     // In accept's success case, assign the new socket to an available thread
@@ -651,11 +672,14 @@ post_process_response( mt_request_generic_t  * Request,
             Response->base.sockfd = accept_thread->public_fd;
         }
     }
+
+    /*
     switch( Response->base.type )
     {
     case MtResponseSocketRecv:
         if ( Worker->poll_events & MW_POLLIN
-             && MT_RESPONSE_SOCKET_RECV_SIZE == Response->base.size )
+             && 0 == Response->socket_recv.count )
+            //&& MT_RESPONSE_SOCKET_RECV_SIZE == Response->base.size )
         {
             DEBUG_PRINT( "Socket %x has conditions of remote close\n",
                          Response->base.sockfd );
@@ -667,7 +691,8 @@ post_process_response( mt_request_generic_t  * Request,
         // Readable data was indicated. Was anything read? If not,
         // the socket closed. Applies to next case too.
         if ( Worker->poll_events & MW_POLLIN
-             &&  MT_RESPONSE_SOCKET_RECVFROM_SIZE == Response->base.size )
+             && 0 == Response->socket_recvfrom.count )
+        //&&  MT_RESPONSE_SOCKET_RECVFROM_SIZE == Response->base.size )
         {
             DEBUG_PRINT( "Socket %x has conditions of remote close\n",
                          Response->base.sockfd );
@@ -679,7 +704,8 @@ post_process_response( mt_request_generic_t  * Request,
         // Socket was writable but last write() didn't write
         // anything. Therefore it has closed.
         if ( Worker->poll_events & MW_POLLOUT
-             && 0 == Response->socket_send.sent )
+             && 0 == Response->socket_send.count )
+            //&& 0 == Response->socket_send.sent )
         {
             DEBUG_PRINT( "Socket %x has conditions of remote close\n",
                          Response->base.sockfd );
@@ -689,7 +715,8 @@ post_process_response( mt_request_generic_t  * Request,
         break;
     default:
         break;
-    }
+        }
+    */
     return rc;
 }
 
@@ -707,6 +734,8 @@ process_buffer_item( buffer_item_t * BufferItem )
     thread_item_t * worker = BufferItem->assigned_thread;
 
     mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
+
+    bzero( &response.base, sizeof(response.base) );
     
     DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
@@ -793,11 +822,9 @@ process_buffer_item( buffer_item_t * BufferItem )
     // No matter the results of the network operation, we sent the
     // response back over the device. Write the entire response.
     // XXXXXXXXXX Optimize data written - we don't need to write all of it!
-    
+
     MYASSERT( 0 == rc );
     MYASSERT( MT_IS_RESPONSE( &response ) );
-
-    //clock_gettime(CLOCK_REALTIME, &t1);
 
     // How to handle failure?
     (void) post_process_response( request, &response, worker );
@@ -1142,13 +1169,13 @@ init_state( void )
         curr->offset = ONE_REQUEST_REGION_SIZE * i;
         curr->region = &g_state.in_request_buf[ curr->offset ];
     }
-
+/*
     //
     // Init polling subsystem, which spawns a dedicated thread
     //
     rc = xe_pollset_init();
     if ( rc ) goto ErrorExit;
-        
+*/
     
     //
     // Init the threads' state, so that posting to the semaphores
@@ -1234,7 +1261,7 @@ fini_state( void )
     
     g_state.shutdown_pending = true;
 
-    xe_pollset_fini();
+//    xe_pollset_fini();
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
@@ -1243,7 +1270,6 @@ fini_state( void )
         sem_post( &curr->awaiting_work_sem );
         
         pthread_join( curr->self, NULL );
-        //pthread_attr_destroy(&g_state.attr);
         workqueue_free( curr->work_queue );
         sem_destroy( &curr->awaiting_work_sem );
     }

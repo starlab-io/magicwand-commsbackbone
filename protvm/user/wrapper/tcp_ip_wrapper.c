@@ -190,6 +190,7 @@ mwcomms_write_request( IN  int         MwFd,
                  Request->base.type, MwFd );
 
     // Will we wait for the response?
+    Request->base.flags = 0;
     if ( ReadResponse )
     {
         MT_REQUEST_SET_CALLER_WAITS( Request );
@@ -456,6 +457,7 @@ accept4( int               SockFd,
 {
     // XXXX: Drop flags for now, could be O_NONBLOCK or CLOEXEC
 
+//    MYASSERT( 0 == Flags );
     return accept( SockFd, SockAddr, SockLen );
 }
 
@@ -470,7 +472,8 @@ recvfrom( int    SockFd,
 {
     mt_request_generic_t request;
     mt_response_generic_t response = {0};
-    
+    mt_size_t * received = NULL;
+
     bzero( &response, sizeof(response) );
 
     ssize_t rc = 0;
@@ -487,7 +490,8 @@ recvfrom( int    SockFd,
                           MtRequestSocketRecv,
                           MT_REQUEST_SOCKET_RECV_SIZE,
                           SockFd );
-
+    received = &response.socket_recv.count;
+    
     request.socket_recv.flags = Flags;
     request.socket_recv.requested = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len );
 
@@ -495,8 +499,10 @@ recvfrom( int    SockFd,
     {
         // RecvFrom
         request.base.type = MtRequestSocketRecvFrom;
+        received = &response.socket_recvfrom.count;
     }
 
+    // We write a socket_recv request, but could 
     DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
     rc = mwcomms_write_request( SockFd, true, &request, &response );
     if ( rc )
@@ -505,7 +511,7 @@ recvfrom( int    SockFd,
     }
 
     DEBUG_PRINT( "Receiving done, status %d, size %d\n",
-                 response.base.status, response.base.size );
+                 response.base.status, response.socket_recvfrom.count );
     // Failure: rc = -1, errno set
     if ( response.base.status < 0 )
     {
@@ -514,11 +520,9 @@ recvfrom( int    SockFd,
         goto ErrorExit;
     }
 
-    // Success: rc = byte count
-    rc = response.base.size - MT_RESPONSE_SOCKET_RECV_SIZE;
-    if ( rc > 0 )
+    if ( *received > 0 )
     {
-        memcpy( Buf, response.socket_recv.bytes, rc );
+        memcpy( Buf, response.socket_recv.bytes, *received );
     }
 
     if ( MtResponseSocketRecvFrom == response.base.type )
@@ -537,6 +541,9 @@ recvfrom( int    SockFd,
                     sizeof( socklen_t ) );
         }
     }
+
+    // Success: rc = byte count
+    rc = *received;
 
 ErrorExit:
     return rc;
@@ -648,9 +655,10 @@ ErrorExit:
    return rc;
 }
 
+
 ssize_t 
 send( int          SockFd, 
-      const void * Buff, 
+      const void * Buf,
       size_t       Len,
       int          Flags )
 {
@@ -658,7 +666,7 @@ send( int          SockFd,
     mt_response_generic_t response = {0};
     ssize_t rc = 0;
     ssize_t totSent = 0;
-    const uint8_t *buff_ptr = Buff;
+    uint8_t * pbuf = (uint8_t *)Buf;
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -678,20 +686,18 @@ send( int          SockFd,
         ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
 
         request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
-        memcpy( request.socket_send.bytes, &buff_ptr[ totSent ], chunksz );
+        memcpy( request.socket_send.bytes, &pbuf[ totSent ], chunksz );
 
+        // Mimick the real send(): if the request is successfully
+        // written to the ring buffer, then succeed. Do not wait for
+        // the response.
         rc = mwcomms_write_request( SockFd, false, &request, &response );
         if ( rc )
         {
             goto ErrorExit;
         }
 
-        if ( response.base.status < 0 )
-        {
-           errno = -response.base.status;
-           rc = -1;
-           goto ErrorExit;
-        }
+        // The response will not be populated, so don't check it
 
         totSent += chunksz;
 

@@ -45,7 +45,6 @@ typedef struct _thread_item
     sem_t oplock;
     bool  oplock_acquired;
 
-    
     //
     // A fixed-size queue of indices into the buffer item array. The
     // items in this queue are ones that this thread must process. The
@@ -53,8 +52,6 @@ typedef struct _thread_item
     // workqueue API. Access to it is protected by a mutex.
     //
     
-    //work_queue_buffer_idx_t work_queue_space[ BUFFER_ITEM_COUNT ];
-
     workqueue_t * work_queue;
 
     //
@@ -68,13 +65,18 @@ typedef struct _thread_item
     // set to O_NONBLOCK via fcntl(), (2) it is this socket in the
     // active pollset?
     //
-    bool           blocking;
+//    bool           blocking;
 
     //
     // Current events from poll() on socket. Flags are MW_POLL*
     //
     int            poll_events;
-    
+
+    //
+    // Connection state, reported back to PVM
+    //
+    mt_response_flags_t state_flags;
+
     //
     // The native socket under management - save it's metadata for
     // easy state lookup.

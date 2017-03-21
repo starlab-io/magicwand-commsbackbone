@@ -216,6 +216,8 @@ typedef struct _mt_sockaddr_in
 #define MT_INADDR_ANY ((unsigned long int) 0x00000000)
 
 
+typedef uint32_t mt_request_flags_t;
+
 // The PVM wrapper will read the response
 #define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
 
@@ -236,27 +238,34 @@ typedef struct _mt_sockaddr_in
 typedef struct MT_STRUCT_ATTRIBS _mt_request_base 
 {
     // Must be MT_SIGNATURE_REQUEST
-    mt_sig_t          sig;
+    mt_sig_t            sig;
     
     // MtRequest*
     mt_request_type_t   type;
     
     // All-inclusive size of the populated bytes in the payload,
     // including this structure.
-    mt_size_t   size;
+    mt_size_t           size;
 
     // Server-generated request ID
-    mt_id_t     id;
+    mt_id_t             id;
 
     // The socket. Used in most requests.
-    mw_socket_fd_t sockfd;
+    mw_socket_fd_t      sockfd;
 
     // Will the user thread wait for a response? This does not need to
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
     // aio_read()/aio_write().
-    uint32_t     flags;
+    mt_request_flags_t  flags;
 } mt_request_base_t;
+
+
+
+typedef uint32_t mt_response_flags_t;
+
+// Did the remote side of the TCP/IP connection close?
+#define _MT_RESPONSE_FLAG_REMOTE_CLOSED 0x1
 
 
 //
@@ -265,23 +274,26 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
 typedef struct MT_STRUCT_ATTRIBS _mt_response_base 
 {
     // Must be MT_SIGNATURE_RESPONSE
-    mt_sig_t          sig;
+    mt_sig_t            sig;
 
     // MtResponse*
-    mt_response_id_t   type;
+    mt_response_id_t    type;
 
     // Size of the payload only - after this header
-    mt_size_t   size;
+    mt_size_t           size;
 
     // Matches id in corresponding request
-    mt_id_t     id;
+    mt_id_t             id;
 
     // The socket. Used in most requests.
-    mw_socket_fd_t sockfd;
+    mw_socket_fd_t      sockfd;
 
     // Status returned from the call. 0 or an errno. The number of
     // bytes read/written is tracked elsewhere.
-    mt_status_t status;
+    mt_status_t         status;
+
+    // Flags pertaining to response or remote socket state.
+    mt_response_flags_t flags;
 } mt_response_base_t;
 
 #define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
@@ -297,7 +309,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_create
     mt_protocol_family_t sock_fam; // or socket domain
     mt_sock_type_t       sock_type;
     uint32_t             sock_protocol;
-    uint8_t              blocking; // bool
 } mt_request_socket_create_t;
 
 typedef struct  MT_STRUCT_ATTRIBS _mt_response_socket_create
@@ -368,13 +379,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 
 
 //
-// Recv
+// Recv: both recv and recvfrom use mt_request_socket_recv_t, but the
+// response types they expect are different.
 //
 
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
     mt_request_base_t base;
-    uint64_t          flags;
+    uint32_t          flags;
     mt_size_t         requested;
 } mt_request_socket_recv_t;
 
@@ -383,21 +395,24 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recv
 {
     mt_response_base_t base;
+    mt_size_t          count;
     uint8_t            bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 } mt_response_socket_recv_t;
-#define MT_RESPONSE_SOCKET_RECV_SIZE ( sizeof( mt_response_base_t ) )
+#define MT_RESPONSE_SOCKET_RECV_SIZE \
+    ( sizeof( mt_response_base_t ) + sizeof( mt_size_t) )
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_recvfrom
 {
-    mt_response_base_t      base;
-    mt_sockaddr_in_t        src_addr;
-    uint32_t                addrlen;
-    uint8_t                 bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
+    mt_response_base_t base;
+    mt_sockaddr_in_t   src_addr;
+    uint32_t           addrlen;
+    mt_size_t          count;
+    uint8_t            bytes[MESSAGE_TYPE_MAX_PAYLOAD_LEN];
 } mt_response_socket_recvfrom_t;
 
-#define MT_RESPONSE_SOCKET_RECVFROM_SIZE                        \
-    ( sizeof( mt_response_base_t )                              \
-      + sizeof( mt_sockaddr_in_t ) + sizeof( uint32_t ) )
+#define MT_RESPONSE_SOCKET_RECVFROM_SIZE                                \
+    ( sizeof( mt_response_base_t )                                      \
+      + sizeof(mt_sockaddr_in_t) + sizeof(mt_size_t) + sizeof(uint32_t) )
 
 
 //
@@ -443,14 +458,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
     mt_request_base_t  base;
-    uint64_t           flags;
+    uint32_t           flags;
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 } mt_request_socket_send_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 {
     mt_response_base_t base;
-    mt_size_t          sent;
+    mt_size_t          count; // bytes sent
 } mt_response_socket_send_t;
 
 // User must add count of filled bytes to size

@@ -24,6 +24,9 @@
 #include "message_types.h"
 #include "threadpool.h"
 #include "translate.h"
+#include "mwerrno.h"
+
+#include "pollset.h"
 
 extern xenevent_globals_t g_state;
 extern uint16_t client_id;
@@ -480,49 +483,115 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     return 0;
 }
 
+/*
+static int
+xe_net_internal_recv( IN thread_item_t * WorkerThread,
+                      INOUT uint8_t    * Buffer,
+                      IN mt_size_t       Requested,
+                      OUT mt_size_t    * ReadBytes )
+{
+    int events  = 0;
+    bool polled = false;
+    int rc      = 0;
+    mt_size_t count = 0;
+
+    while ( count < Requested )
+    {
+        ssize_t rcv = 0;
+
+
+    }
+
+ErrorExit:
+    return rc;
+}
+*/
+
+
 int
 xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
                         OUT mt_response_socket_recvfrom_t   *Response,
                         IN thread_item_t                    *WorkerThread )
 {
-    struct sockaddr_in   src_addr;
-    socklen_t            addrlen = 0;
-    uint64_t             bytes_read = 0;
+    struct sockaddr_in src_addr;
+    socklen_t      addrlen = 0;
+    int             events = 0;
+    int                 rc = 0;
+    bool            polled = false;    
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
-
-    Response->base.status = 0;
-    
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
+    
+    Response->count       = 0;
+    Response->base.status = 0;
 
-    bytes_read = recvfrom( WorkerThread->local_fd,
-                           (void *) Response->bytes,
-                           Request->requested,
-                           Request->flags,
-                           ( struct sockaddr * ) &src_addr,
-                           &addrlen );
+    while( true )
+    {
+        do
+        {
+            Response->count = recvfrom( WorkerThread->local_fd,
+                                        (void *) Response->bytes,
+                                        Request->requested,
+                                        Request->flags,
+                                        ( struct sockaddr * ) &src_addr,
+                                        &addrlen );
+        } while( Response->count < 0 && EINTR == errno );
 
-    if( bytes_read <= 0 )
-    {
-        Response->base.status = XE_GET_NEG_ERRNO();
-        MYASSERT( !"recvfrom" );
-        bytes_read = 0;
-    }
-    else
-    {
-        Response->base.status = bytes_read;
-    }
+        // recvfrom() returned without being interrupted
+
+        if ( Response->count < 0 )
+        {
+            Response->base.status = XE_GET_NEG_ERRNO();
+            Response->count       = 0;
+            //MYASSERT( !"recvfrom" );
+            break;
+        }
+
+        // Success
+        Response->base.status = Response->count;
+
+        if ( Response->count > 0 ) break;
+
+        // recvfrom() ==> 0. Check for remote close
+
+        // Check for events from previous loop: there was supposed
+        // to be data, but we didn't read any. The connection was
+        // closed on the other end.
+        if ( events & (POLLIN | POLLRDNORM) )
+        {
+            WorkerThread->state_flags |= _MT_RESPONSE_FLAG_REMOTE_CLOSED;
+            break;
+        }
+
+        // poll() was called but no readable data was
+        // indicated. There's nothing to read but the connection
+        // remains open.
+        if ( polled )
+        {
+            WorkerThread->state_flags = 0;
+            break;
+        }
+        
+        // poll() has not been invoked yet. Invoke it and check for results again.
+        rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
+        // Check for failure: this counts as an internal error
+        if ( rc ) goto ErrorExit;
+
+        polled = true;
+    } // while
 
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
     Response->addrlen  = addrlen;
 
     xe_net_set_base_response( ( mt_request_generic_t * ) Request,
-                              MT_RESPONSE_SOCKET_RECVFROM_SIZE + bytes_read,
+                              MT_RESPONSE_SOCKET_RECVFROM_SIZE + Response->count,
                               ( mt_response_generic_t * ) Response );
-    return 0;
+
+ErrorExit: // label for internal errors only
+    return rc;
 }
 
 
@@ -532,69 +601,81 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
                     OUT  mt_response_socket_recv_t  * Response,
                     IN   thread_item_t              * WorkerThread )
 {
+    int             events = 0;
+    int                 rc = 0;
+    bool            polled = false;    
+
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
+    Response->count       = 0;
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
-
-// HACK HACK: force the socket to block
-//    (void) xe_net_set_fd_flag( WorkerThread->local_fd, O_NONBLOCK, false );
-    // ==> recv(); errno == EAGAIN (35) [Rump] == EAGAIN (11) [Linux]
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving 0x%x bytes\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   Request->requested );
 
-    // This loop handles both evaulations for XE_RECEIVE_ALL. If any
-    // data is received, it will be returned with a success status.
-
-    ssize_t totRecv = 0;
-    while ( totRecv < Request->requested )
+    while ( true )
     {
-        ssize_t rcv = 0;
         do
         {
-            rcv = recv( WorkerThread->local_fd,
-                        &Response->bytes[ totRecv ],
-                        Request->requested - totRecv,
-                        0 );
-        } while( rcv < 0 && EINTR == errno );
+            Response->count = recv( WorkerThread->local_fd,
+                                    &Response->bytes[ Response->count ],
+                                    Request->requested - Response->count,
+                                    0 );
+        } while( Response->count < 0 && EINTR == errno );
 
         // recv() returned without being interrupted
 
-        if ( rcv <= 0 )
+        if ( Response->count < 0 )
         {
-            // This call failed. If any data has been received, let it
-            // succeed. Otherwise fail it.
-            Response->base.status = (totRecv > 0) ? 0 : XE_GET_NEG_ERRNO();
-            MYASSERT( !"recv" );
+            Response->base.status = (Response->count > 0) ? 0 : XE_GET_NEG_ERRNO();
+            Response->count       = 0;
+            //MYASSERT( !"recv" );
             break;
         }
 
-        DEBUG_PRINT( "recv() got 0x%x bytes, status=%d\n",
-                     (int)rcv, Response->base.status );
+        // Success
+        Response->base.status = Response->count;
 
-        totRecv += rcv;
+        if ( Response->count > 0 ) break;
 
-        if ( !XE_RECEIVE_ALL || 0 == rcv )
+        // recv() ==> 0. Check for remote close.
+        if ( events & (POLLIN | POLLRDNORM) )
         {
-            // Either: we are not attempting to recv() all the
-            // requested bytes, or nothing was received. We're done.
+            WorkerThread->state_flags |= _MT_RESPONSE_FLAG_REMOTE_CLOSED;
             break;
         }
-    }
+
+        // poll() was called but no readable data was indicated. The
+        // connection is still open.
+        if ( polled )
+        {
+            WorkerThread->state_flags = 0;
+            break;
+        }
+        
+        // poll() has not been invoked yet. Invoke it and check for results again.
+        rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
+        // Check for failure: this counts as an internal error
+        if ( rc ) goto ErrorExit;
+
+        polled = true;
+    } // while
 
     DEBUG_PRINT( "recv() got total of 0x%x bytes, status=%d\n",
-                 (int)totRecv, Response->base.status );
+                 (int)Response->count, Response->base.status );
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              totRecv + MT_RESPONSE_SOCKET_RECV_SIZE,
+                              Response->count + MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *)Response );
-    return 0;
+
+ErrorExit:
+    return rc;;
 }
 
 
@@ -701,10 +782,11 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
 
-    ssize_t totSent = 0; // track total bytes sent here
+    //ssize_t totSent = 0; // track total bytes sent here
 
     // payload length is declared size minus header size
     ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
+    Response->count       = 0;
     Response->base.status = 0;
 
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
@@ -716,28 +798,36 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 
     // base.size is the total size of the request; account for the
     // header.
-    while ( totSent < maxExpected )
+    while ( Response->count < maxExpected )
     {   
         ssize_t sent = send( WorkerThread->local_fd,
-                             &Request->bytes[ totSent ],
-                             maxExpected - totSent,
+                             &Request->bytes[ Response->count ],
+                             maxExpected - Response->count,
                              (int) Request->flags );
-        if ( sent <= 0 )
+
+        if ( sent < 0 )
         {
             Response->base.status = XE_GET_NEG_ERRNO();
-            MYASSERT( !"send" );
+            // The remote side of this connection has closed
+            if ( -MW_EPIPE == Response->base.status )
+            {
+                WorkerThread->state_flags = _MT_RESPONSE_FLAG_REMOTE_CLOSED;
+            }
+            else
+            {
+                WorkerThread->state_flags = 0;
+            }
             break;
         }
 
-        totSent += sent;
+        // Success
+        MYASSERT( sent > 0 );
+        Response->count += sent;
     }
-
-    Response->sent = totSent;
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_SEND_SIZE,
                               (mt_response_generic_t *)Response );
-
     return 0;
 }
 

@@ -14,6 +14,8 @@
 #include "mwcomms-socket.h"
 #include "mwcomms-xen-iface.h"
 
+#include <mwerrno.h>
+
 #include <linux/slab.h>
 
 #include <linux/fs.h>
@@ -47,8 +49,8 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 // Times - self-explanatory
 #define GENERAL_RESPONSE_TIMEOUT      ( HZ * 2)
 #define POLL_MONITOR_RESPONSE_TIMEOUT ( HZ * 1 )
-#define POLL_MONITOR_QUERY_INTERVAL   ( HZ * 1 ) // >= 1 sec
-//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 1/8 sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ * 1 ) // >= 1 sec
+#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 1/8 sec
 
 /******************************************************************************
  * Interface to MW socket files.
@@ -129,8 +131,10 @@ typedef struct _mwsocket_instance
 
     // Error encountered on INS that has not (yet) been delivered to
     // caller. Supports fire-and-forget model.
-    int pending_errno;
-    
+    int              pending_errno;
+    bool             pending_sigpipe;
+    bool             delivered_sigpipe;
+
     // How many active requests are using this mwsocket? N.B. due to
     // the way release() is implemented on the INS, it is not valid to
     // destroy an mwsocket instance immediately upon release. Destroy
@@ -143,12 +147,10 @@ typedef struct _mwsocket_instance
     // Did the user indicate that a read would follow the write?
     bool                read_expected;
 
-    bool                 remote_close_requested;
-    
-    // Have we issued a SIGPIPE in relation to this instance? Used
-    // when the INS notices a remote teardown.
-    bool                sigpipe_issued;
-    
+    bool                remote_close_requested;
+
+    bool                release_started;
+
     //
     // For accept() support
     //
@@ -786,21 +788,94 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
 }
 
 
-static void
-mwsocket_deliver_sigpipe( mwsocket_instance_t * SockInst )
+// @brief Delivers signal to current process
+//
+// @return Returns pending error, or 0 if none
+static int
+mwsocket_pending_error( mwsocket_instance_t * SockInst, bool ClearOldVals )
 {
     MYASSERT( SockInst );
-    DEBUG_BREAK();
-    if ( !SockInst->sigpipe_issued )
+    int rc = 0;
+    
+    if ( SockInst->pending_sigpipe
+        && !SockInst->delivered_sigpipe )
     {
-        pr_debug( "Delivering SIGPIPE to process %d (%s) for socket %d\n",
-                  SockInst->proc->pid, SockInst->proc->comm,
-                  SockInst->local_fd );
-        SockInst->sigpipe_issued = true;
+        pr_info( "Delivering SIGPIPE to process %d (%s) for socket %d\n",
+                 SockInst->proc->pid, SockInst->proc->comm,
+                 SockInst->local_fd );
         send_sig( SIGPIPE, current, 0 );
+        SockInst->delivered_sigpipe = true;
+        rc = -EPIPE;
     }
+    else if ( SockInst->pending_errno )
+    {
+        pr_info( "Delivering pending error %d to process %d (%s) for socket %d\n",
+                 SockInst->pending_errno,
+                 SockInst->proc->pid, SockInst->proc->comm,
+                 SockInst->local_fd );
+        rc = SockInst->pending_errno;
+    }
+
+    if ( ClearOldVals )
+    {
+        SockInst->pending_sigpipe = false;
+        SockInst->pending_errno = 0;
+    }
+    
+    return rc;
 }
 
+
+// @brief Prepares request and socket instance state prior to putting
+// request on ring buffer.
+static int
+mwsocket_pre_process_request( mwsocket_active_request_t * ActRequest )
+{
+    int rc = 0;
+    mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
+    mt_request_generic_t * request = NULL;
+
+    MYASSERT( ActRequest );
+    MYASSERT( ActRequest->sockinst );
+
+    // Reset sigpipe state - we can deliver one per read/write cycle
+    ActRequest->sockinst->delivered_sigpipe = false;
+    
+    request = &ActRequest->request;
+
+    // Put remote FD in the request
+    request->base.sockfd = ActRequest->sockinst->remote_fd;
+
+    // Will the user wait for the response to this request? If so, update state
+    if ( MT_REQUEST_CALLER_WAITS( request ) )
+    {
+        // This write() will be followed immediately by a
+        // read(). Indicate the ID that blocks the calling thread.
+        ActRequest->sockinst->read_expected = true;
+        ActRequest->sockinst->blockid = ActRequest->id;
+        ActRequest->deliver_response = true;
+    }
+    
+    switch( request->base.type )
+    {
+    case MtRequestSocketAccept:
+        rc = mwsocket_create_sockinst( &acceptinst, true );
+        if ( rc )
+        {
+            break;
+        }
+        ActRequest->sockinst->flags |= request->socket_accept.flags;
+        ActRequest->sockinst->child_inst = acceptinst;
+        break;
+        //case MtRequestSocketClose:
+        //ActRequest->sockinst->remote_close_requested = true;
+        //break;
+    default:
+        break;
+    }
+    
+    return rc;
+}
 
 static void
 MWSOCKET_DEBUG_ATTRIB
@@ -818,26 +893,55 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
     // in some other way. In the worst case, we can close the FD
     // underneath the user.
 
+    if ( Response->base.flags & _MT_RESPONSE_FLAG_REMOTE_CLOSED
+        && !ActRequest->sockinst->pending_sigpipe )
+    {
+        // A SIGPIPE is delivered when writing to a closed socket.
+        bool sigpipe = ( Response->base.type == MtResponseSocketSend );
+
+        ActRequest->sockinst->pending_sigpipe = sigpipe;
+        
+        pr_info( "Remote side of socket %d closed. "
+                 "Will%s deliver SIGPIPE to %d [%s]\n",
+                 ActRequest->sockinst->local_fd,
+                 (sigpipe ? "" : " not"),
+                 ActRequest->sockinst->proc->pid,
+                 ActRequest->sockinst->proc->comm );
+
+    }
+
     // N.B. Do not use ActRequest->response; it might not be valid yet.
     if ( status < 0 )
     {
         ActRequest->sockinst->pending_errno = status;
 
         // A critical error is translated into EPIPE - meaning that we
-        // assume the remote socket has closed.
+        // assume the remote socket has closed. Is this correct??
         if ( Response->base.sockfd > 0
              && MtResponseSocketClose != Response->base.type )
         {
-            ActRequest->sockinst->pending_errno =
-                IS_CRITICAL_ERROR( status ) ? -EPIPE : status;
+            if ( status == -MW_EPIPE || IS_CRITICAL_ERROR( status ) )
+            {
+                ActRequest->sockinst->pending_sigpipe = true;
+            }
+            else
+            {
+                ActRequest->sockinst->pending_errno = status;
+            }
         }
+
         if ( MtResponseSocketAccept == Response->base.type )
         {
             // In mwsocket_write() we created the local accept socket even
             // though the creation had not yet completed. Destroy it here.
             MYASSERT( !"Socket accept() failed - verify me" );
             MYASSERT( ActRequest->sockinst->child_inst );
-            fput( ActRequest->sockinst->child_inst->file );
+            // Race to destroy: on termination with socket in accept() state
+            if ( ActRequest->sockinst->child_inst
+                 && !ActRequest->sockinst->release_started )
+            {
+                fput( ActRequest->sockinst->child_inst->file );
+            }
         }
         goto ErrorExit;
     }
@@ -870,7 +974,7 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
         // We're done with the accept(). The originating instance can forget about it.
         ActRequest->sockinst->child_inst = NULL;
         break;
-
+/*
     case MtResponseSocketRecv:
     case MtResponseSocketRecvFrom:
         // Readable data was indicated. Was anything read? If not,
@@ -900,6 +1004,7 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActRequest,
             ActRequest->sockinst->pending_errno = -EPIPE;
         }
         break;
+        */
     default:
         break;
     }
@@ -947,7 +1052,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq )
 
     if ( RING_FULL( &g_mwsocket_state.front_ring ) )
     {
-        pr_alert("Front ring is full. Is remote side up?\n");
+        MYASSERT( !"Front ring is full" );
         rc = -EAGAIN;
         goto ErrorExit;
     }
@@ -1468,18 +1573,8 @@ mwsocket_read( struct file * File,
     }
 
     // Is there a pending error on this socket? If so, return it.
-    if ( 0 != sockinst->pending_errno )
-    {
-        MYASSERT( !"There's a pending error on this socket. Delivering." );
-        rc = sockinst->pending_errno;
-        sockinst->pending_errno = 0;
-        if ( -EPIPE == rc )
-        {
-            mwsocket_deliver_sigpipe( sockinst );
-        }
-
-        goto ErrorExit;
-    }
+    rc = mwsocket_pending_error( sockinst, true );
+    if ( rc ) goto ErrorExit;
     
     if ( wait_for_completion_interruptible( &actreq->arrived ) )
     {
@@ -1499,13 +1594,9 @@ mwsocket_read( struct file * File,
         goto ErrorExit;
     }
 
-    // Did the remote side close unexpectedly?
-    if ( -EPIPE == response->base.status )
-    {
-        mwsocket_deliver_sigpipe( sockinst );
-        rc = -EPIPE;
-        goto ErrorExit;
-    }
+    // Did the remote side close unexpectedly? Deliver SIGPIPE;
+    // otherwise don't do anything else.
+    mwsocket_pending_error( sockinst, false );
 
     rc = copy_to_user( Bytes, (void *)response, response->base.size );
     if ( rc )
@@ -1539,7 +1630,7 @@ mwsocket_write( struct file * File,
     mt_request_generic_t * request = NULL;
     mwsocket_active_request_t * actreq = NULL;
     mwsocket_instance_t * sockinst = NULL;
-    mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
+    //mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
     mt_request_base_t base;
     bool sent = false;
     // Do not expect a read() after this if we return -EAGAIN
@@ -1572,33 +1663,13 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    // Is there a pending error on this socket? If so, return it.
-    if ( 0 != sockinst->pending_errno )
-    {
-        MYASSERT( !"There's a pending error on this socket. Delivering." );
-        rc = sockinst->pending_errno;
-        sockinst->pending_errno = 0;
-        if ( -EPIPE == rc )
-        {
-            mwsocket_deliver_sigpipe( sockinst );
-        }
-
-        goto ErrorExit;
-    }
-
+    // Is there a pending error on this socket? If so, deliver it.
+    rc = mwsocket_pending_error( sockinst, true );
+    if ( rc ) goto ErrorExit;
+    
     // Create a new active request
     rc = mwsocket_create_active_request( sockinst, &actreq );
     if ( rc ) goto ErrorExit;
-
-    // If accept, create new sock instance (and FD) now, in the
-    // caller's context, and set up relationships betwee the two.
-    if ( MtRequestSocketAccept == base.type )
-    {
-        rc = mwsocket_create_sockinst( &acceptinst, true );
-        if ( rc )    goto ErrorExit;
-
-        sockinst->child_inst = acceptinst;
-    }
 
     // Populate the request
     request = &actreq->request;
@@ -1619,20 +1690,8 @@ mwsocket_write( struct file * File,
     }
 
     // Now we have the full request. Populate it further as needed. 
-    request->base.sockfd = actreq->sockinst->remote_fd; 
-    if ( MtRequestSocketAccept ==  base.type )
-    {
-        sockinst->flags |= request->socket_accept.flags;
-    }
-    
-    if ( MT_REQUEST_CALLER_WAITS( request ) )
-    {
-        // This write() will be followed immediately by a
-        // read(). Indicate the ID that blocks the calling thread.
-        sockinst->read_expected = true;
-        sockinst->blockid = actreq->id;
-        actreq->deliver_response = true;
-    }
+    rc = mwsocket_pre_process_request( actreq );
+    if ( rc ) goto ErrorExit;
 
     // Write to the ring
     rc = mwsocket_send_request( actreq );
@@ -1650,7 +1709,7 @@ ErrorExit:
     if ( rc && !sent )
     {
         mwsocket_destroy_active_request( actreq );
-        mwsocket_put_sockinst( acceptinst );
+        mwsocket_put_sockinst( sockinst->child_inst );
     }
 
     return rc;
@@ -1769,8 +1828,10 @@ mwsocket_release( struct inode *Inode,
         goto ErrorExit;
     }
 
-    pr_debug( "Processing release() on fd=%d\n",
-              sockinst->local_fd );
+    sockinst->release_started = true;
+
+    pr_info( "Processing release() on fd=%d\n",
+             sockinst->local_fd );
 
     // Close the remote socket only if it exists. It won't exist in
     // the case where accept() was called but hasn't returned yet. In
