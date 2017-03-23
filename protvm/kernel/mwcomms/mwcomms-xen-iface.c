@@ -3,6 +3,33 @@
 * Copyright (C) 2016, Star Lab — All Rights Reserved
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
+/**
+ * This file handles the initial handshake between the PVM and the
+ * INS, meaning that it monitors and publishes to certain paths in
+ * XenStore and manages the sharing of memory pages for the ring
+ * buffer.
+ *
+ * The XenStore keys that are managed are defined in xen_keystore_defs.h. They are
+ *
+ * SERVER_ID_KEY
+ * CLIENT_ID_KEY
+ * GNT_REF_KEY
+ * VM_EVT_CHN_PORT_KEY
+ * VM_EVT_CHN_BOUND_KEY
+ *
+ * The sequence of events is:
+ *
+ * 1. Write the current domU's domid to SERVER_ID_KEY
+ * 2. Wait for the client domU's domid to appear in CLIENT_ID_KEY
+ * 3. Create an unbound event channel and write its port to VM_EVT_CHN_PORT_KEY
+ * 4. Allocate memory and offer the client grants to it (1/page)
+ * 5. Reset the value in CLIENT_ID_KEY
+ * 6. Watch for VM_EVT_CHN_BOUND_KEY to be populated by the client
+ * 7. Write the grant refs to GNT_REF_KEY
+ * 8. Invoke the callback given in mw_xen_init.
+ *
+ */
+
 
 #include "mwcomms-common.h"
 
@@ -56,7 +83,7 @@ static mwcomms_xen_globals_t g_mwxen_state;
 
 
 static int
-mw_xen_write_to_key(const char * dir, const char * node, const char * value)
+mw_xen_write_to_key( const char * dir, const char * node, const char * value )
 {
    struct xenbus_transaction   txn;
    int                         err;
@@ -136,7 +163,7 @@ mw_xen_read_from_key( const char * dir, const char * node )
 
 
 static int
-mw_xen_write_server_id_to_key(void) 
+mw_xen_write_server_id_to_key( void )
 {
    const char *dom_id_str = NULL;
    int err = 0;
@@ -170,10 +197,8 @@ ErrorExit:
 }
 
 
-
-
 static int
-mw_xen_create_unbound_evt_chn(void) 
+mw_xen_create_unbound_evt_chn( void )
 {
    struct evtchn_alloc_unbound alloc_unbound; 
    char                        str[MAX_GNT_REF_WIDTH]; 
@@ -257,6 +282,7 @@ mw_xen_is_evt_chn_closed( void )
    return 1;
 }
 
+
 static void 
 mw_xen_free_unbound_evt_chn( void )
 {
@@ -279,6 +305,7 @@ mw_xen_free_unbound_evt_chn( void )
       pr_debug("Closed event channel port=%d\n", close.port);
    }
 }
+
 
 static int 
 mw_xen_offer_grant( domid_t ClientId )
@@ -420,13 +447,11 @@ mw_xen_client_id_watch =
 
 
 static void
-mw_xen_vm_port_is_bound(struct xenbus_watch *w,
-                             const char **v,
-                             unsigned int l)
+mw_xen_vm_port_is_bound( struct xenbus_watch *w,
+                         const char **v,
+                         unsigned int l )
 {
-   char * is_bound_str = NULL; 
-
-   //pr_debug( "Checking whether %s is asserted\n", VM_EVT_CHN_BOUND_PATH );
+    char * is_bound_str = NULL; 
 
    is_bound_str = (char *) mw_xen_read_from_key( XENEVENT_XENSTORE_ROOT,
                                                  VM_EVT_CHN_BOUND_KEY );

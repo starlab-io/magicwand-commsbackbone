@@ -75,7 +75,7 @@ typedef struct _thread_item
     //
     // Connection state, reported back to PVM
     //
-    mt_response_flags_t state_flags;
+    mt_flags_t     state_flags;
 
     //
     // The native socket under management - save it's metadata for
@@ -86,14 +86,14 @@ typedef struct _thread_item
     //
     // This socket metadata is the native NetBSD values, e.g. for AF_INET6.
     //
-    int          sock_domain;
-    int          sock_type;
-    int          sock_protocol;
+    int            sock_domain;
+    int            sock_type;
+    int            sock_protocol;
 
-    mt_port_t    port_num;
+    mt_port_t      port_num;
 
-    uint8_t      remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
-    
+    uint8_t        remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
+
 } thread_item_t;
 
 

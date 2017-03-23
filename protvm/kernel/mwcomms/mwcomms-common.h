@@ -52,7 +52,16 @@ typedef struct _mw_region
     do { if (x) break;                                                  \
         pr_emerg( "### ASSERTION FAILED %s: %s: %d: %s\n",              \
                   __FILE__, __func__, __LINE__, #x);                    \
+        dump_stack();                                                   \
         DEBUG_BREAK();                                                  \
     } while (0)
+
+
+// Define pr_verbose()
+#ifdef MYVERBOSE
+#  define pr_verbose(...)   pr_debug(__VA_ARGS__)
+#else
+#  define pr_verbose(...)   ((void)0)
+#endif
 
 #endif // mwcomms_common_h

@@ -631,16 +631,6 @@ post_process_response( mt_request_generic_t  * Request,
     // immediately and relay EPIPE status to PVM. The return code from
     // close is dropped.
 
-/*    
-    if ( -MW_EPIPE == Response->base.status )
-    {
-        DEBUG_PRINT( "%x / %d: remote side closed -- closing local side now.\n",
-                     Worker->public_fd,  Worker->local_fd );
-        (void) xe_net_internal_close_socket( Worker );
-        release_worker_thread( Worker );
-    }
-*/
-
     // Propogate state, including remote closure status
     if ( NULL != Worker )
     {
@@ -673,50 +663,6 @@ post_process_response( mt_request_generic_t  * Request,
         }
     }
 
-    /*
-    switch( Response->base.type )
-    {
-    case MtResponseSocketRecv:
-        if ( Worker->poll_events & MW_POLLIN
-             && 0 == Response->socket_recv.count )
-            //&& MT_RESPONSE_SOCKET_RECV_SIZE == Response->base.size )
-        {
-            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
-                         Response->base.sockfd );
-            DEBUG_BREAK();
-            Response->base.status = -EPIPE;
-        }
-        break;
-    case MtResponseSocketRecvFrom:
-        // Readable data was indicated. Was anything read? If not,
-        // the socket closed. Applies to next case too.
-        if ( Worker->poll_events & MW_POLLIN
-             && 0 == Response->socket_recvfrom.count )
-        //&&  MT_RESPONSE_SOCKET_RECVFROM_SIZE == Response->base.size )
-        {
-            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
-                         Response->base.sockfd );
-            DEBUG_BREAK();
-            Response->base.status = -EPIPE;
-        }
-        break;
-    case MtResponseSocketSend:
-        // Socket was writable but last write() didn't write
-        // anything. Therefore it has closed.
-        if ( Worker->poll_events & MW_POLLOUT
-             && 0 == Response->socket_send.count )
-            //&& 0 == Response->socket_send.sent )
-        {
-            DEBUG_PRINT( "Socket %x has conditions of remote close\n",
-                         Response->base.sockfd );
-            DEBUG_BREAK();
-            Response->base.status = -EPIPE;
-        }
-        break;
-    default:
-        break;
-        }
-    */
     return rc;
 }
 
@@ -984,73 +930,6 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         }
     }
     
-/*    
-    if ( MtRequestSocketAttrib == request_type )
-    {
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-        
-    if ( XE_PROCESS_IN_MAIN_THREAD( request_type ) )
-    {
-        if ( !XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( request_type ) )
-        {
-            // Request requires a new thread, which we procure by
-            // requesting the thread for an invalid socket. The thread and
-            // socket are bound for the lifetime of the socket.
-
-            // If we're creating a socket FD or an epoll pseudo-FD, we
-            // process the request here so that future work goes to the
-            // right thread. The operation is cheap in both these cases.
-            rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
-            if ( rc )
-            {
-                // No worker thread is available. We could yield and try
-                // again. For now, give up.
-                goto ErrorExit;
-            }
-            BufferItem->assigned_thread = *AssignedThread;
-        }
-
-        // Process here, in main thread
-        *ProcessFurther = false;
-        rc = process_buffer_item( BufferItem );
-    }
-    
-    else if ( MtRequestSocketClose == request_type )
-    {
-        // This socket's thread could be stuck awaiting connect() or
-        // accept(), but the PVM has asked us to close it now. So,
-        // we'll close it from this thread and fail the pending IO.
-        *ProcessFurther = false;
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-        if ( rc )
-        {
-            // No thread; already closed?
-            goto ErrorExit;
-        }
-        
-        BufferItem->assigned_thread = *AssignedThread;
-        xe_pollset_handle_close( *AssignedThread );
-        rc = process_buffer_item( BufferItem );
-    }
-    else
-    {
-        // This request is for an existing FD/thread. Find the thread
-        // that services the connection and assign it. It will be
-        // processed by that thread later.
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-        if ( rc )
-        {
-            goto ErrorExit;
-        }
-
-        BufferItem->assigned_thread = *AssignedThread;
-        rc = workqueue_enqueue( (*AssignedThread)->work_queue, BufferItem->idx );
-        if ( rc )
-        {
-            goto ErrorExit;
-        }
-    }
-*/
     if ( *ProcessFurther )
     {
         DEBUG_PRINT( "Work item %d assigned to thread %d\n",
@@ -1169,13 +1048,6 @@ init_state( void )
         curr->offset = ONE_REQUEST_REGION_SIZE * i;
         curr->region = &g_state.in_request_buf[ curr->offset ];
     }
-/*
-    //
-    // Init polling subsystem, which spawns a dedicated thread
-    //
-    rc = xe_pollset_init();
-    if ( rc ) goto ErrorExit;
-*/
     
     //
     // Init the threads' state, so that posting to the semaphores
@@ -1260,8 +1132,6 @@ fini_state( void )
     DEBUG_PRINT( "Shutting down all threads\n" );
     
     g_state.shutdown_pending = true;
-
-//    xe_pollset_fini();
     
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
@@ -1300,8 +1170,6 @@ message_dispatcher( void )
     ssize_t size = 0;
     bool more_processing = false;
 
-    //struct timespec t1,t2,t3;
-
     // Forever, read commands from device and dispatch them, allowing
     // the other threads to execute.
     while( true )
@@ -1309,8 +1177,6 @@ message_dispatcher( void )
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
         mt_request_type_t request_type;
-
-        //clock_gettime(CLOCK_REALTIME, &t1);
 
         // Always allow other threads to run in case there's work.
         //xe_yield();
@@ -1376,7 +1242,7 @@ message_dispatcher( void )
         }
 
         // Remember: we'll yield next...
-        request_type = MT_RESPONSE_GET_TYPE( myitem->request );
+        request_type = MT_REQUEST_GET_TYPE( myitem->request );
         if ( request_type == MtRequestSocketConnect
              || request_type == MtRequestSocketAccept)
         {
@@ -1386,11 +1252,6 @@ message_dispatcher( void )
         {
             sched_yield();
         }
-
-        //clock_gettime(CLOCK_REALTIME, &t2);
-        //t3 = diff(t1,t2);
-        //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
-                 //t3.tv_sec, t3.tv_nsec);
     } // while
     
 ErrorExit:

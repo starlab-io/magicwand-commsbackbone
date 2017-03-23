@@ -13,18 +13,15 @@
 #  error "This file should not be included directly"
 #endif
 
-// XXXX do this smartly 
-
-// Set it small for testing so we process more messages.
-// There's a tradeoff here: number of in-flight
+// Do this smartly: there's a tradeoff between the number of in-flight
 // messages vs max send/recv sizes.
 
 // Useful sizes to consider:
 //  mt_request_base_t: 0x18
-//  non-buffer portion of mt_request_socket_send_t: 0x1a
-//  non-buffer portion of mt_response_socket_recv_t: 0x24
+//  non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
 
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (1024 - 0x30)
+#define MESSAGE_TARGET_MAX_SIZE 1024
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a)
 
 //
 // Number of grant refs (1/page). This determines how much space we

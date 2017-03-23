@@ -7,6 +7,13 @@
  *
  * The user of this include file must have defined primitive types
  * like uint8_t, uint32_t, etc prior to including this file.
+ *
+ * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
+ *
+ * If you change this file, update (if needed) common_config.h and
+ * rebuild everything.
+ *
+ * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
  ***************************************************************************/
 
 #include "mwsocket.h"
@@ -39,7 +46,16 @@ typedef uint8_t  mt_bool_t;
 //   MT_SOCKET_CREATE_RESPONSE_TYPE 0x7001
 //
 
+//
+// And here are their signatures
+//
+typedef uint16_t mt_sig_t;
+#define MT_SIGNATURE_REQUEST  (mt_sig_t)0xff11
+#define MT_SIGNATURE_RESPONSE (mt_sig_t)0xff33
+
+
 #define MT_RESPONSE_MASK 0x7000
+#define MT_TYPE_MASK     0x00ff
 
 #define MT_REQUEST(x)     (x)
 #define MT_RESPONSE(x)    (MT_RESPONSE_MASK | (x))
@@ -54,7 +70,7 @@ typedef uint8_t  mt_bool_t;
 //
 typedef uint64_t mt_id_t;
 
-#define MT_ID_UNSET_VALUE (mt_id_t)-3
+#define MT_ID_UNSET_VALUE (mt_id_t)0
 
 //
 // Possible message types - request and response values run in
@@ -69,42 +85,45 @@ typedef uint64_t mt_id_t;
 // XXXX: reexamine these
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
-#define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
-#define _MT_TYPE_MASK_NOBLOCK     0x0800
+//#define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
+//#define _MT_TYPE_MASK_NOBLOCK     0x0800
+
+// PVM-initiated close() will not execute while this operation is in-process
+#define _MT_TYPE_MASK_CLOSE_WAITS 0x0400
+
 //#define _MT_TYPE_MASK_INS_MAIN    0x1000 // INS should process in main thread
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
 
 // The call must block on the PVM side, regardless of file's flags
-#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_BLOCK )
+//#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_BLOCK )
 
 // The call should not block on PVM side, regardless of file's flags
-#define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
+//#define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
+
+#define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
 
 // The INS should process this request in its main thread - there is no thread assignment
 
 typedef enum
 {
     MtRequestInvalid        = MT_REQUEST( 0x00 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x01 |  _MT_TYPE_MASK_ALLOC_FD ),
-    MtRequestSocketConnect  = MT_REQUEST( 0x02 | _MT_TYPE_MASK_BLOCK ),
-    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD ),
+    MtRequestSocketConnect  = MT_REQUEST( 0x02  ),
+    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD ),
     MtRequestSocketRead     = MT_REQUEST( 0x04 ),
-    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_NOBLOCK ),
-    MtRequestSocketBind     = MT_REQUEST( 0x06 | _MT_TYPE_MASK_BLOCK ),
+    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketBind     = MT_REQUEST( 0x06 ),
     MtRequestSocketListen   = MT_REQUEST( 0x07 ),
     MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD ), 
     MtRequestSocketRecv     = MT_REQUEST( 0x09 ),
     MtRequestSocketRecvFrom = MT_REQUEST( 0x0a ),
 
-    MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_BLOCK ),
-    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_BLOCK ),
-
+    MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_CLOSE_WAITS ),
     MtRequestSocketAttrib   = MT_REQUEST( 0x20 ),    
-    // XXXX: add these, to be handled on both sides by dedicated threads?????????
     
-    //MtRequestPollsetMod     = MT_REQUEST( 0x30   ),
     MtRequestPollsetQuery   = MT_REQUEST( 0x31 ),
 } mt_request_type_t;
 
@@ -153,9 +172,6 @@ typedef int32_t mt_status_t;
     ( ((x) >> _CRITICAL_ERROR_PREFIX_SHIFT) == _CRITICAL_ERROR_PREFIX )
 
 
-typedef uint16_t mt_sig_t;
-#define MT_SIGNATURE_REQUEST  0xff11
-#define MT_SIGNATURE_RESPONSE 0xff33
 
 
 #define MT_STATUS_INTERNAL_ERROR CRITICAL_ERROR(1)
@@ -216,15 +232,12 @@ typedef struct _mt_sockaddr_in
 #define MT_INADDR_ANY ((unsigned long int) 0x00000000)
 
 
-typedef uint32_t mt_request_flags_t;
+typedef uint32_t mt_flags_t;
 
-// The PVM wrapper will read the response
+//
+// Indicates the PVM wrapper will read the response
+//
 #define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
-
-// This request is to be processed only when IO is available 
-#define _MT_FLAGS_DELAYED_IO                 0x02
-
-//#define _MT_FLAGS_ASSOCIATED_IO              0x01
 
 #define MT_REQUEST_CALLER_WAITS(_req)                                   \
     ( (_req)->base.flags & _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE )
@@ -257,12 +270,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
     // aio_read()/aio_write().
-    mt_request_flags_t  flags;
+    mt_flags_t          flags;
 } mt_request_base_t;
 
-
-
-typedef uint32_t mt_response_flags_t;
 
 // Did the remote side of the TCP/IP connection close?
 #define _MT_RESPONSE_FLAG_REMOTE_CLOSED 0x1
@@ -293,7 +303,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
     mt_status_t         status;
 
     // Flags pertaining to response or remote socket state.
-    mt_response_flags_t flags;
+    mt_flags_t flags;
 } mt_response_base_t;
 
 #define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
@@ -364,13 +374,13 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 {
     mt_request_base_t base;
-    uint32_t          flags; // flags, from accept4()
+    mt_flags_t        flags; // flags, from accept4()
 } mt_request_socket_accept_t;
 
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
-    mt_sockaddr_in_t sockaddr;
+    mt_sockaddr_in_t   sockaddr;
 } mt_response_socket_accept_t;
 
 #define MT_REQUEST_SOCKET_ACCEPT_SIZE sizeof(mt_request_socket_accept_t)
@@ -386,7 +396,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_recv
 {
     mt_request_base_t base;
-    uint32_t          flags;
+    mt_flags_t        flags;
     mt_size_t         requested;
 } mt_request_socket_recv_t;
 
@@ -458,7 +468,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 {
     mt_request_base_t  base;
-    uint32_t           flags;
+    mt_flags_t         flags;
     uint8_t            bytes[ MESSAGE_TYPE_MAX_PAYLOAD_LEN ];
 } mt_request_socket_send_t;
 
@@ -470,7 +480,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 
 // User must add count of filled bytes to size
 #define MT_REQUEST_SOCKET_SEND_SIZE  \
-    ( sizeof(mt_request_base_t) + sizeof(uint64_t) )
+    ( sizeof(mt_request_base_t) + sizeof(mt_flags_t) )
 
 #define MT_RESPONSE_SOCKET_SEND_SIZE sizeof(mt_response_socket_send_t)
 
@@ -502,34 +512,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 
 
 //
-// Socket behavioral attributes, normally set via setsockopt() and fcntl()
+// Socket behavioral attributes, normally set via setsockopt() and
+// fcntl(). This subset is supported by Magic Wand.
 //
-/*
-typedef struct MT_STRUCT_ATTRIBS _mt_request_pollset_mod
-{
-    mt_request_base_t base;
-    uint8_t           blocking;
-} mt_request_pollset_mod_t;
-
-typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_mod
-{
-    mt_response_base_t base;
-} mt_response_pollset_mod_t;
-
-#define MT_REQUEST_POLLSET_MOD_SIZE sizeof(mt_request_pollset_mod_t)
-#define MT_RESPONSE_POLLSET_MOD_SIZE sizeof(mt_response_pollset_mod_t)
-*/
-
-/*
-// Possible attributes that we might set
-#define MW_SOCK_ATTRIBS_MASK_NONBLOCK     0x0001 // O_NONBLOCK
-#define MW_SOCK_ATTRIBS_MASK_REUSEADDR    0x0002 // SOL_SOCKET SO_REUSEADDR
-#define MW_SOCK_ATTRIBS_MASK_KEEPALIVE    0x0004 // SOL_SOCKET SO_KEEPALIVE
-#define MW_SOCK_ATTRIBS_MASK_DEFER_ACCEPT 0x0008 // SOL_TCP TCP_DEFER_ACCEPT
-*/
-
-
-// The socket attributes handled by Magic Wand
 typedef enum
 {
     MtSockAttribNone,
@@ -630,7 +615,6 @@ typedef union _mt_request_generic
     mt_request_socket_getpeer_t socket_getpeer;
 
     mt_request_socket_attrib_t  socket_attrib;
-//    mt_request_pollset_mod_t    pollset_mod;
     mt_request_pollset_query_t  pollset_query;
 } mt_request_generic_t;
 
@@ -658,7 +642,6 @@ typedef union _mt_response_generic
     mt_response_socket_getpeer_t    socket_getpeer;
 
     mt_response_socket_attrib_t     socket_attrib;
-    //mt_response_pollset_mod_t       pollset_mod;
     mt_response_pollset_query_t     pollset_query;
 } mt_response_generic_t;
 
@@ -669,5 +652,12 @@ typedef union _mt_response_generic
     ((MT_SIGNATURE_RESPONSE == (x)->base.sig) &&                        \
      (MT_RESPONSE_MASK == (MT_RESPONSE_MASK & (x)->base.type)) &&       \
      ((x)->base.size >= sizeof(mt_response_base_t)) )
+
+// Container that holds either a request or a response
+typedef union _mt_request_response_union
+{
+    mt_request_generic_t  request;
+    mt_response_generic_t response;
+} mt_request_response_union_t;
 
 #endif // message_types_h

@@ -10,59 +10,127 @@
  * @date    2 March 2017
  * @version 0.2
  * @brief   Linux kernel module to support MagicWand comms to/from INS.
- */
-
-
-/**
- * This is the Magic Wand driver for the protected virtual machine
- * (PVM). It supports multithreading/multiprocessing - e.g a
- * multi-threaded application above it can read/write to its device,
- * and each request (write) can expect to receive the corresponding
- * response (from read).
  *
- * The driver supports a handshake with another Xen virtual machine,
- * the unikernel agent (implemented on the Rump unikernel). The
- * handshake involves discovering each others' domain IDs, event
- * channels, and sharing memory via grant references.
+ * This is the Magic Wand driver (Linux kernel module, or LKM) for the
+ * protected virtual machine (PVM). It supports
+ * multithreading/multiprocessing - e.g a multi-threaded application
+ * above it can read/write to its device, and each request (write) can
+ * expect to receive the corresponding response (from read).
  *
- * The driver supports the usage of an underlying Xen ring buffer. The
- * driver writes requests on to the ring buffer, and reads responses
- * off the ring buffer. The driver does not assume that a response
- * following a request will correspond to that last request.
+ * The LKM supports a handshake with another Xen virtual machine, the
+ * unikernel agent (implemented on the Rump unikernel). The handshake
+ * involves discovering each others' domain IDs, event channels, and
+ * sharing memory via grant references.
+ *
+ * The LKM supports the usage of an underlying Xen ring buffer. The
+ * LKM writes requests on to the ring buffer, and reads responses off
+ * the ring buffer. The LKM does not assume that a response following
+ * a request will correspond to that last request.
  *
  * The multithreading support works as follows:
  *
- * (1) A user-mode program writes a request to the driver's
- *     device. The driver assigns a system-wide unique ID to that
+ * (1) A user-mode program writes a request to the LKM's
+ *     device. The LKM assigns a driver-wide unique ID to that
  *     request and associates the caller's PID with the request ID via
  *     a connection mapping.
  *
- * (2) The user-mode program reads a response from the driver. The
- *     driver will cause that read() to block until it receives the
- *     response with an ID that matches the ID of the request sent by
- *     that program. This is implemented by a kernel thread that runs
- *     the consume_response_worker() function.
+ * (2) The user-mode program reads a response from the LKM. The LKM
+ *     will cause that read() to block until it receives the response
+ *     with an ID that matches the ID of the request sent by that
+ *     program. The LKM provides a kernel thread that reads responses
+ *     off the ring buffer and notifies blocked threads that a
+ *     response has arrived. A user-mode program is not required to
+ *     wait for a response; in that case the LKM will receive the
+ *     response and destroy it.
  *
  * This model implies some strict standards:
  *
  * - The remote side *must* send a response for every request it
  *   receives during normal (vs. rundown) operation
  * 
- *  - The programs that use this driver must be well-written: they
- *    must always read a response for every request they write. This
- *    driver attempts to enforce that behavior.
+ *  - The programs that use this LKM must be well-written: upon
+ *    writing a request, they must indicate to the LKM whether or
+ *    not they will read a response. Failure to do this correctly can
+ *    result in kernel memory leaks until the LKM is unloaded.
  *
- * This LKM tracks MW sockets that user applications have opened. If
- * an application doesn't close the socket correctly, this LKM will do
- * so on the application's behalf. This introduces a number of
- * complexities which are addressed, at least, in part. The resources
- * that track open sockets and mappings between apps and requests
- * could be accessed in two ways: (1) the app sends a request via
- * write() and reads a response via read(); (2) the app suddenly calls
- * dev_release() or dies (and the kernel calls dev_release()), in
- * which case the LKM puts the resources associated with the app into
- * "rundown" mode, sends "close" requests over the ring buffer and
- * waits for the responses on behalf of the app.
+ * This LKM backs each Magic Wand socket (mwsocket) with a kernel file
+ * object to enable integration with the kernel's VFS system. This
+ * provide important functionality that programs make use of; in
+ * particular:
+ *
+ * - release() allows for clean destruction of an mwsocket upon
+ *   program termination,
+ *
+ * - poll() allows for seemless usage of select(), poll() and epoll.
+ *
+ * Moreover, mwsockets implement these callbacks, which are used by
+ * the user-mode shim:
+ *
+ * - write() for putting a request on the ring buffer
+ *
+ * - read() for getting a response off the ring buffer
+ *
+ * - ioctl() for modifying the bahavior of an mwsocket, i.e. mimicking
+ *   the functionality of setsockopt() and fcntl()
+ *
+ * This LKM is structured such that this object, mwcomms-base, servers
+ * as the main entry point. It initializes its own kernel device and
+ * then asks the Xen interface (see mwcomms-xen-iface) to initialize,
+ * which in turn waits for an INS client to appear and completes a
+ * handshake with it. Once the handshake is done, a shared memory
+ * buffer will have been established and the mwsocket subsystem
+ * (mwcomms-socket) is notified. In turn, it initializes the Xen ring
+ * buffer.
+ *
+ * When a process wants to create a new mwsocket, it sends an IOCTL to
+ * the main LKM device. That causes mwcomms-socket to create a new
+ * mwsocket, backed by a file object, in the calling process, and
+ * return the mwsocket's new file descriptor. Thereafter the process
+ * interacts with that file descriptor to perform IO on the
+ * mwsocket. Closing the file descriptor will cause the release()
+ * callback in mwcomms-socket to be invoked, thus destroying the
+ * mwsocket.
+ *
+ * The core functionality of this LKM is found in mwcomms-socket. See
+ * mwcomms-socket.c for more info.
+ *
+ *
+ * Here's a visualization of the LKM:
+ *
+ *                              Application-initiated request
+ *                              -----------------------------
+ *  /dev/mwcomms
+ *  +----------+
+ *  | open     | <--------------- Init: open /dev/mwcomms
+ *  +----------+
+ *  | release  | <--------------- Shutdown: close /dev/mwcomms
+ *  +----------+
+ *  | ioctl    | <--------------- Check whether FD is for mwsocket, or
+ *  +----------+                   create new mwsocket
+ *       |
+ *       +----------------------------+
+ *                 (new mwsocket)     |
+ *                                    |
+                                      |
+ * Application-initiated              |         Application/Kernel-initiated
+ * ---------------------              v         ----------------------------
+ *                                 mwsocket
+ *                                +---------+
+ * send request --------------->  | write   |
+ *                                +---------+
+ * get response for request --->  | read    |
+ *                                +---------+
+ * modify mwsocket behavior --->  | ioctl   |
+ *                                +---------+
+ *                                | poll    | <------ select/poll/epoll
+ *                                +---------+
+ *                                | release | <------ close last ref to mwsocket
+ *                                +---------+
+ *
+ * The significant advantages to this design can be seen in the
+ * diagram: the kernel facilities are leveraged to support (1) polling
+ * and (2) mwsocket destruction, even in the case of process
+ * termination. This alleviates the LKM from those burdens.
  */
 
 // The device will appear under /dev using this value
@@ -107,9 +175,6 @@
 
 #include "mwcomms-ioctls.h"
 
-// Record performance metrics?
-#define MW_DO_PERFORMANCE_METRICS 0
-
 // In case of rundown, how many times will we await a response across
 // interrupts?
 #define MW_INTERNAL_MAX_WAIT_ATTEMPTS 2
@@ -138,16 +203,6 @@ typedef struct _mwcomms_base_globals {
     domid_t         my_domid;
 
     atomic_t        user_ct;
-    
-#if MW_DO_PERFORMANCE_METRICS
-
-    // Vars for performance tests
-    ktime_t        time_start;
-    ktime_t        time_end;
-    s64            actual_time;
-
-#endif // MW_DO_PERFORMANCE_METRICS
-    
 } mwcomms_base_globals_t;
 
 static mwcomms_base_globals_t g_mwcomms_state;
@@ -227,14 +282,15 @@ mwbase_dev_init( void )
 
     bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
 
-#if MYTRAP // GDB helper
-   struct module * mod = (struct module *) THIS_MODULE;
+    struct module * mod = (struct module *) THIS_MODULE;
    // gdb> add-symbol-file char_driver.ko $eax/$rax
-   printk( KERN_INFO
-           "\n################################\n"
-           "%s.ko @ 0x%p\n"
-           "################################\n",
-           DRIVER_NAME, mod->core_layout.base );
+    pr_info( "\n################################\n"
+             "%s.ko @ 0x%p\n"
+             "################################\n",
+             DRIVER_NAME, mod->core_layout.base );
+             //DRIVER_NAME, mod->module_core );
+
+#ifdef MYDEBUG // GDB helper - emites a breakpoint!
    asm( "int $3" // module base in *ax
         //:: "a" ((THIS_MODULE)->module_core));
         :: "a" ((THIS_MODULE)->core_layout.base)

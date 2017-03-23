@@ -831,7 +831,7 @@ getsockopt( int Fd,
         rc = -1;
         goto ErrorExit;
     }
-    
+
     attribs.modify = false;
 
     rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attribs );
