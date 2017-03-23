@@ -349,6 +349,9 @@ mwbase_dev_init( void )
 
    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
+   pr_info( "Ring buffer has 0x%lx pages. Total size is 0x%lx bytes.\n",
+            XENEVENT_GRANT_REF_COUNT, XENEVENT_GRANT_REF_COUNT * PAGE_SIZE );
+   
    // The socket iface is invoked when the ring sharing is
    // complete. Therefore, init it before the Xen iface.
    rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
@@ -477,7 +480,7 @@ mwbase_dev_ioctl( struct file  * File,
             rc = -EFAULT;
             goto ErrorExit;
         }
-
+        break;
     }
     case MW_IOCTL_IS_MWSOCKET:
     {
@@ -499,11 +502,11 @@ mwbase_dev_ioctl( struct file  * File,
             MYASSERT( !"Bad FD" );
             goto ErrorExit;
         }
-        
+
         verify.is_mwsocket = mwsocket_verify( file );
 
         fput( file );
-        
+
         // Copy the answer to the user
         rc = copy_to_user( &((mwsocket_verify_args_t *)Arg)->is_mwsocket,
                            &verify.is_mwsocket,

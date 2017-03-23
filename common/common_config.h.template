@@ -13,15 +13,6 @@
 #  error "This file should not be included directly"
 #endif
 
-// Do this smartly: there's a tradeoff between the number of in-flight
-// messages vs max send/recv sizes.
-
-// Useful sizes to consider:
-//  mt_request_base_t: 0x18
-//  non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
-
-#define MESSAGE_TARGET_MAX_SIZE 1024
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a)
 
 //
 // Number of grant refs (1/page). This determines how much space we
@@ -32,5 +23,31 @@
 //
 
 #define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+
+//
+// The items we're sharing on the ring buffer are big and we want to
+// make the best use of the ring buffer. Optimize our sizes so we can
+// maximize the number of slots available. We make use of ring.h in
+// these calculations.
+//
+// The offset of the first element in shared memory on x86_64 is
+//
+//   0x80 = 4 * sizeof(unsigned long) + 48
+//
+// So, provided we'll have at least 80 slots, we can re-appropriate 1
+// byte from each slot to the shared ring header. Depending on
+// application implementation, this could have the drawback of
+// generating lots of small messages. Research further to see if this
+// is how we should do things.
+//
+
+// Useful sizes to consider:
+//  mt_request_base_t: 0x18
+//  non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
+
+// If we decide to increase the message size, bump it up to the next
+// power of 2, minus 1, e.g. 0x7ff to maximize the slot count.
+#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
 
 #endif //common_config_h
