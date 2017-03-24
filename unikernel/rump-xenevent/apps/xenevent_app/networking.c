@@ -159,7 +159,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     int level = 0;
     int name  = 0;
     int err   = 0;
-    
+
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -485,6 +485,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                 MYASSERT( !"fcntl" );
                 Response->base.sockfd = -1;
                 close( sockfd );
+                goto ErrorExit; // internal error
             }
         }
         
@@ -502,6 +503,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
                               (mt_response_generic_t *) Response );
+ErrorExit:
     return rc;
 }
 
