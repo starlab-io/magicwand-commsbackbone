@@ -349,7 +349,7 @@ mwbase_dev_init( void )
 
    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
-   pr_info( "Ring buffer has 0x%lx pages. Total size is 0x%lx bytes.\n",
+   pr_info( "Ring buffer has 0x%x pages. Total size is 0x%lx bytes.\n",
             XENEVENT_GRANT_REF_COUNT, XENEVENT_GRANT_REF_COUNT * PAGE_SIZE );
    
    // The socket iface is invoked when the ring sharing is

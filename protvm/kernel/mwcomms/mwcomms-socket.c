@@ -96,6 +96,14 @@
  * delivered, it copies the response into the active request and
  * notifies any waiters on the active request's completion variable.
  *
+ * The above-described functionality can go bad on a TCP/IP pipeline
+ * that's saturated. This driver could report a send() as successful,
+ * whereas the TCP/IP send() on the INS returns EAGAIN. The
+ * application will find out about the failure only after it thinks it
+ * has already sent the bytes that did not go onto the network. A
+ * possible partial work-around is to fail a send() request on the PVM
+ * side if the socket's poll events indicate that it is not writable.
+ *
  * In case a non-delivered response contained an error, that error is
  * reported upon the next read() or write() against that socket
  * instance.
@@ -586,9 +594,14 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
     pr_verbose( "Referenced socket instance %p fd=%d, refct=%d\n",
               SockInst, SockInst->local_fd, val );
 
-    //MYASSERT( val < 20 );
-
+    // What's the maximum refct that should be against a sockinst?
+    // Every slot in the ring buffer could be in use by an active
+    // request againt it, plus there could be one active request being
+    // delivered to the user, plus another that has been consumed off
+    // the ring but not destroyed yet (see mwsocket_response_consumer).
+    MYASSERT( val <= RING_SIZE( &g_mwsocket_state.front_ring ) + 2 );
 }
+
 
 // @brief Dereferences the socket instance, destroying upon 0 reference count
 static void
@@ -919,6 +932,7 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
     return rc;
 }
 
+
 void
 mwsocket_debug_dump_actreq( void )
 {
@@ -1043,6 +1057,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
     
     return rc;
 }
+
 
 static void
 MWSOCKET_DEBUG_ATTRIB
@@ -1173,6 +1188,9 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
     int rc = 0;
     uint8_t * dest = NULL;
     mt_request_base_t * base = &ActiveRequest->rr.request.base;
+
+    // XXXX: Fail if ActiveRequest->SockInst->poll_events shows the
+    //       socket as non-writable?
     
     // Perform minimal base field prep
     base->sig    = MT_SIGNATURE_REQUEST;
@@ -1388,10 +1406,13 @@ mwsocket_response_consumer( void * Arg )
         }
 
         // Hereafter: Advance index as soon as we're done with the
-        // item in the ring buffer.
+        // item in the ring buffer. 
         rc = mwsocket_find_active_request_by_id( &actreq, response->base.id );
         if ( rc )
         {
+            // Active requests should never just "disappear". They are
+            // destroyed in an orderly fashion either here (below) or
+            // by the read callback.
             pr_warn( "Couldn't find active request with ID %lx\n",
                      (unsigned long) response->base.id );
             RING_CONSUME_RESPONSE();
@@ -1423,6 +1444,7 @@ mwsocket_response_consumer( void * Arg )
     } // while( true )
 
 ErrorExit:
+    // Inform the cleanup function that this thread is done.
     complete( &g_mwsocket_state.response_reader_done );
     return rc;
 }
@@ -1575,6 +1597,7 @@ mwsocket_poll_monitor( void * Arg )
 
 ErrorExit:
     mwsocket_put_sockinst( sockinst );
+    // Inform the cleanup function that this thread is done.
     complete( &g_mwsocket_state.poll_monitor_done );
     return rc;
 }
@@ -1813,7 +1836,6 @@ mwsocket_write( struct file * File,
     mt_request_generic_t * request = NULL;
     mwsocket_active_request_t * actreq = NULL;
     mwsocket_instance_t * sockinst = NULL;
-    //mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
     mt_request_base_t base;
     bool sent = false;
     // Do not expect a read() after this if we return -EAGAIN
@@ -2127,6 +2149,7 @@ mwsocket_init( mw_region_t * SharedMem )
 ErrorExit:
     return rc;
 }
+
 
 void
 mwsocket_fini( void )

@@ -8,12 +8,12 @@
  * The user of this include file must have defined primitive types
  * like uint8_t, uint32_t, etc prior to including this file.
  *
- * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
+ * WARNING                                                 WARNING
  *
  * If you change this file, update (if needed) common_config.h and
  * rebuild everything.
  *
- * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
+ * WARNING                                                 WARNING
  ***************************************************************************/
 
 #include "mwsocket.h"
