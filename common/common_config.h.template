@@ -13,13 +13,13 @@
 #  error "This file should not be included directly"
 #endif
 
-
 //
 // Number of grant refs (1/page). This determines how much space we
 // have for our ring buffer. For instance, if the order is 6, we share
 // 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
 // 6. Xen has an upper limit on how many pages can be shared. That
-// limit can be configured by a Xen boot parameter.
+// limit can be configured by a Xen boot parameter - specifically look
+// at gnttab_max_frames.
 //
 
 #define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
@@ -32,7 +32,7 @@
 //
 // The offset of the first element in shared memory on x86_64 is
 //
-//   0x80 = 4 * sizeof(unsigned long) + 48
+//   4 * sizeof(unsigned long) + 48 = 0n80 = 0x50
 //
 // So, provided we'll have at least 80 slots, we can re-appropriate 1
 // byte from each slot to the shared ring header. Depending on
@@ -45,9 +45,14 @@
 //  mt_request_base_t: 0x18
 //  non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
 
-// If we decide to increase the message size, bump it up to the next
-// power of 2, minus 1, e.g. 0x7ff to maximize the slot count.
-#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
+// If we decide to increase the message size, bump up
+// MESSAGE_TARGET_MAX_SIZE to the next power of 2 to make the best use
+// of shared memory.
+
+//#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
+#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
+
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+
 
 #endif //common_config_h

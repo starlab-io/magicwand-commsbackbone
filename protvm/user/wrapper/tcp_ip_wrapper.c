@@ -681,6 +681,8 @@ send( int          SockFd,
                           MT_REQUEST_SOCKET_SEND_SIZE,
                           SockFd );
 
+    request.socket_send.flags = Flags;
+
     while ( totSent < Len )
     {
         ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );

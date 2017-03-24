@@ -37,38 +37,44 @@ extern uint16_t client_id;
 #define XE_RECEIVE_ALL 0
 
 
-/*
-//
-// @brief Sets or clears the indicated flag on the file descriptor.
-//
 static int
-xe_net_set_fd_flag( IN int  NativeFd,
-                    IN int  Flag,
-                    IN bool Enabled )
+xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
 {
     int flags = 0;
-    int rc = 0;
 
-    DEBUG_PRINT( "%s flag(s) %x on fd %d\n",
-                 Enabled ? "Setting" : "Clearing", Flag, NativeFd );
+    if ( MsgFlags & MW_MSG_OOB )          flags |= MSG_OOB;
+    if ( MsgFlags & MW_MSG_PEEK )         flags |= MSG_PEEK;
+    if ( MsgFlags & MW_MSG_DONTROUTE )    flags |= MSG_DONTROUTE;
+    if ( MsgFlags & MW_MSG_CTRUNC )       flags |= MSG_CTRUNC;
+    //if ( MsgFlags & MW_MSG_PROXY )        flags |= MSG_PROXY;
+    if ( MsgFlags & MW_MSG_TRUNC )        flags |= MSG_TRUNC;
+    if ( MsgFlags & MW_MSG_DONTWAIT )     flags |= MSG_DONTWAIT;
+    if ( MsgFlags & MW_MSG_EOR )          flags |= MSG_EOR;
+    if ( MsgFlags & MW_MSG_WAITALL )      flags |= MSG_WAITALL;
+    //if ( MsgFlags & MW_MSG_FIN )          flags |= MSG_FIN;
+    //if ( MsgFlags & MW_MSG_SYN )          flags |= MSG_SYN;
+    //if ( MsgFlags & MW_MSG_CONFIRM )      flags |= MSG_CONFIRM;
+    //if ( MsgFlags & MW_MSG_RST )          flags |= MSG_RST;
+    //if ( MsgFlags & MW_MSG_ERRQUEUE )     flags |= MSG_ERRQUEUE;
+    if ( MsgFlags & MW_MSG_NOSIGNAL )     flags |= MSG_NOSIGNAL;
+    //if ( MsgFlags & MW_MSG_MORE )         flags |= MSG_MORE;
+    if ( MsgFlags & MW_MSG_WAITFORONE )   flags |= MSG_WAITFORONE;
+    //if ( MsgFlags & MW_MSG_FASTOPEN )     flags |= MSG_FASTOPEN;
+    if ( MsgFlags & MW_MSG_CMSG_CLOEXEC ) flags |= MSG_CMSG_CLOEXEC;
 
-    flags = fcntl( NativeFd, F_GETFL );
+    return flags;
+}
 
-    if ( Enabled )
-    {
-        flags = ( flags | Flag );
-    }
-    else
-    {
-        flags = ( flags & ~Flag );
-    }
-
-    rc = fcntl( NativeFd, F_SETFL, flags );
-    MYASSERT( 0 == rc );
-
-    return rc;
+/*
+static int
+xe_net_translate_accept_flags( IN mt_flags_t AcceptFlags )
+{
+    int flags = 0;
+    if ( AcceptFlags & MW_SOCK_NONBLOCK ) flags |= SOCK_NONBLOCK;
+    return flags;
 }
 */
+
 
 void
 xe_net_set_base_response( IN mt_request_generic_t   * Request,
@@ -441,33 +447,49 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     MYASSERT( 1 == WorkerThread->in_use );
     struct sockaddr_in sockaddr;
     int sockfd = 0;
-
-    bzero( &sockaddr, sizeof(sockaddr));
-    
+    int rc = 0;
     int addrlen = sizeof(sockaddr);
+    
+    bzero( &sockaddr, addrlen );
 
     DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is accepting.\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd );
 
+    // NetBSD does not implement accept4. Therefore the flags are dropped.
+    if ( Request->flags )
+    {
+        DEBUG_PRINT( "Dropping PVM flags 0x%x in accept()\n", Request->flags );
+    }
+
     sockfd = accept( WorkerThread->local_fd,
                      (struct sockaddr *) &sockaddr,
                      (socklen_t *) &addrlen );
-
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         Response->base.sockfd = -1;
-        // This happens frequently in non-blocking IO
-        //MYASSERT( !"accept" );
+        // This happens frequently in non-blocking IO. Don't assert.
     }
     else
     {
+        // Poor man's implementation of SOCK_NONBLOCK flag
+        if ( Request->flags & MW_SOCK_NONBLOCK )
+        {
+            int flags = fcntl( sockfd, F_GETFL );
+            flags |= O_NONBLOCK;
+            rc = fcntl( sockfd, F_SETFL, flags );
+            if ( rc )
+            {
+                Response->base.status = XE_GET_NEG_ERRNO();
+                MYASSERT( !"fcntl" );
+                Response->base.sockfd = -1;
+                close( sockfd );
+            }
+        }
+        
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
-
-        // Apache hack
-//        (void) xe_net_set_fd_flag( sockfd, O_NONBLOCK, true );
 
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
@@ -480,32 +502,8 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
                               (mt_response_generic_t *) Response );
-    return 0;
-}
-
-/*
-static int
-xe_net_internal_recv( IN thread_item_t * WorkerThread,
-                      INOUT uint8_t    * Buffer,
-                      IN mt_size_t       Requested,
-                      OUT mt_size_t    * ReadBytes )
-{
-    int events  = 0;
-    bool polled = false;
-    int rc      = 0;
-    mt_size_t count = 0;
-
-    while ( count < Requested )
-    {
-        ssize_t rcv = 0;
-
-
-    }
-
-ErrorExit:
     return rc;
 }
-*/
 
 
 int
@@ -518,6 +516,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     int             events = 0;
     int                 rc = 0;
     bool            polled = false;    
+    int              flags = xe_net_translate_msg_flags( Request->flags );
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -534,7 +533,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
             Response->count = recvfrom( WorkerThread->local_fd,
                                         (void *) Response->bytes,
                                         Request->requested,
-                                        Request->flags,
+                                        flags,
                                         ( struct sockaddr * ) &src_addr,
                                         &addrlen );
         } while( Response->count < 0 && EINTR == errno );
@@ -545,7 +544,6 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
         {
             Response->base.status = XE_GET_NEG_ERRNO();
             Response->count       = 0;
-            //MYASSERT( !"recvfrom" );
             break;
         }
 
@@ -604,7 +602,8 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     int             events = 0;
     int                 rc = 0;
     bool            polled = false;    
-
+    int              flags = xe_net_translate_msg_flags( Request->flags );
+    
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -626,7 +625,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
             Response->count = recv( WorkerThread->local_fd,
                                     &Response->bytes[ Response->count ],
                                     Request->requested - Response->count,
-                                    0 );
+                                    flags );
         } while( Response->count < 0 && EINTR == errno );
 
         // recv() returned without being interrupted
@@ -722,62 +721,14 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
     return 0;
 }
 
-/*
-int
-xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
-                    OUT mt_response_socket_read_t * Response,
-                    IN thread_item_t              * WorkerThread )
-{
-    MYASSERT( NULL != Request );
-    MYASSERT( NULL != Response );
-    MYASSERT( NULL != WorkerThread );
-
-    ssize_t totRead = 0;
-    Response->base.status = 0;
-    Response->base.size   = MT_RESPONSE_SOCKET_READ_SIZE;
-    
-    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
-    
-    DEBUG_PRINT ( "Worker thread %d (socket %d) is reading %d bytes\n",
-                  WorkerThread->idx, WorkerThread->public_fd, Request->requested);
-
-    while ( totRead < Request->requested )
-    {
-        ssize_t rcv = recv( Request->base.sockfd,
-                            &Response->bytes[ totRead ],
-                            Request->requested - totRead,
-                            0 );
-        if ( rcv < 0 && totRead == 0 )
-        {
-            Response->base.status =  XE_GET_NEG_ERRNO();
-            MYASSERT( !"read" );
-            break;
-        }
-        if ( rcv =< 0 )
-        {
-            // We read some bytes but not all of them. Not an error,
-            // but we're done.
-            break;
-        }
-
-        // rcv > 0
-        totRead += rcv;
-        Response->base.size += rcv;
-    }
-
-    xe_net_set_base_response( (mt_request_generic_t *)Request,
-                              MT_RESPONSE_SOCKET_READ_SIZE + totRead,
-                              (mt_response_generic_t *)Response );
-
-    return 0;
-}
-*/
 
 int
 xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      OUT mt_response_socket_send_t   * Response,
                      IN thread_item_t                * WorkerThread )
 {
+    int flags = xe_net_translate_msg_flags( Request->flags );
+
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -803,8 +754,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         ssize_t sent = send( WorkerThread->local_fd,
                              &Request->bytes[ Response->count ],
                              maxExpected - Response->count,
-                             (int) Request->flags );
-
+                             flags );
         if ( sent < 0 )
         {
             Response->base.status = XE_GET_NEG_ERRNO();

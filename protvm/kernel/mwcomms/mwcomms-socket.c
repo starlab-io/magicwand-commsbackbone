@@ -317,7 +317,9 @@ typedef struct _mwsocket_active_request
     // response field. Only signaled if deliver_response is true.
     struct completion arrived;
 
-    // Either the request or the response. We don't need both here.
+    // Either the request or the response. We don't need both
+    // here. The entire request is stored here until the response is
+    // processed.
     mt_request_response_union_t rr;
 
     // The bakcing socket instance
@@ -369,7 +371,6 @@ typedef struct _mwsocket_globals {
 
     // Support for poll(): to inform waiters of data
     wait_queue_head_t   waitq;
-    //struct mutex        poll_lock;
     
     bool   pending_exit;
 } mwsocket_globals_t;
@@ -830,9 +831,6 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
 
     mwsocket_put_sockinst( Request->sockinst );
 
-    // Dereference the file ????
-    //put_filp( Request->sockinst->file );
-
     // Remove from list
     mutex_lock( &g_mwsocket_state.active_request_lock );
     list_del( &Request->list_all );
@@ -1070,7 +1068,9 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
     // XXXX: In case the request failed and the requestor will not
     // process the response, we have to inform the user of the error
     // in some other way. In the worst case, we can close the FD
-    // underneath the user.
+    // underneath the user. For now, we will deliver an error or a
+    // SIGPIPE the next time the user interacts with the subject
+    // mwsocket.
 
     if ( Response->base.flags & _MT_RESPONSE_FLAG_REMOTE_CLOSED
         && !ActiveRequest->sockinst->pending_sigpipe )
@@ -1088,7 +1088,7 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->proc->comm );
     }
 
-    // N.B. Do not use ActiveRequest->response; it might not be valid yet.
+    // N.B. Do not use ActiveRequest->response -- it might not be valid yet.
     if ( status < 0 )
     {
         ActiveRequest->sockinst->pending_errno = status;
@@ -1171,9 +1171,9 @@ MWSOCKET_DEBUG_ATTRIB
 mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
 {
     int rc = 0;
-    void * dest = NULL;
+    uint8_t * dest = NULL;
     mt_request_base_t * base = &ActiveRequest->rr.request.base;
-
+    
     // Perform minimal base field prep
     base->sig    = MT_SIGNATURE_REQUEST;
     base->id     = ActiveRequest->id;
@@ -1204,9 +1204,9 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
         goto ErrorExit;
     }
 
-    dest = RING_GET_REQUEST( &g_mwsocket_state.front_ring,
-                             g_mwsocket_state.front_ring.req_prod_pvt );
-    if ( !dest ) 
+    dest = (uint8_t *) RING_GET_REQUEST( &g_mwsocket_state.front_ring,
+                                         g_mwsocket_state.front_ring.req_prod_pvt );
+    if ( !dest )
     {
         pr_err("destination buffer is NULL\n");
         rc = -EIO;
@@ -1392,7 +1392,6 @@ mwsocket_response_consumer( void * Arg )
         rc = mwsocket_find_active_request_by_id( &actreq, response->base.id );
         if ( rc )
         {
-            //MYASSERT( !"Read unrecognized response" );
             pr_warn( "Couldn't find active request with ID %lx\n",
                      (unsigned long) response->base.id );
             RING_CONSUME_RESPONSE();
@@ -1448,7 +1447,11 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     // Sent the request. We will wait for response.
     actreq->deliver_response = true;
 
-    rc = mwsocket_send_request( actreq );
+    do
+    {
+        rc = mwsocket_send_request( actreq );
+    } while ( -EAGAIN == rc );
+
     if ( rc ) goto ErrorExit;
 
     // Wait
@@ -1670,7 +1673,11 @@ mwsocket_handle_attrib( IN struct file            * File,
     request->attrib = SetAttribs->attrib;
     request->value  = SetAttribs->value;
 
-    rc = mwsocket_send_request( actreq );
+    do
+    {
+        rc = mwsocket_send_request( actreq );
+    } while ( -EAGAIN == rc );
+
     if ( rc ) goto ErrorExit;
 
     // Wait
@@ -1847,7 +1854,10 @@ mwsocket_write( struct file * File,
     rc = mwsocket_create_active_request( sockinst, &actreq );
     if ( rc ) goto ErrorExit;
 
-    // Populate the request
+    // Populate the request: read the entire thing from user
+    // memory. We could read just the base here and later copy the
+    // body from user memory into the ring buffer, but the extra calls
+    // are not worth it.
     request = &actreq->rr.request;
 
     rc = copy_from_user( request, Bytes, Len );
@@ -1858,14 +1868,15 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    if ( request->base.size < Len )
+    if ( request->base.size > Len )
     {
         MYASSERT( !"Request is longer than provided buffer." );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
-    // Write to the ring
+    // Write to the ring. Since the user is request this, we may
+    // return -EAGAIN.
     rc = mwsocket_send_request( actreq );
     if ( rc ) goto ErrorExit;
 

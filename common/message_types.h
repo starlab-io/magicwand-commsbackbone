@@ -371,6 +371,14 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_listen
 // Accept
 //
 
+//
+// Flags for accept4(). Only these (Linux) values will be in shared
+// memory. See /usr/include/x86_64-linux-gnu/bits/socket_type.h
+//
+
+#define MW_SOCK_NONBLOCK  00004000 // yes, base 8
+
+
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 {
     mt_request_base_t base;
@@ -387,9 +395,34 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 #define MT_RESPONSE_SOCKET_ACCEPT_SIZE sizeof(mt_response_socket_accept_t)
 
 
+//
+// Flags for send(), recv() and friends. Only these (Linux) values
+// will be in shared memory. See /usr/include/x86_64-linux-gnu/bits/socket.h
+//
+
+#define MW_MSG_OOB                 0x01
+#define MW_MSG_PEEK                0x02
+#define MW_MSG_DONTROUTE           0x04	
+#define MW_MSG_CTRUNC              0x08	
+#define MW_MSG_PROXY               0x10	
+#define MW_MSG_TRUNC               0x20
+#define MW_MSG_DONTWAIT            0x40 
+#define MW_MSG_EOR                 0x80 
+#define MW_MSG_WAITALL            0x100 
+#define MW_MSG_FIN                0x200
+#define MW_MSG_SYN                0x400
+#define MW_MSG_CONFIRM            0x800 
+#define MW_MSG_RST               0x1000
+#define MW_MSG_ERRQUEUE          0x2000
+#define MW_MSG_NOSIGNAL          0x4000
+#define MW_MSG_MORE              0x8000  
+#define MW_MSG_WAITFORONE       0x10000 
+#define MW_MSG_FASTOPEN      0x20000000 
+#define MW_MSG_CMSG_CLOEXEC  0x40000000	
+
 
 //
-// Recv: both recv and recvfrom use mt_request_socket_recv_t, but the
+// Recv: both recv and recvfrom use mt_request_socket_recv_t but the
 // response types they expect are different.
 //
 
