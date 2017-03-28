@@ -1,0 +1,20 @@
+#!/bin/bash 
+
+if [ -z $PVM_IP ]; then
+   echo "Failure: PVM_IP must be defined in env"
+   exit 1
+fi
+
+PVM_USER=sluser
+MWROOT="$HOME/proj/mw-cbb"
+
+
+docmd() {
+   echo "Command: $*"
+   $*
+}
+
+# Try: rsync -r --delete 
+
+docmd scp -rq $PVM_USER@$PVM_IP:/var/log/kern.log /tmp
+

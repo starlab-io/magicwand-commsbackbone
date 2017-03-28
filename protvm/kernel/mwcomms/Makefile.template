@@ -1,0 +1,23 @@
+# To preserve changes to Makefile, edit Makefile.template
+# See also: utils/mw_prep
+
+# The target module name
+obj-m += mwcomms.o
+
+# The objects that are linked to create the module
+mwcomms-y += mwcomms-base.o mwcomms-xen-iface.o mwcomms-socket.o
+
+ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
+ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
+
+# For debugging
+ccflags-y += -ggdb
+#ccflags-y += -DMYDEBUG
+ccflags-y += -DMYTRAP
+#ccflags-y +=  -DDEBUG # enable pr_debug
+#ccflags-y += -DVERBOSE # enable our custom "pr_verbose"
+
+all:
+	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules
+clean:
+	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) clean

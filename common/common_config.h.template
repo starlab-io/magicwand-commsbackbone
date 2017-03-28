@@ -6,25 +6,69 @@
  * comms system. Do not include this file directly; rather it is to be
  * included indirectly via message_types.h or xen_keystore_defs.h.
  *
+ * WARNING                                                 WARNING
+ *
  * To preserve changes, edit common_config.h.template
+ *
+ * If you change this file, update (if needed) common_config.h and
+ * rebuild everything.
+ *
+ * WARNING                                                 WARNING
  **************************************************************************/
 
 #ifndef _common_config_defined
 #  error "This file should not be included directly"
 #endif
 
-// XXXX do this smartly
-// Set it small for testing - then we can deal with more messages
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN 1500
-
 //
 // Number of grant refs (1/page). This determines how much space we
 // have for our ring buffer. For instance, if the order is 6, we share
 // 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
 // 6. Xen has an upper limit on how many pages can be shared. That
-// limit can be configured by a Xen boot parameter.
+// limit can be configured by a Xen boot parameter - specifically look
+// at gnttab_max_frames.
 //
 
-#define XENEVENT_GRANT_REF_ORDER  1 // (2^order == page count)
+#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+
+//
+// The items we're sharing on the ring buffer are big and we want to
+// make the best use of the ring buffer. Optimize our sizes so we make
+// use as much of the shared memory as possible. Note the tradeoff
+// here: number of ring buffer slots vs size of each slot. Fewer slots
+// will most certainly result in more EAGAIN errors, meaning that
+// write attempts from the PVM will have to be retried. We make use of
+// ring.h internals in the discussion below.
+//
+// The offset of the first element in shared memory is at
+//     struct XXXX_sring.ring
+//
+// On on x86_64 this is at 
+//     4 * sizeof(unsigned long) + 0n48 = 0n80 = 0x50
+//
+// So, provided we have at least 80 slots, we can re-appropriate 1
+// byte from each slot to the shared ring header. Depending on
+// application implementation, this could have the drawback of
+// generating lots of small messages. Preliminary testing shows that a
+// smaller message size (0x100) gives comparable times as larger
+// sizes, likely due to the lower number of retries required due to a
+// full ring.
+//
+// Useful sizes to consider:
+//     mt_request_base_t: 0x18
+//     non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
+//
+//
+// Ensure that MESSAGE_TARGET_MAX_SIZE is a power of 2 to make the
+// best use of shared memory.
+//
+
+#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
+//#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
+//#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
+//#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
+
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+
 
 #endif //common_config_h

@@ -13,9 +13,9 @@ CFLAGS += -I..
 CFLAGS += -I../../../../common
 CFLAGS += -I../platform/xen/xen/include 
 
-#CFLAGS+= -DMYDEBUG
-#CFLAGS+= -DMYTRAP
-#CFLAGS+= -DNODEVICE
+#CFLAGS += -DMYDEBUG
+CFLAGS += -DMYTRAP
+#CFLAGS += -DNODEVICE
 
 BAKE=rumprun-bake
 BAKE_FLAGS=-c ../xenevents.conf xen_events
@@ -53,7 +53,7 @@ $(APPNAME).run: $(APPNAME).bin
 	@echo " gdb -ex 'target remote:1234' $@"
 
 # threads.c
-$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c
+$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c pollset.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 

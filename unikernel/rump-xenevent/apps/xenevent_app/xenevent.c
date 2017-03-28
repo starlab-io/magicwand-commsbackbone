@@ -76,6 +76,7 @@
 
 #include "networking.h"
 #include "user_common.h"
+#include "pollset.h"
 
 #include "xenevent_app_common.h"
 
@@ -94,6 +95,21 @@ xenevent_globals_t g_state;
 
 // What's my domid? Needed by networking.c
 uint16_t   client_id;
+
+
+#define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
+    ( MtRequestSocketCreate == _mytype ||         \
+      MtRequestSocketAttrib == _mytype ||         \
+      MtRequestPollsetQuery == _mytype )
+
+#define XE_PROCESS_IN_MAIN_THREAD_NO_WORKER( _mytype )  \
+    ( MtRequestPollsetQuery == _mytype )
+
+
+// These are the request types we don't want stomping on each other.
+#define REQUEST_REQUIRES_OPLOCK( _req )                 \
+    ( MtRequestSocketSend == (_req)->base.type ||       \
+      MtRequestSocketClose == (_req)->base.type )
 
 
 //
@@ -265,21 +281,6 @@ ErrorExit:
     return rc;
 }
 
-/*
-static struct timespec 
-diff(struct timespec start, struct timespec end)
-{
-    struct timespec temp;
-    if ((end.tv_nsec-start.tv_nsec)<0) {
-        temp.tv_sec = end.tv_sec-start.tv_sec-1;
-        temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
-    } else {
-        temp.tv_sec = end.tv_sec-start.tv_sec;
-        temp.tv_nsec = end.tv_nsec-start.tv_nsec;
-    }
-    return temp;
-}
-*/
 
 static inline void
 xe_yield( void )
@@ -323,7 +324,7 @@ debug_print_state( void )
         
         printf("  %d: used %d sock %x/%d, pending items %d\n",
                curr->idx, curr->in_use,
-               curr->sock_fd, curr->native_sock_fd,
+               curr->public_fd, curr->local_fd,
                pending );
 
         if ( curr->in_use )
@@ -448,7 +449,9 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 static void
 release_buffer_item( buffer_item_t * BufferItem )
 {
-    int prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
+    int prev = 0;
+
+    prev = atomic_cas_32( &BufferItem->in_use, 1, 0 );
 
     if ( prev )
     {
@@ -463,7 +466,7 @@ release_buffer_item( buffer_item_t * BufferItem )
 // MT_INVALID_SOCKET_FD, we find an unused thread. Otherwise, we find
 // the thread that has already been assigned to work on Socket.
 //
-static int
+int
 get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
                           OUT thread_item_t ** WorkerThread )
 {
@@ -482,7 +485,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
             curr = &g_state.worker_threads[i];
 
             DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
-                         i, curr->in_use, curr->sock_fd );
+                         i, curr->in_use, curr->public_fd );
 
             // Look for any available thread and secure ownership of it.
             if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
@@ -514,7 +517,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
             goto ErrorExit;
         }
 
-        if ( Fd != curr->sock_fd )
+        if ( Fd != curr->public_fd )
         {
             MYASSERT( !"Internal error: socket's ID mismatches internal one\n" );
             rc = EINVAL;
@@ -547,6 +550,22 @@ release_worker_thread( thread_item_t * ThreadItem )
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
+    MYASSERT( !ThreadItem->oplock_acquired );
+    
+    // Clean up the struct for the next usage
+    
+    ThreadItem->public_fd = MT_INVALID_SOCKET_FD;
+    ThreadItem->local_fd  = MT_INVALID_SOCKET_FD;
+
+    ThreadItem->poll_events = 0;
+    ThreadItem->state_flags = 0;
+    ThreadItem->sock_domain = 0;
+    ThreadItem->sock_type   = 0;
+    ThreadItem->sock_protocol = 0;
+    ThreadItem->port_num    = 0;
+
+    bzero( &ThreadItem->remote_host, sizeof(ThreadItem->remote_host) );
+    
     // N.B. The thread might have never been reserved    
     prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     if ( prev )
@@ -598,6 +617,57 @@ send_dispatch_error_response( mt_request_generic_t * Request )
 
 
 //
+// Perform internal steps required after a buffer item has been
+// processed.
+//
+static int
+post_process_response( mt_request_generic_t  * Request,
+                       mt_response_generic_t * Response,
+                       thread_item_t         * Worker )
+{
+    int rc = 0;
+
+    // Handle the case where the other side closed. Teardown
+    // immediately and relay EPIPE status to PVM. The return code from
+    // close is dropped.
+
+    // Propogate state, including remote closure status
+    if ( NULL != Worker )
+    {
+        Response->base.flags = Worker->state_flags;
+    }
+
+    // In accept's success case, assign the new socket to an available thread
+    if ( MtRequestSocketAccept == Request->base.type
+         && Response->base.status >= 0 )
+    {
+        thread_item_t * accept_thread = NULL;
+        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
+        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD,  &accept_thread );
+        if ( rc )
+        {
+            // Destroy the new socket and fail the request
+            close( Response->base.status );
+            Response->base.status = MT_STATUS_INTERNAL_ERROR;
+        }
+        else
+        {
+            // A thread was available - record the assignment now
+            accept_thread->public_fd =
+                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+            accept_thread->local_fd = Response->base.status;
+
+            // Mask the native FD with the exported one
+            Response->base.status = accept_thread->public_fd;
+            Response->base.sockfd = accept_thread->public_fd;
+        }
+    }
+
+    return rc;
+}
+
+
+//
 // Processes one request and issues one response. A response MUST be
 // issued for every request.
 //
@@ -610,10 +680,8 @@ process_buffer_item( buffer_item_t * BufferItem )
     thread_item_t * worker = BufferItem->assigned_thread;
 
     mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
-    
-    //struct timespec t1,t2,t3;
-        
-    MYASSERT( NULL != worker );
+
+    bzero( &response.base, sizeof(response.base) );
     
     DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
@@ -622,84 +690,66 @@ process_buffer_item( buffer_item_t * BufferItem )
     switch( request->base.type )
     {
     case MtRequestSocketCreate:
-        rc = xe_net_create_socket( (mt_request_socket_create_t *) request,
-                                   (mt_response_socket_create_t *) &response,
+        rc = xe_net_create_socket( &request->socket_create,
+                                   &response.socket_create,
                                    worker );
         break;
     case MtRequestSocketConnect:
-        rc = xe_net_connect_socket( (mt_request_socket_connect_t *) request,
-                                    (mt_response_socket_connect_t *) &response,
+        rc = xe_net_connect_socket( &request->socket_connect,
+                                    &response.socket_connect,
                                     worker );
         break;
     case MtRequestSocketClose:
-        rc = xe_net_close_socket( (mt_request_socket_close_t *) request,
-                                  (mt_response_socket_close_t *) &response,
+        rc = xe_net_close_socket( &request->socket_close,
+                                  &response.socket_close,
                                   worker );
         break;
-//    case MtRequestSocketRead:
-//        rc = xe_net_read_socket( (mt_request_socket_read_t *) request,
-//                                 (mt_response_socket_read_t *) &response,
-//                                 worker );
-//        break;
     case MtRequestSocketSend:
-        rc = xe_net_send_socket( (mt_request_socket_send_t *)  request,
-                                  (mt_response_socket_send_t *) &response,
-                                  worker );
+        rc = xe_net_send_socket( &request->socket_send,
+                                 &response.socket_send,
+                                 worker );
         break;
     case MtRequestSocketBind: 
-        rc = xe_net_bind_socket( (mt_request_socket_bind_t *) request,
-                                 (mt_response_socket_bind_t *) &response,
+        rc = xe_net_bind_socket( &request->socket_bind,
+                                 &response.socket_bind,
                                  worker );
         break;
     case MtRequestSocketListen:
-        rc = xe_net_listen_socket( (mt_request_socket_listen_t *) request,
-                                   (mt_response_socket_listen_t *) &response,
+        rc = xe_net_listen_socket( &request->socket_listen,
+                                   &response.socket_listen,
                                    worker );
         break;
     case MtRequestSocketAccept:
-        rc = xe_net_accept_socket( (mt_request_socket_accept_t *) request,
-                                   (mt_response_socket_accept_t *) &response,
+        rc = xe_net_accept_socket( &request->socket_accept,
+                                   &response.socket_accept,
                                    worker );
         break;
     case MtRequestSocketRecv:
-        rc = xe_net_recv_socket( (mt_request_socket_recv_t*) request,
-                                 (mt_response_socket_recv_t*) &response,
-                                  worker );
+        rc = xe_net_recv_socket( &request->socket_recv,
+                                 &response.socket_recv,
+                                 worker );
         break;
     case MtRequestSocketRecvFrom:
-        rc = xe_net_recvfrom_socket( ( mt_request_socket_recv_t*) request,
-                                     ( mt_response_socket_recvfrom_t* ) &response,
+        rc = xe_net_recvfrom_socket( &request->socket_recv,
+                                     &response.socket_recvfrom,
                                      worker );
         break;
     case MtRequestSocketGetName:
     case MtRequestSocketGetPeer:
-        rc = xe_net_get_name( (mt_request_socket_getname_t *)  request,
-                              (mt_response_socket_getname_t *) &response,
+        rc = xe_net_get_name( &request->socket_getname,
+                              &response.socket_getname,
                               worker );
         break;
-    case MtRequestSocketFcntl:
-        rc = xe_net_socket_fcntl( (mt_request_socket_fcntl_t *) request,
-                                  (mt_response_socket_fcntl_t *) &response,
-                                  worker );
-        break;
-    case MtRequestPollCreate:
-        rc = xe_net_poll_create( (mt_request_poll_create_t *) request,
-                                 (mt_response_poll_create_t *) &response,
+    case MtRequestSocketAttrib:
+        rc = xe_net_sock_attrib( &request->socket_attrib,
+                                 &response.socket_attrib,
                                  worker );
         break;
+    case MtRequestPollsetQuery:
+        rc = xe_pollset_query( &request->pollset_query,
+                               &response.pollset_query );
+        break;
 
-    case MtRequestPollClose:
-        rc = xe_net_poll_close( (mt_request_poll_close_t *) request,
-                                (mt_response_poll_close_t *) &response,
-                                worker );
-        break;
-        
-    case MtRequestPollWait:
-        rc = xe_net_poll_wait( ( mt_request_poll_wait_t*) request,
-                               ( mt_response_poll_wait_t* ) &response,
-                               worker );
-        break;
-        
     case MtRequestInvalid:
     default:
         MYASSERT( !"Invalid request type" );
@@ -709,40 +759,21 @@ process_buffer_item( buffer_item_t * BufferItem )
         break;
     }
 
+    if ( worker && worker->oplock_acquired )
+    {
+        worker->oplock_acquired = false;
+        sem_post( &worker->oplock );
+    }
+
     // No matter the results of the network operation, we sent the
     // response back over the device. Write the entire response.
     // XXXXXXXXXX Optimize data written - we don't need to write all of it!
-    
+
     MYASSERT( 0 == rc );
     MYASSERT( MT_IS_RESPONSE( &response ) );
-    
-    //clock_gettime(CLOCK_REALTIME, &t1);
 
-    // In accept's success case, assign the new socket to an available thread
-    if ( MtRequestSocketAccept == request->base.type
-         && response.base.status >= 0 )
-    {
-        thread_item_t * accept_thread = NULL;
-        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
-        rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, &accept_thread );
-        if ( rc )
-        {
-            // Destroy the new socket and fail the request
-            close( response.base.status );
-            response.base.status = -1;
-        }
-        else
-        {
-            // A thread was available - record the assignment now
-            accept_thread->sock_fd =
-                MW_SOCKET_CREATE( client_id, accept_thread->idx );
-            accept_thread->native_sock_fd = response.base.status;
-
-            // Mask the native FD with the exported one
-            response.base.status = accept_thread->sock_fd;
-            response.base.sockfd = accept_thread->sock_fd;
-        }
-    }
+    // How to handle failure?
+    (void) post_process_response( request, &response, worker );
 
     DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
@@ -766,9 +797,10 @@ process_buffer_item( buffer_item_t * BufferItem )
     release_buffer_item( BufferItem );
 
     // Release the worker thread if: (1) we are releasing an FD, or
-    // (2) we were allocating an FD and that failed.
+    // (2) we were allocating an FD and that failed (accept is handled
+    // above).
     if ( MT_DEALLOCATES_FD( reqtype )
-         || (MT_ALLOCATES_FD( reqtype ) && response.base.status < 0 ) )
+         || (MtRequestSocketCreate == reqtype && response.base.status < 0 ) )
     {
         DEBUG_PRINT( "Releasing thread due to request type or response: "
                      "ID %lx type %x status %d\n",
@@ -802,8 +834,9 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
 {
     int rc = 0;
     mt_request_generic_t * request = (mt_request_generic_t *) BufferItem->region;
-    mt_request_type_t request_type = MT_RESPONSE_GET_TYPE( request );
-
+    mt_request_type_t request_type = MT_REQUEST_GET_TYPE( request );
+    bool process_now = false;
+    
     // Typically the caller needs to do more work on this buffer. When
     // this is false we release the buffer item.
     *ProcessFurther = true;
@@ -811,87 +844,100 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
+
     // Any failure here is an "internal" failure. In such a case, we
     // must make sure that we issue a response to the request, since
     // it won't be processed further.
-    if ( MtRequestSocketCreate == request_type
-         ||  MtRequestPollCreate == request_type )
-    {
-        // Request requires a new thread, which we procure by getting
-        // requesting the thread for an invalid socket. The thread and
-        // socket are bound for the lifetime of the socket.
 
-        // If we're creating a socket FD or an epoll pseudo-FD, we
-        // process the request here so that future work goes to the
-        // right thread. The operation is cheap in both these cases.
+    switch( request_type )
+    {
+        // Processed in current thread without a worker
+    case MtRequestPollsetQuery:
+        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        *AssignedThread = NULL;
+        process_now = true;
+        break;
+
+        // Processed in current thread with existing worker
+    case MtRequestSocketClose:
+    case MtRequestSocketBind:
+    case MtRequestSocketListen:
+    case MtRequestSocketAttrib:
+        MYASSERT( MT_INVALID_SOCKET_FD != request->base.sockfd );
+        process_now = true;
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        if ( rc ) goto ErrorExit;
+        break;
+
+        // Processed in current thread, acquire a new worker
+    case MtRequestSocketCreate:
+        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        process_now = true;
         rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
-        if ( rc )
-        {
-            // No worker thread is available. We could yield and try
-            // again. For now, give up.
-            goto ErrorExit;
-        }
+        if ( rc ) goto ErrorExit;
+        break;
 
-        BufferItem->assigned_thread = *AssignedThread;
-        *ProcessFurther = false;
-        rc = process_buffer_item( BufferItem );
+        // Processed in worker thread (already assigned)
+    case MtRequestSocketConnect:
+    case MtRequestSocketSend:
+    case MtRequestSocketAccept:
+    case MtRequestSocketRecv:
+    case MtRequestSocketRecvFrom:
+    case MtRequestSocketGetName:
+    case MtRequestSocketGetPeer:
+        MYASSERT( MT_INVALID_SOCKET_FD != request->base.sockfd );
+        process_now = false;
+        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
+        if ( rc ) goto ErrorExit;
+        break;
+
+    case MtRequestInvalid:
+    default:
+        MYASSERT( !"Invalid request type" );
+        rc = EINVAL;
+        // Send back an internal error
+        goto ErrorExit;
+        break;
     }
-    
-#if 0
-    // Process immediately to debug scheduling problems
-    else if ( MtRequestSocketConnect == request_type ||
-              MtRequestSocketWrite   == request_type || 
-              MtRequestSocketClose   == request_type )
+
+    BufferItem->assigned_thread = *AssignedThread;
+
+    // Acquire oplock in main thread now. It is released by
+    // process_buffer_item().
+    if ( REQUEST_REQUIRES_OPLOCK( request ) )
+    {
+        MYASSERT( *AssignedThread );
+        sem_wait( &(*AssignedThread)->oplock );
+        (*AssignedThread)->oplock_acquired = true;
+    }
+
+    if ( process_now )
     {
         *ProcessFurther = false;
-
-        // Assign thread 0 and comment out next two statements
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-
-        BufferItem->assigned_thread = *AssignedThread;
-
-        rc = process_buffer_item( BufferItem );
-    }
-#endif
-    else if ( MtRequestSocketClose == request_type )
-    {
-        // This socket's thread could be stuck awaiting connect() or
-        // accept(), but the PVM has asked us to close it now. So,
-        // we'll close it from this thread and fail the pending IO.
-        *ProcessFurther = false;
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-        if ( rc )
-        {
-            // No thread; already closed?
-            goto ErrorExit;
-        }
-        
-        BufferItem->assigned_thread = *AssignedThread;
-
         rc = process_buffer_item( BufferItem );
     }
     else
     {
-        // This request is for an existing FD/thread. Find the thread
-        // that services the connection and assign it.
-        rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
-        if ( rc )
-        {
-            goto ErrorExit;
-        }
-
-        BufferItem->assigned_thread = *AssignedThread;
+        *ProcessFurther = true;
         rc = workqueue_enqueue( (*AssignedThread)->work_queue, BufferItem->idx );
         if ( rc )
         {
-            goto ErrorExit;
+            if ( (*AssignedThread)->oplock_acquired )
+            {
+                (*AssignedThread)->oplock_acquired = false;
+                sem_post( &(*AssignedThread)->oplock );
+            }
         }
     }
-
-    DEBUG_PRINT( "Work item %d assigned to thread %d\n",
-                 BufferItem->idx, (*AssignedThread)->idx );
+    
+    if ( *ProcessFurther )
+    {
+        DEBUG_PRINT( "Work item %d assigned to thread %d\n",
+                     BufferItem->idx, (*AssignedThread)->idx );
+    }
 
 ErrorExit:
+
     // Something here failed. Report the error. The worker thread will
     // not release the buffer item, so do it here.
     if ( rc )
@@ -903,6 +949,7 @@ ErrorExit:
 
     if ( ! *ProcessFurther )
     {
+        // may have already been released in process_buffer_item()
         release_buffer_item( BufferItem );
     }
 
@@ -1001,7 +1048,7 @@ init_state( void )
         curr->offset = ONE_REQUEST_REGION_SIZE * i;
         curr->region = &g_state.in_request_buf[ curr->offset ];
     }
-
+    
     //
     // Init the threads' state, so that posting to the semaphores
     // works as soon as the threads start up.
@@ -1022,8 +1069,8 @@ init_state( void )
         }
 
         sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
-        //sem_init( &curr->awaiting_work_sem, 0, 1 );
-        //sem_init( &curr->awaiting_work_sem, 0, 0 );
+        sem_init( &curr->oplock, 0, 1 );
+        curr->oplock_acquired = false;
     }
 
     //
@@ -1093,7 +1140,6 @@ fini_state( void )
         sem_post( &curr->awaiting_work_sem );
         
         pthread_join( curr->self, NULL );
-        //pthread_attr_destroy(&g_state.attr);
         workqueue_free( curr->work_queue );
         sem_destroy( &curr->awaiting_work_sem );
     }
@@ -1124,8 +1170,6 @@ message_dispatcher( void )
     ssize_t size = 0;
     bool more_processing = false;
 
-    //struct timespec t1,t2,t3;
-
     // Forever, read commands from device and dispatch them, allowing
     // the other threads to execute.
     while( true )
@@ -1133,8 +1177,6 @@ message_dispatcher( void )
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
         mt_request_type_t request_type;
-
-        //clock_gettime(CLOCK_REALTIME, &t1);
 
         // Always allow other threads to run in case there's work.
         //xe_yield();
@@ -1200,7 +1242,7 @@ message_dispatcher( void )
         }
 
         // Remember: we'll yield next...
-        request_type = MT_RESPONSE_GET_TYPE( myitem->request );
+        request_type = MT_REQUEST_GET_TYPE( myitem->request );
         if ( request_type == MtRequestSocketConnect
              || request_type == MtRequestSocketAccept)
         {
@@ -1210,11 +1252,6 @@ message_dispatcher( void )
         {
             sched_yield();
         }
-
-        //clock_gettime(CLOCK_REALTIME, &t2);
-        //t3 = diff(t1,t2);
-        //DEBUG_PRINT( "Time of Execution message_dispatcher loop. sec: %ld  nsec: %ld\n",
-                 //t3.tv_sec, t3.tv_nsec);
     } // while
     
 ErrorExit:
@@ -1223,85 +1260,6 @@ ErrorExit:
 
 } // message_dispatcher
 
-
-#if 0 // test code
-
-//
-// Simulates messages to the threads while we're testing this system
-//
-static int
-test_message_dispatcher( void )
-{
-    int rc = 0;
-    int ct = 0;
-    bool more_processing = false;
-    
-    while( ct++ < 3 )
-    {
-        thread_item_t * assigned_thread = NULL;
-        buffer_item_t * myitem = NULL;
-        
-        // Identify the next available buffer item
-        rc = reserve_available_buffer_item( &myitem );
-        if ( rc )
-        {
-            // Failed to find an available buffer item. We should
-            // yield this thread and try again.
-            MYASSERT( !"No buffer items are available" );
-            xe_yield();
-            continue;
-        }
-
-        //
-        // We have a buffer item. Read the next command into its
-        // its region. Block until a command arrives.
-        //
-
-        // Simulated block.
-        memset( myitem->region, 'a' + ct, ONE_REQUEST_REGION_SIZE );
-        
-        // Assign the buffer to a thread
-        rc = assign_work_to_thread( myitem, &assigned_thread, &more_processing );
-        if ( rc )
-        {
-            MYASSERT( !"No thread is available to work on this request." );
-            goto ErrorExit;
-        }
-
-        if ( more_processing )
-        {
-            // Tell the thread to process the buffer
-            DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
-            sem_post( &assigned_thread->awaiting_work_sem );
-        }
-    } // while
-
-    
-ErrorExit:
-    return rc;
-} // test_message_dispatcher
-
-static int
-test_message_dispatcher2( void )
-{
-    int rc = 0;
-    int ct = 0;
-    char buf[100];
-
-    while( ct++ < 10 )
-    {
-        // Read just sends an event -
-        ssize_t size = read( g_state.input_fd, buf, sizeof(buf) );
-
-        DEBUG_PRINT( "Read %ld bytes from input_fd. Waiting a bit\n", size );
-        sleep(5);
-        
-    } // while
-
-    return rc;
-} // test_message_dispatcher2
-
-#endif // 0
 
 int main(void)
 {

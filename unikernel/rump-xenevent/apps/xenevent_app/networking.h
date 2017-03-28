@@ -6,16 +6,28 @@
 #include "message_types.h"
 #include "threadpool.h"
 
+void
+xe_net_set_base_response( IN mt_request_generic_t   * Request,
+                          IN size_t                   PayloadLen,
+                          OUT mt_response_generic_t * Response );
+
 int
 xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                       OUT mt_response_socket_create_t * Response,
                       OUT thread_item_t               * WorkerThread );
 
+int
+xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
+                    OUT mt_response_socket_attrib_t * Response,
+                    IN  thread_item_t               * WorkerThread );
 
 int
 xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
                        OUT mt_response_socket_connect_t * Response,
                        IN  thread_item_t                * WorkerThread );
+
+int
+xe_net_internal_close_socket( IN thread_item_t * WorkerThread );
 
 int
 xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
@@ -62,24 +74,5 @@ xe_net_get_name( IN mt_request_socket_getname_t  * Request,
                  IN mt_response_socket_getname_t * Response,
                  IN  thread_item_t               * WorkerThread );
 
-int
-xe_net_socket_fcntl( IN  mt_request_socket_fcntl_t  * Request,
-                     OUT mt_response_socket_fcntl_t * Response,
-                     IN  thread_item_t              * WorkerThread );
-
-int
-xe_net_poll_create( IN  mt_request_poll_create_t  * Request,
-                    OUT mt_response_poll_create_t * Response,
-                    IN  thread_item_t             * WorkerThread );
-
-int
-xe_net_poll_close( IN  mt_request_poll_create_t  * Request,
-                   OUT mt_response_poll_create_t * Response,
-                   IN  thread_item_t             * WorkerThread );
-
-int
-xe_net_poll_wait( IN  mt_request_poll_wait_t  * Request,
-                  OUT mt_response_poll_wait_t * Response,
-                  IN  thread_item_t           * WorkerThread );
 
 #endif // xenevent_app_networking_h

@@ -1,13 +1,13 @@
 # To preserve changes to Makefile, edit Makefile.template
 
-# Standard no-strings-attched compilation of the test TCP/IP app and
+# Standard no-strings-attached compilation of the test TCP/IP app and
 # its accompanying shared library.  The shared library preloads the
 # app and intercepts selected TCP/IP calls to the network stack.
 # 
 
 CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99 -Wno-missing-braces
-CFLAGS += -I.. -I../../../common
+CFLAGS += -I.. -I../../../common -I../../common
 CFLAGS += -ggdb
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP

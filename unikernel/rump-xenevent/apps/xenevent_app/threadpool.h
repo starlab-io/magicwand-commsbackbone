@@ -36,7 +36,15 @@ typedef struct _thread_item
     // can wait for work to arrive.
     //
     sem_t awaiting_work_sem;
-    
+
+    //
+    // Synchronizes operations on the thread item during certain
+    // operations, e.g. prevents a close() to occur while a send() is
+    // in progress.
+    //
+    sem_t oplock;
+    bool  oplock_acquired;
+
     //
     // A fixed-size queue of indices into the buffer item array. The
     // items in this queue are ones that this thread must process. The
@@ -44,33 +52,48 @@ typedef struct _thread_item
     // workqueue API. Access to it is protected by a mutex.
     //
     
-    //work_queue_buffer_idx_t work_queue_space[ BUFFER_ITEM_COUNT ];
-
     workqueue_t * work_queue;
 
     //
     // The exported socket value. We do not export our native socket
     // value. See mwsocket.h for details.
     //
-    mw_socket_fd_t sock_fd;
-    
+    mw_socket_fd_t  public_fd;
+
+    //
+    // Is the socket blocking? If it's non-blocking: (1) it has been
+    // set to O_NONBLOCK via fcntl(), (2) it is this socket in the
+    // active pollset?
+    //
+//    bool           blocking;
+
+    //
+    // Current events from poll() on socket. Flags are MW_POLL*
+    //
+    int            poll_events;
+
+    //
+    // Connection state, reported back to PVM
+    //
+    mt_flags_t     state_flags;
+
     //
     // The native socket under management - save it's metadata for
     // easy state lookup.
     //
-    int            native_sock_fd;
+    int            local_fd;
 
     //
     // This socket metadata is the native NetBSD values, e.g. for AF_INET6.
     //
-    int          sock_domain;
-    int          sock_type;
-    int          sock_protocol;
+    int            sock_domain;
+    int            sock_type;
+    int            sock_protocol;
 
-    mt_port_t    port_num;
+    mt_port_t      port_num;
 
-    uint8_t      remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
-    
+    uint8_t        remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
+
 } thread_item_t;
 
 
