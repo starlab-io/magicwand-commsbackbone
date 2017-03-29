@@ -5,18 +5,10 @@ if [ -z $PVM_IP ]; then
    exit 1
 fi
 
-PVM_USER=sluser
-MWROOT="$HOME/proj/mw-cbb"
-
-
 docmd() {
    echo "Command: $*"
    $*
 }
 
-# Try: rsync -r --delete 
-
 docmd scp -rq $PVM_USER@$PVM_IP:common /tmp/mwpvm
 docmd scp -rq $PVM_USER@$PVM_IP:protvm /tmp/mwpvm
-#docmd rsync -r --delete $PVM_USER@$PVM_IP:common /tmp/mwpvm
-#docmd rsync -r --delete $PVM_USER@$PVM_IP:protvm /tmp/mwpvm
