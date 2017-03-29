@@ -55,7 +55,7 @@ typedef uint16_t mt_sig_t;
 
 
 #define MT_RESPONSE_MASK 0x7000
-#define MT_TYPE_MASK     0x00ff
+#define MT_TYPE_MASK     0x0fff
 
 #define MT_REQUEST(x)     (x)
 #define MT_RESPONSE(x)    (MT_RESPONSE_MASK | (x))
@@ -109,22 +109,24 @@ typedef uint64_t mt_id_t;
 typedef enum
 {
     MtRequestInvalid        = MT_REQUEST( 0x00 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD ),
-    MtRequestSocketConnect  = MT_REQUEST( 0x02  ),
-    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD ),
-    MtRequestSocketRead     = MT_REQUEST( 0x04 ),
-    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketBind     = MT_REQUEST( 0x06 ),
-    MtRequestSocketListen   = MT_REQUEST( 0x07 ),
-    MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD ), 
-    MtRequestSocketRecv     = MT_REQUEST( 0x09 ),
-    MtRequestSocketRecvFrom = MT_REQUEST( 0x0a ),
 
-    MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketAttrib   = MT_REQUEST( 0x20 ),    
-    
-    MtRequestPollsetQuery   = MT_REQUEST( 0x31 ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD ),
+    MtRequestSocketShutdown = MT_REQUEST( 0x02 ),
+    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD ),
+
+    MtRequestSocketConnect  = MT_REQUEST( 0x10 ),
+    MtRequestSocketBind     = MT_REQUEST( 0x11 ),
+    MtRequestSocketListen   = MT_REQUEST( 0x12 ),
+    MtRequestSocketAccept   = MT_REQUEST( 0x13 | _MT_TYPE_MASK_ALLOC_FD ), 
+
+    MtRequestSocketSend     = MT_REQUEST( 0x20 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketRecv     = MT_REQUEST( 0x21 ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 0x22 ),
+
+    MtRequestSocketGetName  = MT_REQUEST( 0x30 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketGetPeer  = MT_REQUEST( 0x31 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketAttrib   = MT_REQUEST( 0x32 ),
+    MtRequestPollsetQuery   = MT_REQUEST( 0x33 ),
 } mt_request_type_t;
 
 
@@ -132,20 +134,21 @@ typedef enum
 {
     MtResponseInvalid           = MT_RESPONSE( MtRequestInvalid        ),
     MtResponseSocketCreate      = MT_RESPONSE( MtRequestSocketCreate   ),
-    MtResponseSocketConnect     = MT_RESPONSE( MtRequestSocketConnect  ),
+    MtResponseSocketShutdown    = MT_RESPONSE( MtRequestSocketShutdown ),
     MtResponseSocketClose       = MT_RESPONSE( MtRequestSocketClose    ),
-    MtResponseSocketRead        = MT_RESPONSE( MtRequestSocketRead     ),
-    MtResponseSocketSend        = MT_RESPONSE( MtRequestSocketSend     ),
+
+    MtResponseSocketConnect     = MT_RESPONSE( MtRequestSocketConnect  ),
     MtResponseSocketBind        = MT_RESPONSE( MtRequestSocketBind     ),
     MtResponseSocketListen      = MT_RESPONSE( MtRequestSocketListen   ),
     MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
+
+    MtResponseSocketSend        = MT_RESPONSE( MtRequestSocketSend     ),
     MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
+
     MtResponseSocketGetName     = MT_RESPONSE( MtRequestSocketGetName  ),
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
-
     MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
-    //MtResponsePollsetMod        = MT_RESPONSE( MtRequestPollsetMod     ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
 } mt_response_id_t;
 
@@ -239,6 +242,13 @@ typedef uint32_t mt_flags_t;
 //
 #define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
 
+//
+// Did the remote side of the TCP/IP connection close? This can appear
+// in response.
+//
+#define _MT_FLAGS_REMOTE_CLOSED 0x80000000
+
+
 #define MT_REQUEST_CALLER_WAITS(_req)                                   \
     ( (_req)->base.flags & _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE )
 
@@ -272,10 +282,6 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // aio_read()/aio_write().
     mt_flags_t          flags;
 } mt_request_base_t;
-
-
-// Did the remote side of the TCP/IP connection close?
-#define _MT_RESPONSE_FLAG_REMOTE_CLOSED 0x1
 
 
 //
@@ -494,6 +500,24 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 #define MT_REQUEST_SOCKET_CLOSE_SIZE  sizeof(mt_request_socket_close_t)
 #define MT_RESPONSE_SOCKET_CLOSE_SIZE sizeof(mt_response_socket_close_t)
 
+//
+// Shutdown
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_shutdown
+{
+    mt_request_base_t base;
+    uint32_t          how; // standardized values; translation not needed
+} mt_request_socket_shutdown_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_shutdown
+{
+    mt_response_base_t base;
+} mt_response_socket_shutdown_t;
+
+#define MT_REQUEST_SOCKET_SHUTDOWN_SIZE  sizeof(mt_request_socket_shutdown_t)
+#define MT_RESPONSE_SOCKET_SHUTDOWN_SIZE sizeof(mt_response_socket_shutdown_t)
+
 
 //
 // Write
@@ -635,20 +659,21 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_query
 
 typedef union _mt_request_generic
 {
-    mt_request_base_t           base;
-    mt_request_socket_create_t  socket_create;
-    mt_request_socket_connect_t socket_connect;
-    mt_request_socket_close_t   socket_close;
-    mt_request_socket_send_t    socket_send;
-    mt_request_socket_bind_t    socket_bind;
-    mt_request_socket_listen_t  socket_listen;
-    mt_request_socket_accept_t  socket_accept;
-    mt_request_socket_recv_t    socket_recv;
-    mt_request_socket_getname_t socket_getname;
-    mt_request_socket_getpeer_t socket_getpeer;
+    mt_request_base_t             base;
+    mt_request_socket_create_t    socket_create;
+    mt_request_socket_connect_t   socket_connect;
+    mt_request_socket_close_t     socket_close;
+    mt_request_socket_shutdown_t  socket_shutdown;
+    mt_request_socket_send_t      socket_send;
+    mt_request_socket_bind_t      socket_bind;
+    mt_request_socket_listen_t    socket_listen;
+    mt_request_socket_accept_t    socket_accept;
+    mt_request_socket_recv_t      socket_recv;
+    mt_request_socket_getname_t   socket_getname;
+    mt_request_socket_getpeer_t   socket_getpeer;
 
-    mt_request_socket_attrib_t  socket_attrib;
-    mt_request_pollset_query_t  pollset_query;
+    mt_request_socket_attrib_t    socket_attrib;
+    mt_request_pollset_query_t    pollset_query;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -665,6 +690,7 @@ typedef union _mt_response_generic
     mt_response_socket_create_t     socket_create;
     mt_response_socket_connect_t    socket_connect;
     mt_response_socket_close_t      socket_close;
+    mt_response_socket_shutdown_t   socket_shutdown;
     mt_response_socket_send_t       socket_send;
     mt_response_socket_bind_t       socket_bind;
     mt_response_socket_listen_t     socket_listen;
