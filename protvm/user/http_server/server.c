@@ -171,7 +171,7 @@ void respond(int n)
                             fprintf( stderr, "Could not serve page\n" );
                         }
 
-                    close(fd); 
+                    close( fd );
                 }
                 else    write(clients[n], "HTTP/1.0 404 Not Found\n", 23); //FILE NOT FOUND
 
