@@ -647,7 +647,8 @@ post_process_response( mt_request_generic_t  * Request,
     // Propogate state, including remote closure status
     if ( NULL != Worker )
     {
-        Response->base.flags = Worker->state_flags;
+        Response->base.flags |= Request->base.flags;
+        Response->base.flags |= Worker->state_flags;
     }
 
     // In accept's success case, assign the new socket to an available thread

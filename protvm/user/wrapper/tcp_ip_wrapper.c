@@ -43,6 +43,19 @@
 
 #define DEV_FILE "/dev/mwcomms"
 
+
+//
+// Which send() implementation should we use?
+//
+
+//#define SEND_ALLSYNC
+#define SEND_NOSYNC
+//#define SEND_FINAL_SYNC
+//#define SEND_BATCH
+
+// Should we wait if we encounter EAGAIN?
+#define EAGAIN_TRIGGERS_SLEEP 0
+
 //
 // 0 - wrap operations and use native sockets only
 // 1 - wrap operations and use mwcomms driver
@@ -213,13 +226,19 @@ mwcomms_write_request( IN  int         MwFd,
     do
     {
         ct = libc_write( MwFd, Request, Request->base.size );
-        if ( ct < 0 && EAGAIN == errno )
+        if ( !( ct < 0 && EAGAIN == errno ) )
         {
-            // The cost of this failing is negligible, so ignore return code.
-            (void) nanosleep( &remain_time, &remain_time );
-            continue; // Try the write() again...
+            break;
         }
-    } while ( false );
+
+        // rc == -1, errno == EAGAIN. So, try again...
+        DEBUG_PRINT( "write() failed, trying again.\n" );
+#if EAGAIN_TRIGGERS_SLEEP
+        // The cost of this failing is negligible, so ignore return code.
+        (void) nanosleep( &remain_time, &remain_time );
+#endif // EAGAIN_TRIGGERS_SLEEP
+
+    } while ( true );
 
     err = errno;
     
@@ -715,6 +734,186 @@ ErrorExit:
 }
 
 
+#ifdef SEND_BATCH
+
+ssize_t 
+send( int          SockFd, 
+      const void * Buf,
+      size_t       Len,
+      int          Flags )
+{
+    mt_request_generic_t request;
+    mt_response_generic_t response = {0};
+    ssize_t rc = 0;
+    ssize_t totSent = 0;
+    uint8_t * pbuf = (uint8_t *)Buf;
+    int err = 0;
+    bool final = false;
+    
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        rc = libc_send( SockFd, Buf, Len, Flags );
+        err = errno;
+        goto ErrorExit;
+    }
+
+    mwcomms_init_request( &request,
+                          MtRequestSocketSend,
+                          MT_REQUEST_SOCKET_SEND_SIZE,
+                          SockFd );
+
+    request.socket_send.flags = Flags;
+
+    // We're doing a batch send, which means we synchronize (wait for
+    // the response) on the final send()
+    request.base.flags = _MT_FLAGS_BATCH_SEND_INIT | _MT_FLAGS_BATCH_SEND;
+
+    while ( totSent < Len )
+    {
+        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
+
+        // Which chunk is this? A chunk can be both the first and last.
+        if ( totSent > 0 )
+        {
+            request.base.flags &= ~_MT_FLAGS_BATCH_SEND_INIT;
+        }
+        if ( Len == totSent + chunksz )
+        {
+            final = true;
+            request.base.flags |= _MT_FLAGS_BATCH_SEND_FINI;
+        }
+
+        request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
+        memcpy( request.socket_send.bytes, &pbuf[ totSent ], chunksz );
+
+        // Mimick the real send(): if the request is successfully
+        // written to the ring buffer, then succeed. Wait only for the
+        // final response, which was zeroed-out earlier. N.B. The INS
+        // will not return EAGAIN anywhere in our batch.
+        rc = mwcomms_write_request( SockFd, final, &request, &response );
+        if ( rc )
+        {
+            err = errno;
+            if ( MW_ERROR_REMOTE_SURPRISE_CLOSE == err )
+            {
+                DEBUG_PRINT( "Remote side closed\n" );
+                err = EPIPE;
+            }
+
+            if ( !final )
+            {
+                // Assert final and try again. This will give us the
+                // total number of bytes written and clear the batch
+                // send state in the driver.
+                final = true;
+                continue;
+            }
+
+            // The final request failed. Assume the socket is
+            // permantently broken on the INS.
+            break;
+        }
+
+        totSent += chunksz;
+    } // while
+
+    // The final request was sent to the INS, and some bytes were
+    // successfully sent on the INS's stack. Mask any errors here. (??)
+    if ( response.socket_send.count > 0 )
+    {
+        rc = response.socket_send.count;
+        err = 0;
+        MYASSERT( totSent == rc );
+    }
+    else if ( 0 == rc )
+    {
+        err = -response.base.status;
+        rc = -1;
+    }
+
+ErrorExit:
+    DEBUG_PRINT( "send( %d, buf, %d, %x ) ==> %d / %d\n",
+                 SockFd, (int)Len, Flags, (int)rc, err );
+    errno = err;
+    return rc;
+}
+#endif // SEND_BATCH
+
+
+
+#ifdef SEND_FINAL_SYNC
+ssize_t 
+send( int          SockFd, 
+      const void * Buf,
+      size_t       Len,
+      int          Flags )
+{
+    mt_request_generic_t request;
+    mt_response_generic_t response = {0};
+    ssize_t rc = 0;
+    ssize_t totSent = 0;
+    uint8_t * pbuf = (uint8_t *)Buf;
+    int err = 0;
+    int request_ct =
+        (Len + MESSAGE_TYPE_MAX_PAYLOAD_LEN - 1) / MESSAGE_TYPE_MAX_PAYLOAD_LEN;
+
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        rc = libc_send( SockFd, Buf, Len, Flags );
+        err = errno;
+        goto ErrorExit;
+    }
+
+    mwcomms_init_request( &request,
+                          MtRequestSocketSend,
+                          MT_REQUEST_SOCKET_SEND_SIZE,
+                          SockFd );
+
+    request.socket_send.flags = Flags;
+    request.base.flags = 0;
+
+    while ( totSent < Len )
+    {
+        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
+
+        // Is this the final chunk?
+        bool final = ( totSent + chunksz == Len );
+
+        request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
+        memcpy( request.socket_send.bytes, &pbuf[ totSent ], chunksz );
+
+        // Mimick the real send(): if the request is successfully
+        // written to the ring buffer, then succeed. Do not wait for
+        // the response.
+        rc = mwcomms_write_request( SockFd, final, &request, &response );
+        if ( rc )
+        {
+            err = errno;
+            if ( MW_ERROR_REMOTE_SURPRISE_CLOSE == err )
+            {
+                DEBUG_PRINT( "Remote side closed\n" );
+                err = EPIPE;
+            }
+            goto ErrorExit;
+        }
+
+        // The response will not be populated, so don't check it
+        totSent += chunksz;
+    }
+
+    rc = totSent;
+
+ErrorExit:
+    DEBUG_PRINT( "send( %d, buf, %d, %x ) ==> %d / %d\n",
+                 SockFd, (int)Len, Flags, (int)rc, err );
+    errno = err;
+    return rc;
+}
+#endif // SEND_FINAL_SYNC
+
+
+#ifdef SEND_NOSYNC
+// @brief Non-synchronizing send
 ssize_t 
 send( int          SockFd, 
       const void * Buf,
@@ -741,14 +940,11 @@ send( int          SockFd,
                           SockFd );
 
     request.socket_send.flags = Flags;
+    request.base.flags = 0;
 
     while ( totSent < Len )
     {
         ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
-
-        // XXXXXXXXXXXX
-        // For synchronization on the final chunk (?)
-        bool final = chunksz <= MESSAGE_TYPE_MAX_PAYLOAD_LEN;
 
         request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
         memcpy( request.socket_send.bytes, &pbuf[ totSent ], chunksz );
@@ -756,7 +952,7 @@ send( int          SockFd,
         // Mimick the real send(): if the request is successfully
         // written to the ring buffer, then succeed. Do not wait for
         // the response.
-        rc = mwcomms_write_request( SockFd, final, &request, &response );
+        rc = mwcomms_write_request( SockFd, false, &request, &response );
         if ( rc )
         {
             err = errno;
@@ -767,15 +963,8 @@ send( int          SockFd,
             }
             goto ErrorExit;
         }
-/*
-        // Synchronous
-        DEBUG_PRINT( "Status %d type 0x%x id %lx flags %x sent %d\n",
-                     response.base.status, response.base.type,
-                     (unsigned long)response.base.id, response.base.flags,
-                     response.socket_send.count );
-*/      
-        // The response will not be populated, so don't check it
 
+        // The response will not be populated, so don't check it
         totSent += chunksz;
     }
 
@@ -787,6 +976,73 @@ ErrorExit:
     errno = err;
     return rc;
 }
+#endif // SEND_NOSYNC
+
+
+#ifdef SEND_ALLSYNC
+// @brief All chunks of send() are synchronized
+ssize_t 
+send( int          SockFd, 
+      const void * Buf,
+      size_t       Len,
+      int          Flags )
+{
+    mt_request_generic_t request;
+    mt_response_generic_t response = {0};
+    ssize_t rc = 0;
+    ssize_t totSent = 0;
+    uint8_t * pbuf = (uint8_t *)Buf;
+    int err = 0;
+
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        rc = libc_send( SockFd, Buf, Len, Flags );
+        err = errno;
+        goto ErrorExit;
+    }
+
+    mwcomms_init_request( &request,
+                          MtRequestSocketSend,
+                          MT_REQUEST_SOCKET_SEND_SIZE,
+                          SockFd );
+
+    request.socket_send.flags = Flags;
+    request.base.flags = 0;
+
+    while ( totSent < Len )
+    {
+        ssize_t chunksz = MIN( MESSAGE_TYPE_MAX_PAYLOAD_LEN, Len - totSent );
+
+        request.base.size = MT_REQUEST_SOCKET_SEND_SIZE + chunksz;
+        memcpy( request.socket_send.bytes, &pbuf[ totSent ], chunksz );
+
+        // Mimick the real send(): if the request is successfully
+        // written to the ring buffer, then succeed. Do not wait for
+        // the response.
+        rc = mwcomms_write_request( SockFd, true, &request, &response );
+        if ( rc )
+        {
+            err = errno;
+            if ( MW_ERROR_REMOTE_SURPRISE_CLOSE == err )
+            {
+                DEBUG_PRINT( "Remote side closed\n" );
+                err = EPIPE;
+            }
+            goto ErrorExit;
+        }
+
+        totSent += response.socket_send.count;
+    }
+
+    rc = totSent;
+
+ErrorExit:
+    DEBUG_PRINT( "send( %d, buf, %d, %x ) ==> %d / %d\n",
+                 SockFd, (int)Len, Flags, (int)rc, err );
+    errno = err;
+    return rc;
+}
+#endif // SEND_ALLSYNC
 
 
 ssize_t

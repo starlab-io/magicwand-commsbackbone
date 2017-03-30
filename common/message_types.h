@@ -54,14 +54,13 @@ typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_RESPONSE (mt_sig_t)0xff33
 
 
-#define MT_RESPONSE_MASK 0x7000
-#define MT_TYPE_MASK     0x0fff
+#define MT_RESPONSE_MASK 0x8000
+#define MT_TYPE_MASK     0x7fff
 
 #define MT_REQUEST(x)     (x)
 #define MT_RESPONSE(x)    (MT_RESPONSE_MASK | (x))
 
-#define MT_REQUEST_NAME( __name ) __name##_request
-#define MT_RESPONSE_NAME( __name ) __name##_response
+#define MT_GET_REQUEST_TYPE(t) ((t) & MT_TYPE_MASK)
 
 //
 // Each message has a message ID. It is assigned and used by the
@@ -77,16 +76,13 @@ typedef uint64_t mt_id_t;
 // parallel. Here's the format of the message type:
 //
 //  position 76543210 76543210
-//  value    ssssffff tttttttt
+//  value    sfffffff tttttttt
 //
 // s = side (0 = request, 1 = response), f = flags, t = type
 //
 
-// XXXX: reexamine these
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
-//#define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
-//#define _MT_TYPE_MASK_NOBLOCK     0x0800
 
 // PVM-initiated close() will not execute while this operation is in-process
 #define _MT_TYPE_MASK_CLOSE_WAITS 0x0400
@@ -95,12 +91,6 @@ typedef uint64_t mt_id_t;
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
-
-// The call must block on the PVM side, regardless of file's flags
-//#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_BLOCK )
-
-// The call should not block on PVM side, regardless of file's flags
-//#define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
 
 #define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
 
@@ -218,7 +208,6 @@ typedef struct _mt_sockaddr
 typedef struct _mt_in_addr
 {
     uint64_t    s_addr;
-
 } mt_in_addr_t;
 
 
@@ -228,7 +217,6 @@ typedef struct _mt_sockaddr_in
     uint16_t              sin_port;
     mt_in_addr_t          sin_addr;
     uint8_t               sin_zero[8];
-
 } mt_sockaddr_in_t;
 
 // Inet address type
@@ -247,6 +235,15 @@ typedef uint32_t mt_flags_t;
 // in response.
 //
 #define _MT_FLAGS_REMOTE_CLOSED 0x80000000
+
+//
+// For supporting multiple send() calls, commonly used to break up
+// large messages into smaller chunks
+//
+
+#define _MT_FLAGS_BATCH_SEND_INIT 0x40000000
+#define _MT_FLAGS_BATCH_SEND      0x20000000
+#define _MT_FLAGS_BATCH_SEND_FINI 0x10000000
 
 
 #define MT_REQUEST_CALLER_WAITS(_req)                                   \
@@ -275,6 +272,10 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
 
     // The socket. Used in most requests.
     mw_socket_fd_t      sockfd;
+
+    // _MT_FLAGS_* go here. These can change the behavior of the PVM
+    // driver rather than the INS and are uneccessarily sent to the
+    // INS.
 
     // Will the user thread wait for a response? This does not need to
     // go over shared memory, but it's more convenient here. An
@@ -532,6 +533,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 {
     mt_response_base_t base;
+    // orig flags from the request, needed by PVM for post-processing
+    mt_flags_t         flags; 
     mt_size_t          count; // bytes sent
 } mt_response_socket_send_t;
 

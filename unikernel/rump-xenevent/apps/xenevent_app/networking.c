@@ -678,17 +678,18 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      IN thread_item_t                * WorkerThread )
 {
     int flags = xe_net_translate_msg_flags( Request->flags );
+    // payload length is declared size minus header size
+    ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
-
-    // payload length is declared size minus header size
-    ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
+    
     Response->count       = 0;
     Response->base.status = 0;
-
-    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
+    // Pass flags back to the PVM for processing
+    Response->flags       = Request->flags;
 
     DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is sending %ld bytes\n",
                   WorkerThread->idx,
@@ -706,11 +707,15 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         if ( sent < 0 )
         {
             int err = errno;
-            if ( EAGAIN == err )
+            // If we're anywhere in a batch send and the PVM is not
+            // awaiting a reply, do not return EAGAIN to the PVM --
+            // effectively turn this into a blocking send().
+            if ( (Request->base.flags & _MT_FLAGS_BATCH_SEND)
+                 //&& !MT_REQUEST_CALLER_WAITS( Request )
+                 && (EAGAIN == err || EWOULDBLOCK == err)  )
             {
-                // Try again if the send would block on the
-                // non-blocking socket. XXXX figure out the best way
-                // to do this in cooperation with the PVM side.
+                // The send would block on this non-blocking
+                // socket. Force retry.
                 continue;
             }
 
@@ -719,7 +724,6 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
             if ( -MW_EPIPE == Response->base.status )
             {
                 WorkerThread->state_flags = _MT_FLAGS_REMOTE_CLOSED;
-                DEBUG_BREAK();
             }
             else
             {
