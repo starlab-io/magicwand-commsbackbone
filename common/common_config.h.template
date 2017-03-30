@@ -21,14 +21,13 @@
 #endif
 
 //
-// Number of grant refs (1/page). This determines how much space we
-// have for our ring buffer. For instance, if the order is 6, we share
-// 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
-// 6. Xen has an upper limit on how many pages can be shared. That
-// limit can be configured by a Xen boot parameter - specifically look
-// at gnttab_max_frames.
+// Order of the block of shared memory for the Xen ring buffer. For
+// instance, if the order is 6, we share 2^6 = 64 (0x40) pages, or
+// 0x40000 bytes. The max we've tried is 6. Xen has an upper limit on
+// how many pages can be shared. That limit can be configured by a Xen
+// boot parameter - specifically look at gnttab_max_frames. N.B. we
+// must create one grant reference per shared page.
 //
-
 #define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
 
 //
@@ -63,10 +62,10 @@
 // best use of shared memory.
 //
 
-#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
+//#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
 //#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
 //#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
-//#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
+#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
 

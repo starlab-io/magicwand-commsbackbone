@@ -3,7 +3,6 @@
 INDEXDIR=/tmp
 FILEDIR=$PWD/files
 RESULTSDIR=$PWD/results
-TYPE=
 ATTEMPTS=1
 
 if [ ! -d "$FILEDIR" ]; then
@@ -22,7 +21,7 @@ if [ "$1" = "rump" ]; then
 else
     ADDR=$PVM_IP
     TYPE="raw"
-Nfi
+fi
 
 ABS_PATH=$RESULTSDIR/$TYPE.dat
 mkdir -p $RESULTSDIR
@@ -31,14 +30,14 @@ echo "#Size(bytes)      Average Response Time ( $ATTEMPTS reqests )" > $ABS_PATH
 
 for i in $( ls $FILEDIR | sort -n ); do
     
-    scp $FILEDIR/$i $USER@$PVM_IP:$INDEXDIR/index.html >> /dev/null
-    if [ $? -eq 0 ]; then
+    scp $FILEDIR/$i $PVM_USER@$PVM_IP:$INDEXDIR/index.html >> /dev/null
+    if [ $? -ne 0 ]; then
         echo "Command failed"
         break
     fi
 
     AVG_RESPONSE=`ab -n $ATTEMPTS "http://$ADDR/" | grep "\[ms\] (mean)" | awk '{ print $4 }'`
-    if [ $? -eq 0 ]; then
+    if [ $? -ne 0 ]; then
         echo "Command failed"
         break
     fi

@@ -707,12 +707,12 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         if ( sent < 0 )
         {
             int err = errno;
-            // If we're anywhere in a batch send and the PVM is not
-            // awaiting a reply, do not return EAGAIN to the PVM --
-            // effectively turn this into a blocking send().
-            if ( (Request->base.flags & _MT_FLAGS_BATCH_SEND)
-                 //&& !MT_REQUEST_CALLER_WAITS( Request )
-                 && (EAGAIN == err || EWOULDBLOCK == err)  )
+
+            // Never return EAGAIN to the PVM. This effectively makes
+            // the send() blocking and it relieves the PVM of doing
+            // send requests serially, where it must wait for a
+            // response before issuing the next send().
+            if ( (EAGAIN == err || EWOULDBLOCK == err)  )
             {
                 // The send would block on this non-blocking
                 // socket. Force retry.

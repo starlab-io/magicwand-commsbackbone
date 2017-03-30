@@ -54,7 +54,7 @@
 //#define SEND_BATCH
 
 // Should we wait if we encounter EAGAIN?
-#define EAGAIN_TRIGGERS_SLEEP 0
+#define EAGAIN_TRIGGERS_SLEEP 1
 
 //
 // 0 - wrap operations and use native sockets only
