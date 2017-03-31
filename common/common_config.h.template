@@ -69,5 +69,17 @@
 
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
 
+//
+// Does the INS use an event channel callback for notification of
+// request arrival?
+//
+#define INS_USES_EVENT_CHANNEL 1
+
+//
+// Does the PVM use an event channel callback for notification of
+// response arrival?
+//
+#define PVM_USES_EVENT_CHANNEL 1
+
 
 #endif //common_config_h

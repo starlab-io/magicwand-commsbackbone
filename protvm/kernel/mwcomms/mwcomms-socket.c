@@ -154,9 +154,6 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 // Disables optimization on a per-function basis. 
 #define MWSOCKET_DEBUG_ATTRIB  __attribute__((optimize("O0")))
 
-// Is the remote side checking for Xen events?
-#define MW_DO_SEND_RING_EVENTS 0
-
 //
 // Timeouts for responses
 //
@@ -179,6 +176,9 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 4 ) // 16x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
 
+#if (!PVM_USES_EVENT_CHANNEL)
+#  define RING_BUFFER_POLL_INTERVAL (HZ >> 6) // 64x / sec
+#endif
 
 // Poll-related messages are annoying, usually....
 
@@ -1042,18 +1042,17 @@ ErrorExit:
 static int
 mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 {
-    int rc = 0;
-    mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
-    mt_request_generic_t * request = NULL;
-
     MYASSERT( ActiveRequest );
     MYASSERT( ActiveRequest->sockinst );
 
+    int rc = 0;
+    mwsocket_instance_t * acceptinst = NULL; // for usage with accept() only
+    mt_request_generic_t * request = &ActiveRequest->rr.request;
+
+    MYASSERT( MT_IS_REQUEST( request ) );
+
     // Reset sigpipe state - we can deliver one per read/write cycle
     // ActiveRequest->sockinst->delivered_sigpipe = false;
-    
-    request = &ActiveRequest->rr.request;
-    MYASSERT( MT_IS_REQUEST( request ) );
 
     // Will the user wait for the response to this request? If so, update state
     if ( MT_REQUEST_CALLER_WAITS( request ) )
@@ -1138,11 +1137,13 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
     case MtRequestSocketSend:
         // Handle incoming scatter-gather send requests
 
+        pr_debug( "send flags: %x\n", request->base.flags );
         // Is this the first scatter-gather request in a possible
         // series? We could also check _MT_FLAGS_BATCH_SEND_INIT.
         if ( !( ActiveRequest->sockinst->u_flags & _MT_FLAGS_BATCH_SEND )
-             && (request->socket_send.flags & _MT_FLAGS_BATCH_SEND) )
+             && (request->base.flags & _MT_FLAGS_BATCH_SEND) )
         {
+            pr_debug( "Starting batch send\n" );
             ActiveRequest->sockinst->u_flags |= _MT_FLAGS_BATCH_SEND;
             ActiveRequest->sockinst->send_tally = 0;
         }
@@ -1202,10 +1203,12 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
             ActiveRequest->sockinst->u_flags &= ~(_MT_FLAGS_BATCH_SEND_INIT
                                                   |_MT_FLAGS_BATCH_SEND
                                                   |_MT_FLAGS_BATCH_SEND_FINI);
-            if ( Response->socket_send.count > 0 )
+            if ( Response->socket_send.count >= 0 )
             {
                 Response->socket_send.count += ActiveRequest->sockinst->send_tally;
             }
+            pr_debug( "Final batch send: total sent is %d bytes\n",
+                      Response->socket_send.count );
         }
         else if ( Response->base.flags & _MT_FLAGS_BATCH_SEND )
         {
@@ -1214,6 +1217,9 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
             {
                 ActiveRequest->sockinst->send_tally += Response->socket_send.count;
             }
+            pr_debug( "Batch send: total %d this %d\n",
+                      (int)ActiveRequest->sockinst->send_tally,
+                      (int)Response->socket_send.count );
         }
     }
 // ^^^^^^^^^^^^^^^^^^^^^ ??????????????
@@ -1224,7 +1230,8 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
     // underneath the user. For now, we will deliver an error or a
     // SIGPIPE the next time the user interacts with the subject
     // mwsocket. Rely on the INS to populate the flags correctly in
-    // case of surprise remote close.
+    // case of surprise remote close. This approach might report an
+    // errno that is not expected for the call the user is making.
 
     if ( Response->base.flags & _MT_FLAGS_REMOTE_CLOSED )
     {
@@ -1408,10 +1415,16 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
             ActiveRequest->rr.request.base.size );
 
     ++g_mwsocket_state.front_ring.req_prod_pvt;
-    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
 
-#if MW_DO_SEND_RING_EVENTS
-    mw_xen_send_event();
+#if INS_USES_EVENT_CHANNEL
+    bool notify = false;
+    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY( &g_mwsocket_state.front_ring, notify );
+    if ( notify )  // notify || !notify )
+    {
+        mw_xen_send_event();
+    }
+#else
+    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
 #endif
     
 ErrorExit:
@@ -1526,11 +1539,18 @@ mwsocket_response_consumer( void * Arg )
                     goto ErrorExit;
                 }
 
+#if PVM_USES_EVENT_CHANNEL
+                // Block on arrival of event
                 if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
                 {
                     pr_info( "Received interrupt in worker thread\n" );
                     goto ErrorExit;
                 }
+#else
+                // Poll the ring
+                set_current_state( TASK_INTERRUPTIBLE );
+                schedule_timeout( RING_BUFFER_POLL_INTERVAL );
+#endif
             }
         } while (!available);
 

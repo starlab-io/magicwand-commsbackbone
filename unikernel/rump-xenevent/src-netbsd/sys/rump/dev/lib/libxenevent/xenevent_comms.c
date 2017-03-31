@@ -269,6 +269,8 @@ xe_comms_wait_and_read_int_from_key( IN const char *Path,
  * Functions for item read/write via Xen ring buffer
  ***************************************************************************/
 
+
+#if PVM_USES_EVENT_CHANNEL
 static int
 send_event(evtchn_port_t port)
 {
@@ -285,8 +287,10 @@ send_event(evtchn_port_t port)
 
     return err;
 }
+#endif
 
 
+#if (INS_USES_EVENT_CHANNEL || PVM_USES_EVENT_CHANNEL)
 static void
 xe_comms_event_callback( evtchn_port_t port,
                          struct pt_regs *regs,
@@ -294,11 +298,15 @@ xe_comms_event_callback( evtchn_port_t port,
 {
     DEBUG_PRINT("Event Channel %u\n", port );
 
+#if INS_USES_EVENT_CHANNEL
     //
     // Release xe_comms_read_item() to check for another item
     //
     xenevent_semaphore_up( g_state.messages_available );
+#endif
 }
+#endif
+
 
 /**
  * xe_comms_read_item
@@ -325,8 +333,11 @@ xe_comms_read_item( void * Memory,
         if ( !available )
         {
             // Nothing was available. Block until event arrives and try again.
-            //xenevent_semaphore_down( g_state.messages_available );
-            xenevent_kpause("Pausing to wait for read", true, 1, NULL);
+#if INS_USES_EVENT_CHANNEL
+            xenevent_semaphore_down( g_state.messages_available );
+#else
+            xenevent_kpause("Poll ring buffer", true, 1, NULL);
+#endif
             continue;
         }
     } while ( !available );
@@ -374,7 +385,6 @@ xe_comms_write_item( void * Memory,
                      size_t * BytesWritten )
 {
     int rc = 0;
-//    bool do_event = false;
     mt_response_generic_t * response = (mt_response_generic_t *) Memory;
 
     // A response can only be placed in a slot that was used by a
@@ -400,16 +410,17 @@ xe_comms_write_item( void * Memory,
     // We're producing a response
     ++g_state.back_ring.rsp_prod_pvt;
 
-    RING_PUSH_RESPONSES( &g_state.back_ring );
-    (void) send_event( g_state.local_event_port );
-    
-/*
-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, do_event );
-    if ( do_event || !do_event )
+#if PVM_USES_EVENT_CHANNEL
+    bool notify = false;
+    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, notify );
+    if ( notify ) // notify || !notify )
     {
         (void) send_event( g_state.local_event_port );
     }
-*/
+#else
+    RING_PUSH_RESPONSES( &g_state.back_ring );
+#endif
+
     DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
 
     return rc;
@@ -517,16 +528,14 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 
     DEBUG_PRINT("Event Channel page address: %p\n", g_state.event_channel_mem);
     bmk_memset(g_state.event_channel_mem, 0, PAGE_SIZE);	
- 
+
+#if (INS_USES_EVENT_CHANNEL || PVM_USES_EVENT_CHANNEL)
     // Ports are bound in the masked state
     err = minios_evtchn_bind_interdomain( srvr_id,
                                           remote_prt_nmbr,
                                           xe_comms_event_callback,
                                           g_state.event_channel_mem,
                                           &g_state.local_event_port );
-
-    //g_state.local_event_port = minios_bind_virq(28, xe_comms_event_callback, g_state.event_channel_mem);
-
     if (err)
     {
         MYASSERT(!"Could not bind to event channel\n");
@@ -536,6 +545,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     // Clear channel of events and unmask
     minios_clear_evtchn( g_state.local_event_port );
     minios_unmask_evtchn( g_state.local_event_port );
+#endif
 
     // Indicate that the VM's event channel is bound
     err = xe_comms_write_int_to_key( VM_EVT_CHN_BOUND_PATH, 1 );
@@ -573,7 +583,6 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     domid_t         localId = 0;
     domid_t         remoteId = 0;
 
-//    grant_ref_t	    client_grant_ref = 0;
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );

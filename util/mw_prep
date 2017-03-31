@@ -1,17 +1,16 @@
 #!/bin/bash 
 
-## Prepare the repo for development copying some files to their final
-## destinations. We do this on files that devs change frequently, so
-## those changes aren't constantly shown in the repo history.
-
+##
+## Prepare the repo for development by copying some files to their
+## final destinations. We do this on files that devs change
+## frequently, so those changes aren't constantly changing in the
+## repo.
+##
 
 if [ -z $MWROOT ]; then
    echo "Failure: MWROOT must be defined in env"
    exit 1
 fi
-
-mt=Makefile.template
-m=Makefile
 
 # Copy the template Makefiles to regular Makefiles
 for d in $MWROOT/unikernel/rump-xenevent/apps/xenevent_app \

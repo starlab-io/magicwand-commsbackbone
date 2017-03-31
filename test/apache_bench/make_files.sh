@@ -6,7 +6,7 @@ ONE_HUNDRED_BYTES="0123456789012345678901234567890123456789012345678901234567890
 
 mkdir -p ./files
 
-for i in `seq 0 100 5000`;
+for i in `seq 0 1000 5000`;
 do
     echo -n "" > $FILEDIR/$i
 
@@ -20,7 +20,7 @@ done
 
 ONE_THOUSAND_BYTES=`cat $FILEDIR/1000`
 
-for i in `seq 6000 1000 50000`;
+for i in `seq 10000 10000 50000`;
 do
     echo -n "" > $FILEDIR/$i
 
@@ -33,7 +33,7 @@ done
 
 FIFTY_THOUSAND_BYTES=`cat $FILEDIR/50000`
 
-for i in `seq 100000 50000 1000000`;
+for i in `seq 100000 100000 3000000`;
 do
     echo -n "" > $FILEDIR/$i
 

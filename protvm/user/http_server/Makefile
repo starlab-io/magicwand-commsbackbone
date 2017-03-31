@@ -25,4 +25,4 @@ clean:
 	rm -f $(TCP_IP_APP_NAME)
 	@echo ""
 	@echo ""
-	$(MAKE) clean all -C $(WRAPPER_DIR)
+	$(MAKE) clean -C $(WRAPPER_DIR)
