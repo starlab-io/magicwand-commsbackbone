@@ -332,9 +332,16 @@ xe_comms_read_item( void * Memory,
 
         if ( !available )
         {
-            // Nothing was available. Block until event arrives and try again.
+            // Nothing was available. Block until either (a) event
+            // arrives or (b) a timeout has expired, and try again.
 #if INS_USES_EVENT_CHANNEL
-            xenevent_semaphore_down( g_state.messages_available );
+            //xenevent_semaphore_down( g_state.messages_available );
+
+            // XXXX: poor man's semaphore_timeout()
+            if ( !xenevent_semaphore_trydown( g_state.messages_available ) )
+            {
+                xenevent_kpause("Semaphore poll", true, 1, NULL);
+            }
 #else
             xenevent_kpause("Poll ring buffer", true, 1, NULL);
 #endif
@@ -413,7 +420,8 @@ xe_comms_write_item( void * Memory,
 #if PVM_USES_EVENT_CHANNEL
     bool notify = false;
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, notify );
-    if ( notify ) // notify || !notify )
+    if ( notify )
+        //( notify || !notify )
     {
         (void) send_event( g_state.local_event_port );
     }

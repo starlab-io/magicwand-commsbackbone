@@ -43,6 +43,12 @@
 
 #define DEV_FILE "/dev/mwcomms"
 
+//
+// 0 - wrap operations and use native sockets only
+// 1 - wrap operations and use mwcomms driver for TCP traffic
+//
+#define USE_MWCOMMS 1
+
 
 //
 // Which send() implementation should we use?
@@ -56,11 +62,6 @@
 // Should we wait if we encounter EAGAIN?
 #define EAGAIN_TRIGGERS_SLEEP 1
 
-//
-// 0 - wrap operations and use native sockets only
-// 1 - wrap operations and use mwcomms driver for TCP traffic
-//
-#define USE_MWCOMMS 1
 
 static int devfd = -1; // FD to MW device
 
@@ -217,15 +218,16 @@ mwcomms_write_request( IN  int         MwFd,
     }
 #endif // MYDEBUG
 
-//    DEBUG_PRINT( "Processing request type %x fd %d\n",
-//                 Request->base.type, MwFd );
+    DEBUG_PRINT( "Processing request type %x fd %d and %s wait on response\n",
+                 Request->base.type, MwFd,
+                 ReadResponse ? "will" : "won't" );
 
     // Will we wait for the response?
     if ( ReadResponse )
     {
         MT_REQUEST_SET_CALLER_WAITS( Request );
     }
-    
+
     // Write the request directly to the MW socket. If the ring buffer
     // is full, wait and try again.
     do
@@ -246,7 +248,7 @@ mwcomms_write_request( IN  int         MwFd,
     } while ( true );
 
     err = errno;
-    
+
     if ( ct < 0 )
     {
         rc = -1;
@@ -260,7 +262,7 @@ mwcomms_write_request( IN  int         MwFd,
         // Do not await the response. We're done.
         goto ErrorExit;
     }
-    
+
     // Read the response from the MW socket. This may block.
     do
     {
@@ -268,6 +270,10 @@ mwcomms_write_request( IN  int         MwFd,
     } while ( ct < 0 && EINTR == errno );
 
     err = errno;
+
+    DEBUG_PRINT( "Received response: fd %d ID %lx\n",
+                 MwFd,
+                 (unsigned long)Response->base.id );
 
     if ( ct < MT_RESPONSE_BASE_SIZE )
     {
@@ -323,6 +329,66 @@ mwcomms_init_request( INOUT mt_request_generic_t * Request,
     Request->base.sockfd = MwSockFd;
     Request->base.flags  = 0;
 }
+
+
+#ifdef MYDEBUG // do NOT use the DEBUG_PRINT() macro here
+
+// From
+// http://stackoverflow.com/questions/7775991/how-to-get-hexdump-of-a-structure-data
+static void
+hex_dump( const char *desc, void *addr, int len )
+{
+    int i;
+    unsigned char buff[17];
+    unsigned char *pc = (unsigned char*)addr;
+
+    // Output description if given.
+    if (desc != NULL)
+        printf ("%s:\n", desc);
+
+    if (len == 0) {
+        printf("  ZERO LENGTH\n");
+        return;
+    }
+    if (len < 0) {
+        printf("  NEGATIVE LENGTH: %i\n",len);
+        return;
+    }
+
+    // Process every byte in the data.
+    for (i = 0; i < len; i++) {
+        // Multiple of 16 means new line (with line offset).
+
+        if ((i % 16) == 0) {
+            // Just don't print ASCII for the zeroth line.
+            if (i != 0)
+                printf ("  %s\n", buff);
+
+            // Output the offset.
+            printf ("  %04x ", i);
+        }
+
+        // Now the hex code for the specific character.
+        printf (" %02x", pc[i]);
+
+        // And store a printable ASCII character for later.
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e))
+            buff[i % 16] = '.';
+        else
+            buff[i % 16] = pc[i];
+        buff[(i % 16) + 1] = '\0';
+    }
+
+    // Pad out last line if not exactly 16 characters.
+    while ((i % 16) != 0) {
+        printf ("   ");
+        i++;
+    }
+
+    // And print the final ASCII bit.
+    printf ("  %s\n", buff);
+}
+#endif // MYDEBUG
 
 
 int 
@@ -531,6 +597,9 @@ recvfrom( int    SockFd,
     int err = 0;
     ssize_t rc = 0;
 
+    // We write an mt_request_socket_recv_t, but could get back either
+    // a mt_response_socket_recv_t or mt_response_socket_recvfrom_t.
+    
     bzero( &response, sizeof(response) );
 
     if ( !mwcomms_is_mwsocket(SockFd) )
@@ -556,9 +625,9 @@ recvfrom( int    SockFd,
         received = &response.socket_recvfrom.count;
     }
 
-    // We write a socket_recv request, but could 
-    //DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
-    rc = mwcomms_write_request( SockFd, true, &request, &response );
+    //DEBUG_PRINT( "Receiving %d bytes\n",
+    //request.socket_recv.requested );
+    rc = (ssize_t)mwcomms_write_request( SockFd, true, &request, &response );
     err = errno;
     if ( rc )
     {
@@ -581,7 +650,7 @@ recvfrom( int    SockFd,
         rc = 0;
         goto ErrorExit;
     }
-*/  
+*/
     // Failure: rc = -1, errno set
     if ( response.base.status < 0 )
     {
@@ -624,6 +693,8 @@ recvfrom( int    SockFd,
 ErrorExit:
     DEBUG_PRINT( "recvfrom(%d, buf, %d, %d, ... ) ==> %d / %d\n",
                  SockFd, (int)Len, Flags, (int)rc, err );
+    //hex_dump( "Received data", response.socket_recv.bytes, *received );
+
     errno = err;
     return rc;
 }

@@ -434,6 +434,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     socklen_t      addrlen = 0;
     int             events = 0;
     int                 rc = 0;
+    ssize_t         callrc = 0;
     bool            polled = false;    
     int              flags = xe_net_translate_msg_flags( Request->flags );
 
@@ -445,33 +446,40 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     Response->count       = 0;
     Response->base.status = 0;
 
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is recvfrom() 0x%x bytes\n",
+                  WorkerThread->idx,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
+                  Request->requested );
+
     while( true )
     {
         do
         {
-            Response->count = recvfrom( WorkerThread->local_fd,
-                                        (void *) Response->bytes,
-                                        Request->requested,
-                                        flags,
-                                        ( struct sockaddr * ) &src_addr,
-                                        &addrlen );
-        } while( Response->count < 0 && EINTR == errno );
+            callrc = recvfrom( WorkerThread->local_fd,
+                           (void *) Response->bytes,
+                           Request->requested,
+                           flags,
+                           ( struct sockaddr * ) &src_addr,
+                           &addrlen );
+        } while( callrc < 0 && EINTR == errno );
 
         // recvfrom() returned without being interrupted
 
-        if ( Response->count < 0 )
+        if ( callrc < 0 )
         {
+            // recvfrom() failed
             Response->base.status = XE_GET_NEG_ERRNO();
             Response->count       = 0;
             break;
         }
 
         // Success
-        Response->base.status = Response->count;
+        Response->base.status = 0;
+        Response->count       = callrc;
 
         if ( Response->count > 0 ) break;
 
-        // recvfrom() ==> 0. Check for remote close
+        // recvfrom() returned 0. Check for remote close.
 
         // Check for events from previous loop: there was supposed
         // to be data, but we didn't read any. The connection was
@@ -479,7 +487,6 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
         if ( events & (POLLIN | POLLRDNORM) )
         {
             WorkerThread->state_flags |= _MT_FLAGS_REMOTE_CLOSED;
-            DEBUG_BREAK();
             break;
         }
 
@@ -492,13 +499,16 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
             break;
         }
         
-        // poll() has not been invoked yet. Invoke it and check for results again.
+        // poll() has not been invoked yet. Invoke it and check for
+        // results again. A failure here counts as an internal error.
         rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
-        // Check for failure: this counts as an internal error
         if ( rc ) goto ErrorExit;
 
         polled = true;
     } // while
+
+    DEBUG_PRINT( "recvfrom() got total of 0x%x bytes, status=%d\n",
+                 (int)Response->count, Response->base.status );
 
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
@@ -521,6 +531,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 {
     int             events = 0;
     int                 rc = 0;
+    ssize_t         callrc = 0;
     bool            polled = false;    
     int              flags = xe_net_translate_msg_flags( Request->flags );
     
@@ -542,28 +553,29 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     {
         do
         {
-            Response->count = recv( WorkerThread->local_fd,
-                                    &Response->bytes[ Response->count ],
-                                    Request->requested - Response->count,
-                                    flags );
-        } while( Response->count < 0 && EINTR == errno );
+            callrc = recv( WorkerThread->local_fd,
+                           &Response->bytes[ Response->count ],
+                           Request->requested - Response->count,
+                           flags );
+        } while( callrc < 0 && EINTR == errno );
 
         // recv() returned without being interrupted
 
-        if ( Response->count < 0 )
+        if ( callrc < 0 )
         {
-            Response->base.status = (Response->count > 0) ? 0 : XE_GET_NEG_ERRNO();
+            // recv() failed
+            Response->base.status = XE_GET_NEG_ERRNO();
             Response->count       = 0;
-            //MYASSERT( !"recv" );
             break;
         }
 
         // Success
-        Response->base.status = Response->count;
+        Response->base.status = 0;
+        Response->count       = callrc;
 
         if ( Response->count > 0 ) break;
 
-        // recv() ==> 0. Check for remote close.
+        // recv() returned 0. Check for remote close.
         if ( events & (POLLIN | POLLRDNORM) )
         {
             WorkerThread->state_flags |= _MT_FLAGS_REMOTE_CLOSED;
@@ -578,9 +590,9 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
             break;
         }
         
-        // poll() has not been invoked yet. Invoke it and check for results again.
+        // poll() has not been invoked yet. Invoke it and check for
+        // results again. A failure here counts as an internal error.
         rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
-        // Check for failure: this counts as an internal error
         if ( rc ) goto ErrorExit;
 
         polled = true;

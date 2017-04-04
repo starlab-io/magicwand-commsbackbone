@@ -1008,14 +1008,15 @@ mwsocket_pending_error( mwsocket_instance_t * SockInst,
 
     if ( SockInst->remote_surprise_close )
     {
+        // Once set, remote_surprise_close is never cleared in a sockinst.
         rc = -MW_ERROR_REMOTE_SURPRISE_CLOSE;
 
         // Operations behave differently when the remote side goes down...
         if ( MtRequestSocketSend == RequestType )
         {
-            pr_info( "Delivering SIGPIPE to process %d (%s) for socket %d\n",
-                     SockInst->proc->pid, SockInst->proc->comm,
-                     SockInst->local_fd );
+            pr_debug( "Delivering SIGPIPE to process %d (%s) for socket %d\n",
+                      SockInst->proc->pid, SockInst->proc->comm,
+                      SockInst->local_fd );
             send_sig( SIGPIPE, current, 0 );
         }
     }
@@ -1023,10 +1024,10 @@ mwsocket_pending_error( mwsocket_instance_t * SockInst,
     {
         rc = SockInst->pending_errno;
 
-        pr_info( "Delivering pending error %d to process %d (%s) for socket %d\n",
-                 rc,
-                 SockInst->proc->pid, SockInst->proc->comm,
-                 SockInst->local_fd );
+        pr_debug( "Delivering pending error %d to process %d (%s) for socket %d\n",
+                  rc,
+                  SockInst->proc->pid, SockInst->proc->comm,
+                  SockInst->local_fd );
         // Clear the pending errno. The remote_surprise_close doesn't
         // get reset, but this does.
         SockInst->pending_errno = 0;
@@ -1193,7 +1194,6 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
         up_read( &ActiveRequest->sockinst->close_lock );
     }
 
-    /////////////////////////
     if ( MtResponseSocketSend == Response->base.type )
     {
         // If we're on the final response, clear out the state and
@@ -1222,24 +1222,25 @@ mwsocket_post_process_response( mwsocket_active_request_t * ActiveRequest,
                       (int)Response->socket_send.count );
         }
     }
-// ^^^^^^^^^^^^^^^^^^^^^ ??????????????
     
-    // XXXX: In case the request failed and the requestor will not
-    // process the response, we have to inform the user of the error
-    // in some other way. In the worst case, we can close the FD
-    // underneath the user. For now, we will deliver an error or a
-    // SIGPIPE the next time the user interacts with the subject
-    // mwsocket. Rely on the INS to populate the flags correctly in
-    // case of surprise remote close. This approach might report an
-    // errno that is not expected for the call the user is making.
+    // In case the request failed and the requestor will not process
+    // the response, we have to inform the user of the error in some
+    // other way. We will deliver an error or a SIGPIPE the next time
+    // the user interacts with the subject mwsocket, depending on the
+    // type of interaction. Rely on the INS to populate the flags
+    // correctly in case of surprise remote close. This approach might
+    // report an errno that is not expected for the call the user is
+    // making.
 
-    if ( Response->base.flags & _MT_FLAGS_REMOTE_CLOSED )
+    if ( Response->base.flags & _MT_FLAGS_REMOTE_CLOSED
+        && !ActiveRequest->sockinst->remote_surprise_close )
     {
         ActiveRequest->sockinst->remote_surprise_close = true;
-        pr_info( "Remote side of fd %d (pid %d [%s]) closed.\n",
-                      ActiveRequest->sockinst->local_fd,
-                      ActiveRequest->sockinst->proc->pid,
-                      ActiveRequest->sockinst->proc->comm );
+        pr_info( "Remote side of fd %d (pid %d [%s]) closed. "
+                 "Next recv/send call will indicate this.\n",
+                 ActiveRequest->sockinst->local_fd,
+                 ActiveRequest->sockinst->proc->pid,
+                 ActiveRequest->sockinst->proc->comm );
     }
 
     // N.B. Do not use ActiveRequest->response -- it might not be valid yet.
@@ -1419,7 +1420,8 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
 #if INS_USES_EVENT_CHANNEL
     bool notify = false;
     RING_PUSH_REQUESTS_AND_CHECK_NOTIFY( &g_mwsocket_state.front_ring, notify );
-    if ( notify )  // notify || !notify )
+    if ( notify )
+        // ( notify || !notify )
     {
         mw_xen_send_event();
     }
@@ -1975,7 +1977,7 @@ mwsocket_read( struct file * File,
     rc = mwsocket_pending_error( sockinst, response->base.type & MT_TYPE_MASK );
     if ( rc )
     {
-        pr_debug( "Delivering error: 0x%x\n", (int)rc );
+        pr_debug( "Delivering error: %d\n", (int)rc );
         goto ErrorExit;
     }
 
@@ -2072,7 +2074,7 @@ mwsocket_write( struct file * File,
     rc = mwsocket_pending_error( sockinst, request->base.type );
     if ( rc )
     {
-        pr_debug( "Delivering error: 0x%x\n", (int)rc );
+        pr_debug( "Delivering error: %d\n", (int)rc );
         goto ErrorExit;
     }
 
@@ -2116,7 +2118,7 @@ mwsocket_ioctl( struct file * File,
     rc = mwsocket_find_sockinst( &sockinst, File );
     if ( rc )
     {
-        pr_err( "Called IOCTL on an invalid file\n" );
+        pr_err( "Called IOCTL on an invalid file %p\n", File );
         rc = -EBADFD;
         goto ErrorExit;
     }
