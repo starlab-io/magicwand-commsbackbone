@@ -1535,9 +1535,10 @@ mwsocket_response_consumer( void * Arg )
                 RING_HAS_UNCONSUMED_RESPONSES( &g_mwsocket_state.front_ring );
             if ( !available )
             {
+                // Nothing available. Exit if requested, otherwise
+                // wait for a response to appear.
                 if ( g_mwsocket_state.pending_exit )
                 {
-                    // Nothing available and waiting on exit
                     goto ErrorExit;
                 }
 
