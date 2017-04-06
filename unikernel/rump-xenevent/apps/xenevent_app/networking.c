@@ -373,10 +373,14 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd );
 
-    // NetBSD does not implement accept4. Therefore the flags are dropped.
+    // NetBSD does not implement accept4. Therefore the flags are
+    // ignored here. However, they are copied into the response for
+    // PVM usage.
+    Response->flags = 0;
     if ( Request->flags )
     {
-        DEBUG_PRINT( "Dropping PVM flags 0x%x in accept()\n", Request->flags );
+        DEBUG_PRINT( "Not observing PVM flags 0x%x in accept()\n", Request->flags );
+        Response->flags = Request->flags;
     }
 
     sockfd = accept( WorkerThread->local_fd,

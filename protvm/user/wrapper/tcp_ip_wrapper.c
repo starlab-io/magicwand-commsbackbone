@@ -560,7 +560,7 @@ accept( int SockFd,
         goto ErrorExit;
     }
 
-    rc = response.base.status; // new socket
+    rc = response.base.sockfd; // new socket
     populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
                           &response.socket_accept.sockaddr );
 

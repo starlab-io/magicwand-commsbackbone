@@ -111,7 +111,7 @@
  *       +----------------------------+
  *                 (new mwsocket)     |
  *                                    |
-                                      |
+ *                                    |
  * Application-initiated              |         Application/Kernel-initiated
  * ---------------------              v         ----------------------------
  *                                 mwsocket
@@ -124,8 +124,8 @@
  *                                +---------+
  *                                | poll    | <------ select/poll/epoll
  *                                +---------+
- *                                | release | <------ close last ref to mwsocket
- *                                +---------+
+ *                                | release | <------ close last ref to underlying 
+ *                                +---------+          file object
  *
  * The significant advantages to this design can be seen in the
  * diagram: the kernel facilities are leveraged to support (1) polling
@@ -283,14 +283,14 @@ mwbase_dev_init( void )
     bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
 
     struct module * mod = (struct module *) THIS_MODULE;
-   // gdb> add-symbol-file char_driver.ko $eax/$rax
+    // gdb> add-symbol-file char_driver.ko $eax/$rax
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
              "################################\n",
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#ifdef MYDEBUG // GDB helper - emites a breakpoint!
+#ifdef MYDEBUG // GDB helper - emits a breakpoint!
    asm( "int $3" // module base in *ax
         //:: "a" ((THIS_MODULE)->module_core));
         :: "a" ((THIS_MODULE)->core_layout.base)
@@ -440,10 +440,10 @@ mwbase_dev_release(struct inode *Inode,
 }
 
 
-/// @brief Main interface to the mwsocket system, used for mwsocket
-/// creation and checking.
-///
-/// 
+/**
+ * @brief Main interface to the mwsocket system, used for mwsocket and
+ * checking.
+ */
 static long
 mwbase_dev_ioctl( struct file  * File,
                   unsigned int   Cmd,
