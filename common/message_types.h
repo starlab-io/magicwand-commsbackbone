@@ -228,7 +228,8 @@ typedef uint32_t mt_flags_t;
 //
 // Indicates the PVM wrapper will read the response
 //
-#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
+#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x00000001
+
 
 //
 // Did the remote side of the TCP/IP connection close? This can appear

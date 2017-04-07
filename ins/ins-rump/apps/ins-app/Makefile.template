@@ -7,8 +7,9 @@
 ##
 
 CC = x86_64-rumprun-netbsd-gcc 
-CFLAGS = -ggdb -std=gnu99 -Wall -Wno-missing-braces
-#CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
+CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
+CFLAGS += -ggdb
+
 CFLAGS += -I..
 CFLAGS += -I../../../../common
 CFLAGS += -I../platform/xen/xen/include 
@@ -25,7 +26,7 @@ BAKE_FLAGS=-c ../xenevents.conf xen_events
 
 # For testing outside of Rump, use Makefile.util
 
-APPNAME=xenevent
+APPNAME=ins-rump
 
 ARCHIVES=
 
@@ -48,8 +49,7 @@ $(APPNAME).run: $(APPNAME).bin
 	@echo "Or debug with ./debug.sh and"
 	@echo " gdb -ex 'target remote:1234' $@"
 
-# threads.c
-$(APPNAME).bin: $(APPNAME).c networking.c workqueue.c pollset.c
+$(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 

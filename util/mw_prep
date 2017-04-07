@@ -13,9 +13,9 @@ if [ -z $MWROOT ]; then
 fi
 
 # Copy the template Makefiles to regular Makefiles
-for d in $MWROOT/unikernel/rump-xenevent/apps/xenevent_app \
-         $MWROOT/protvm/user/wrapper \
-         $MWROOT/protvm/kernel/mwcomms \
+for d in $MWROOT/ins/rump-xenevent/apps/xenevent_app \
+         $MWROOT/protvm/user/wrapper                 \
+         $MWROOT/protvm/kernel/mwcomms               \
          $MWROOT/protvm/kernel/char_driver; 
 do
    cp $d/Makefile.template $d/Makefile
