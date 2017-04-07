@@ -8,7 +8,9 @@
  *
  * WARNING                                                 WARNING
  *
- * To preserve changes, edit common_config.h.template
+ *
+ * To preserve changes, edit common_config.h.template. util/mw_prep
+ * copies it to the right place.
  *
  * If you change this file, update (if needed) common_config.h and
  * rebuild everything.
@@ -68,6 +70,26 @@
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+
+//
+// The macros below determine whether we use the event channel. In the
+// past we have observed scheduling problems on Rump that might make
+// us want to disable the event channel. If it is disabled on side X,
+// then: (1) X will poll on the ring buffer rather than wait on an
+// event, and (2) the other side will not send an event. For
+// performance reasons, you really do want to use the event channel.
+//
+// Here are approximate times for transferring 3 million bytes with
+// assorted settings (yes = uses event channel, no = does not use
+// event channel). We're using batch sending with the simple http
+// server, whose buffer size is 0x1000; MESSAGE_TARGET_MAX_SIZE is
+// 0x100
+//
+// INS yes, PVM yes: 1300ms
+// INS yes, PVM no:  9500ms
+// INS no,  PVM yes: 7500ms
+// INS no,  PVM no:  8800ms
+//
 
 //
 // Does the INS use an event channel callback for notification of

@@ -1505,7 +1505,12 @@ mwsocket_response_consumer( void * Arg )
     ++g_mwsocket_state.front_ring.rsp_cons;                             \
     RING_FINAL_CHECK_FOR_RESPONSES( &g_mwsocket_state.front_ring, available )
 
-    pr_info( "Each slot of the ring holds up to %ld bytes\n",
+    pr_info( "Ring buffer is 0x%lx bytes (0x%x pages). "
+             "0x%lx entries x 0x%lx bytes each\n",
+             XENEVENT_GRANT_REF_COUNT * PAGE_SIZE,
+             XENEVENT_GRANT_REF_COUNT,
+             __RING_SIZE( g_mwsocket_state.sring,
+                          XENEVENT_GRANT_REF_COUNT * PAGE_SIZE ),
              sizeof( union mwevent_sring_entry ) );
 
     // Wait for the ring buffer's initialization to complete
@@ -1523,10 +1528,7 @@ mwsocket_response_consumer( void * Arg )
         goto ErrorExit;
     }
 
-    pr_info( "Proc %d awaiting responses from ring buffer "
-             "(0x%x slots of 0x%lx bytes each).\n",
-             current->pid, RING_SIZE( &g_mwsocket_state.front_ring ),
-             sizeof( union mwevent_sring_entry ) );
+    pr_info( "INS side is ready\n" );
 
     //
     // Consume responses until the module is unloaded. When it is
@@ -2116,9 +2118,10 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    // Write to the ring. Since the user is requesting this, we do not
-    // wait and may return -EAGAIN.
-    rc = mwsocket_send_request( actreq, false );
+    // Write to the ring. If the ring is full, we will wait here on
+    // behalf of the user. This is noticably faster (~100ms/MB) than
+    // having the caller wait and try again later.
+    rc = mwsocket_send_request( actreq, true );
     if ( rc ) goto ErrorExit;
 
     sent = true;
