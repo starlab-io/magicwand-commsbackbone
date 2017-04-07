@@ -180,6 +180,9 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 #  define RING_BUFFER_POLL_INTERVAL (HZ >> 6) // 64x / sec
 #endif
 
+// How long to wait if we want to write a request but the ring is full
+#define RING_FULL_TIMEOUT (HZ >> 6)
+
 // Poll-related messages are annoying, usually....
 
 #define POLL_DEBUG_MESSAGES 0
@@ -434,7 +437,8 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
                                 OUT mwsocket_active_request_t ** ActReq );
 
 static int
-mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq );
+mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq,
+                       IN bool                        WaitForRing );
 
 static int
 mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
@@ -445,21 +449,48 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
  * Primitive Functions
  ******************************************************************************/
 
-// Tracks the current request ID. Corresponds to mt_request_base_t.id
-//
-// XXXX: in future, this should verify there's no old request using
-// the same id.
+/**
+ * @brief Gets the next unused, valid ID for use in requests.
+ *
+ * Caller must hold the global active_request_lock.
+ */
 static mt_id_t
 mwsocket_get_next_id( void )
 {
     static atomic64_t counter = ATOMIC64_INIT( 0 );
-    mt_id_t id = (mt_id_t) atomic64_inc_return( &counter );
+    mt_id_t id = MT_ID_UNSET_VALUE;
 
-    if ( MT_ID_UNSET_VALUE == id )
+    do
     {
+        // Get the next candidate ID
         id = (mt_id_t) atomic64_inc_return( &counter );
-    }
-    
+
+        if ( MT_ID_UNSET_VALUE == id )
+        {
+            id = (mt_id_t) atomic64_inc_return( &counter );
+        }
+
+        // Is this ID currently in use? The caller already holds the lock for us.
+        bool found = false;
+        mwsocket_active_request_t * curr = NULL;
+
+        list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
+        {
+            if ( curr->id == id )
+            {
+                pr_debug( "Not using ID %lx because it is currently in use\n",
+                          (unsigned long) id );
+                found = true;
+                break;
+            }
+        }
+
+        if ( !found )
+        {
+            break;
+        }
+    } while( true );
+
     return id;
 }
 
@@ -470,6 +501,7 @@ mwsocket_event_cb ( void )
 {
     up( &g_mwsocket_state.event_channel_sem );
 }
+
 
 void
 mwsocket_notify_ring_ready( void )
@@ -484,6 +516,13 @@ mwsocket_notify_ring_ready( void )
     complete_all( &g_mwsocket_state.ring_ready );
 }
 
+
+static void
+mwsocket_wait( long TimeoutJiffies )
+{
+    set_current_state( TASK_INTERRUPTIBLE );
+    schedule_timeout( TimeoutJiffies );
+}
 
 /******************************************************************************
  * Support for the MW socket pseudo "filesystem", needed for file
@@ -779,7 +818,13 @@ ErrorExit:
         if ( inode ) iput( inode );
         if ( sockinst )
         {
+            mutex_lock( &g_mwsocket_state.sockinst_lock );
+
             list_del( &sockinst->list_all );
+            atomic_dec( &g_mwsocket_state.sockinst_count );
+
+            mutex_unlock( &g_mwsocket_state.sockinst_lock );
+
             kmem_cache_free( g_mwsocket_state.sockinst_cache, sockinst );
         }
         *SockInst = NULL;
@@ -829,11 +874,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     close->base.type   = MtRequestSocketClose;
     close->base.size   = MT_REQUEST_SOCKET_CLOSE_SIZE;
 
-    do
-    {
-        rc = mwsocket_send_request( actreq );
-    } while ( -EAGAIN == rc );
-
+    rc = mwsocket_send_request( actreq, true );
     if ( rc ) goto ErrorExit;
 
     if ( !WaitForResponse ) goto ErrorExit; // no more work
@@ -866,6 +907,10 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
     {
         return;
     }
+
+    pr_debug( "Destroyed active request %p id=%lx\n",
+              Request, (unsigned long) Request->id );
+
     // Clear the ID of the blocker to close, iff it is this request's
     atomic64_cmpxchg( &Request->sockinst->close_blockid,
                       Request->id, MT_ID_UNSET_VALUE );
@@ -876,9 +921,6 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
     mutex_lock( &g_mwsocket_state.active_request_lock );
     list_del( &Request->list_all );
     mutex_unlock( &g_mwsocket_state.active_request_lock );
-
-    pr_verbose( "Destroyed active request %p id=%lx\n",
-                Request, (unsigned long) Request->id );
 
     kmem_cache_free( g_mwsocket_state.active_request_cache, Request );
 }
@@ -908,7 +950,6 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
 
     // Success
     actreq->issuer = current;
-    actreq->id     = mwsocket_get_next_id();
 
     init_completion( &actreq->arrived );
 
@@ -917,6 +958,8 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
 
     // Add the new active request to the global list
     mutex_lock( &g_mwsocket_state.active_request_lock );
+
+    actreq->id = mwsocket_get_next_id();
 
     list_add( &actreq->list_all,
               &g_mwsocket_state.active_request_list );
@@ -1075,8 +1118,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
         // Wait for completion of all in-flight IO that close must
         // wait on. This sockinst is being destroyed, so we won't
         // release this lock. Once it is acquired, regard the socket
-        // as dead. If the INS has died, then we could block here
-        // forever unless we handle it correctly.
+        // as dead. Do not wait forever.
 
 #if 0 // XXXX: update to this when we're on a more recent kernel
         rc = down_write_killable( &ActiveRequest->sockinst->close_lock );
@@ -1094,8 +1136,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
                 acquired = true;
                 break;
             }
-            set_current_state( TASK_INTERRUPTIBLE );
-            schedule_timeout( GENERAL_RESPONSE_TIMEOUT );
+            mwsocket_wait( GENERAL_RESPONSE_TIMEOUT );
         }
 
         if ( !acquired )
@@ -1213,11 +1254,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
         && !ActiveRequest->sockinst->remote_surprise_close )
     {
         ActiveRequest->sockinst->remote_surprise_close = true;
-        pr_info( "Remote side of fd %d (pid %d [%s]) closed. "
-                 "Next recv/send call will indicate this.\n",
-                 ActiveRequest->sockinst->local_fd,
-                 ActiveRequest->sockinst->proc->pid,
-                 ActiveRequest->sockinst->proc->comm );
+        pr_debug( "Remote side of fd %d (pid %d [%s]) closed. "
+                  "Next recv/send call will indicate this.\n",
+                  ActiveRequest->sockinst->local_fd,
+                  ActiveRequest->sockinst->proc->pid,
+                  ActiveRequest->sockinst->proc->comm );
     }
 
     // N.B. Do not use ActiveRequest->response -- it might not be valid yet.
@@ -1295,11 +1336,8 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         = acceptinst->local_fd;
 
     pr_debug( "Accept in %d [%s]: fd %d ==> %x\n",
-              acceptinst->proc->pid,
-              acceptinst->proc->comm,
-              acceptinst->local_fd,
-              acceptinst->remote_fd );
-
+              acceptinst->proc->pid, acceptinst->proc->comm,
+              acceptinst->local_fd, acceptinst->remote_fd );
 ErrorExit:
     return rc;
 }
@@ -1307,15 +1345,13 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
+mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
+                       IN bool                        WaitForRing )
 {
     int rc = 0;
     uint8_t * dest = NULL;
     mt_request_base_t * base = &ActiveRequest->rr.request.base;
 
-    // XXXX: Fail if ActiveRequest->SockInst->poll_events shows the
-    //       socket as non-writable?
-    
     // Perform minimal base field prep
     base->sig    = MT_SIGNATURE_REQUEST;
     base->sockfd = ActiveRequest->sockinst->remote_fd;
@@ -1338,13 +1374,23 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest )
         goto ErrorExit;
     }
 
-    if ( RING_FULL( &g_mwsocket_state.front_ring ) )
+    do
     {
-        // This happens fairly often. Do not assert on this.
-        //pr_warning( "The ring is full. Try again.\n" );
-        rc = -EAGAIN;
-        goto ErrorExit;
-    }
+        if ( !RING_FULL( &g_mwsocket_state.front_ring ) )
+        {
+            break;
+        }
+        if ( !WaitForRing )
+        {
+            // Wait was not requested so fail. This happens often so
+            // don't emit a message for it.
+            rc = -EAGAIN;
+            goto ErrorExit;
+        }
+
+        // Wait and try again...
+        mwsocket_wait( RING_FULL_TIMEOUT );
+    } while( true );
 
     dest = (uint8_t *) RING_GET_REQUEST( &g_mwsocket_state.front_ring,
                                          g_mwsocket_state.front_ring.req_prod_pvt );
@@ -1419,11 +1465,7 @@ mwsocket_send_message( IN mwsocket_instance_t * SockInst,
 
     memcpy( &actreq->rr.request, Request, Request->base.size );
 
-    do
-    {
-        rc = mwsocket_send_request( actreq );
-    } while ( -EAGAIN == rc );
-
+    rc = mwsocket_send_request( actreq, true );
     if ( rc ) goto ErrorExit;
 
     if ( !AwaitResponse ) goto ErrorExit;
@@ -1486,10 +1528,17 @@ mwsocket_response_consumer( void * Arg )
              current->pid, RING_SIZE( &g_mwsocket_state.front_ring ),
              sizeof( union mwevent_sring_entry ) );
 
+    //
     // Consume responses until the module is unloaded. When it is
     // unloaded, consume whatever is still on the ring, then
     // quit. Only leave this loop on a requested exit or a fatal
     // error.
+    //
+    // Policy: continue upon error.
+    // Policy: in case of pending exit, keep consuming the requests
+    //         until there are no more
+    //
+
     while( true )
     {
         do
@@ -1505,8 +1554,9 @@ mwsocket_response_consumer( void * Arg )
                     goto ErrorExit;
                 }
 
+                // Either poll the ring buffer or wait for an event on
+                // the channel
 #if PVM_USES_EVENT_CHANNEL
-                // Block on arrival of event
                 if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
                 {
                     pr_info( "Received interrupt in worker thread\n" );
@@ -1514,16 +1564,17 @@ mwsocket_response_consumer( void * Arg )
                 }
 #else
                 // Poll the ring
-                set_current_state( TASK_INTERRUPTIBLE );
-                schedule_timeout( RING_BUFFER_POLL_INTERVAL );
+                mwsocket_wait( RING_BUFFER_POLL_INTERVAL );
 #endif
             }
         } while (!available);
 
-        // An item is available. Consume it.
-        // Policy: continue upon error.
-        // Policy: in case of pending exit, keep consuming the requests until
-        //         there are no more
+        //
+        // An item is available. Consume it. The response resides
+        // only on the ring now. It isn't in the active request
+        // yet. We only copy it there upon request.
+        //
+
         response = (mt_response_generic_t *)
             RING_GET_RESPONSE( &g_mwsocket_state.front_ring,
                                g_mwsocket_state.front_ring.rsp_cons );
@@ -1546,45 +1597,64 @@ mwsocket_response_consumer( void * Arg )
             goto ErrorExit;
         }
 
-        // Hereafter: Advance index as soon as we're done with the
-        // item in the ring buffer. 
+        // Hereafter advance index as soon as we're done with the item
+        // in the ring buffer.
         rc = mwsocket_find_active_request_by_id( &actreq, response->base.id );
         if ( rc )
         {
-            // Active requests should never just "disappear". They are
-            // destroyed in an orderly fashion either here (below) or
-            // by the read callback.
+            // Active requests should *never* just "disappear". They
+            // are destroyed in an orderly fashion either here (below)
+            // or in mwsocket_read(). This state can be reached if a
+            // requestor times out on the response arrival.
             pr_warn( "Couldn't find active request with ID %lx\n",
                      (unsigned long) response->base.id );
             RING_CONSUME_RESPONSE();
             continue; // move on
         }
 
-        // Post-process the response. Then copy the data and signal
-        // the completion variable, if requested. Otherwise destroy.
-        // N.B. The response is still only in the ring.
+        //
+        // The active request has been found.
+        //
+
         mwsocket_postproc_no_context( actreq, response );
 
-        if ( actreq->deliver_response )
+        // Decide the fate of the request. It is either delivered to
+        // the caller or destroyed, depending on the caller's request
+        // and status.
+        //
+        // We destroy the response if either (a) the caller doesn't
+        // want the response, or (b) the caller is dying and isn't
+        // between a fork() and exec(). In the case of (b), if the
+        // caller is waiting on the response, its wait will be
+        // interrupted so we can just destroy the response and not
+        // signal completion. See "Understanding the Linux Kernel",
+        // 3e, pages 127 and 831.
+
+        if ( !actreq->deliver_response
+             || (actreq->from_user
+                 && (actreq->sockinst->proc->flags & PF_EXITING)
+                 && !(actreq->sockinst->proc->flags & PF_FORKNOEXEC) ) )
         {
+            if ( actreq->deliver_response )
+            {
+                pr_info( "Not delivering response %lx for fd=%d pid=%d "
+                         "because process is dying\n",
+                         (unsigned long) actreq->id,
+                         actreq->sockinst->local_fd,
+                         actreq->sockinst->proc->pid );
+                MYASSERT( !(actreq->sockinst->proc->flags & PF_FORKNOEXEC) );
+            }
+            mwsocket_destroy_active_request( actreq );
+        }
+        else
+        {
+            // The caller is healthy and wants the response.
             memcpy( &actreq->rr.response, response, response->base.size );
-            // Indicate that more blocking IO can occur on this socket
             complete_all( &actreq->arrived );
         }
 
         // We're done with this slot of the ring
         RING_CONSUME_RESPONSE();
-
-        // If nobody will consume this active request's response,
-        // destroy it. There are two conditions for this: (1) the
-        // caller told us not to deliver the response, or (2) the
-        // caller is dying.
-        if ( !actreq->deliver_response
-             || (actreq->from_user
-                 && actreq->sockinst->proc->flags & PF_EXITING) )
-        {
-            mwsocket_destroy_active_request( actreq );
-        }
     } // while( true )
 
 ErrorExit:
@@ -1613,11 +1683,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     // Sent the request. We will wait for response.
     actreq->deliver_response = true;
 
-    do
-    {
-        rc = mwsocket_send_request( actreq );
-    } while ( -EAGAIN == rc );
-
+    rc = mwsocket_send_request( actreq, true );
     if ( rc ) goto ErrorExit;
 
     // Wait
@@ -1722,8 +1788,7 @@ mwsocket_poll_monitor( void * Arg )
         }
 
         // Sleep
-        set_current_state( TASK_INTERRUPTIBLE );
-        schedule_timeout( POLL_MONITOR_QUERY_INTERVAL );
+        mwsocket_wait( POLL_MONITOR_QUERY_INTERVAL );
         
         // If there are any open mwsockets at all, complete a poll
         // query exchange. The socket instance from this function
@@ -1846,11 +1911,7 @@ mwsocket_handle_attrib( IN struct file            * File,
     request->attrib = SetAttribs->attrib;
     request->value  = SetAttribs->value;
 
-    do
-    {
-        rc = mwsocket_send_request( actreq );
-    } while ( -EAGAIN == rc );
-
+    rc = mwsocket_send_request( actreq, true );
     if ( rc ) goto ErrorExit;
 
     // Wait
@@ -1972,6 +2033,7 @@ ErrorExit:
     if ( -EINTR != rc ) // XXXX: hacky -- could leak
     {
         // The "active" request is now dead
+        //MYASSERT( MtResponseSocketAccept != actreq->rr.response.base.type );
         mwsocket_destroy_active_request( actreq );
     }
 
@@ -2054,9 +2116,9 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    // Write to the ring. Since the user is requesting this, we may
-    // return -EAGAIN.
-    rc = mwsocket_send_request( actreq );
+    // Write to the ring. Since the user is requesting this, we do not
+    // wait and may return -EAGAIN.
+    rc = mwsocket_send_request( actreq, false );
     if ( rc ) goto ErrorExit;
 
     sent = true;

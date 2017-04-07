@@ -290,7 +290,7 @@ mwbase_dev_init( void )
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#ifdef MYDEBUG // GDB helper - emits a breakpoint!
+#ifdef MYTRAP // GDB helper - emits a breakpoint!
    asm( "int $3" // module base in *ax
         //:: "a" ((THIS_MODULE)->module_core));
         :: "a" ((THIS_MODULE)->core_layout.base)
