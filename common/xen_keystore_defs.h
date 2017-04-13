@@ -34,27 +34,33 @@
 // the system.
 //
 
-#define XENEVENT_XENSTORE_ROOT "/unikernel/random"
+//These are defined for initializing the keystore from within the driver
+#define XENEVENT_XENSTORE_PVM_NODE      "pvm"
+#define XENEVENT_XENSTORE_INS_NODE      "ins"
+#define XENEVENT_NO_NODE                ""
 
-#define PRIVATE_ID_PATH       "domid"
+//These definitions are used for navigating the keystore
 
-#define SERVER_ID_KEY             "server_id" 
-#define SERVER_ID_PATH            XENEVENT_XENSTORE_ROOT "/" SERVER_ID_KEY
+#define XENEVENT_XENSTORE_ROOT      "/mw"
 
-#define CLIENT_ID_KEY             "client_id" 
-#define CLIENT_ID_PATH            XENEVENT_XENSTORE_ROOT "/" CLIENT_ID_KEY
+#define XENEVENT_XENSTORE_PVM       XENEVENT_XENSTORE_ROOT "/" XENEVENT_XENSTORE_PVM_NODE
 
-#define GNT_REF_KEY               "gnt_ref" 
-#define GRANT_REF_PATH            XENEVENT_XENSTORE_ROOT "/" GNT_REF_KEY
+#define PRIVATE_ID_PATH             "domid"
 
-#define MSG_LEN_KEY               "msg_len"
-#define MSG_LEN_PATH              XENEVENT_XENSTORE_ROOT "/" MSG_LEN_KEY
+#define SERVER_ID_KEY               "id"
+#define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
-#define VM_EVT_CHN_PORT_KEY       "vm_evt_chn_prt"
-#define VM_EVT_CHN_PORT_PATH      XENEVENT_XENSTORE_ROOT "/" VM_EVT_CHN_PORT_KEY
 
-#define VM_EVT_CHN_BOUND_KEY      "vm_evt_chn_is_bound"
-#define VM_EVT_CHN_BOUND_PATH     XENEVENT_XENSTORE_ROOT "/" VM_EVT_CHN_BOUND_KEY
+//INS constants
+#define XENEVENT_PATH_STR_LEN       32
+
+#define CLIENT_ID_KEY               "ins_dom_id" 
+
+#define GNT_REF_KEY                 "gnt_ref" 
+
+#define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
+
+#define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
 
 //
 //  Grant Mapping Variables 

@@ -75,6 +75,8 @@ typedef struct _xen_comm_state
 {
     bool comms_established;
 
+    domid_t         localId;
+
     // Grant map 
     struct gntmap gntmap_map;
 
@@ -433,22 +435,31 @@ receive_grant_references( domid_t RemoteId )
     char * msg = NULL;
     char * msgptr = NULL;
     char * refstr = NULL;
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
+
     
     xenbus_event_queue_init(&events);
 
-    xenbus_watch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH, &events);
-    while ( (err = xenbus_read(XBT_NIL, GRANT_REF_PATH, &msg)) != NULL
+    bmk_snprintf( path,
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              GNT_REF_KEY ); 
+              
+    xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
+    while ( (err = xenbus_read(XBT_NIL, path, &msg)) != NULL
             ||  msg[0] == '0') {
         bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
         bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
         xenbus_wait_for_watch(&events);
     }
 
-    xenbus_unwatch_path_token(XBT_NIL, GRANT_REF_PATH, GRANT_REF_PATH);
+    xenbus_unwatch_path_token( XBT_NIL, path, XENEVENT_NO_NODE );
 
-    DEBUG_PRINT("Parsing grant references in %s\n", GRANT_REF_PATH);
+    DEBUG_PRINT("Parsing grant references in %s\n", path);
 
-    rc = xe_comms_read_str_from_key( GRANT_REF_PATH, &refstr );
+    rc = xe_comms_read_str_from_key( path, &refstr );
     if ( rc )
     {
         goto ErrorExit;
@@ -463,7 +474,7 @@ receive_grant_references( domid_t RemoteId )
         if ( *next != XENEVENT_GRANT_REF_DELIM [0] )
         {
             rc = BMK_EINVAL;
-            MYASSERT( !("Invalid data in " GRANT_REF_PATH ) );
+            MYASSERT( !("Invalid data in grant ref path" ) );
             goto ErrorExit;
         }
 
@@ -504,6 +515,7 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
                                evtchn_port_t remote_prt_nmbr)
 {
     int err = 0;
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
     // Don't use minios_evtchn_bind_interdomain; spurious events are
     // delivered to us when we do.
     
@@ -538,7 +550,14 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
     minios_unmask_evtchn( g_state.local_event_port );
 
     // Indicate that the VM's event channel is bound
-    err = xe_comms_write_int_to_key( VM_EVT_CHN_BOUND_PATH, 1 );
+    bmk_snprintf( path,
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              VM_EVT_CHN_BOUND_KEY );
+
+    err = xe_comms_write_int_to_key( path, 1 );
     if ( err )
     {
         goto ErrorExit;
@@ -570,13 +589,15 @@ int
 xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 {
     int             rc = 0;
-    domid_t         localId = 0;
     domid_t         remoteId = 0;
+    char            path[ MAX_KEY_VAL_WIDTH ] = {0};
 
 //    grant_ref_t	    client_grant_ref = 0;
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
+
+    DEBUG_BREAK();
 
     rc = xenevent_semaphore_init( &g_state.messages_available );
     if ( 0 != rc )
@@ -589,18 +610,26 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     //
 
     // Read our own dom ID
-    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &localId );
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &g_state.localId );
     if ( rc )
     {
         goto ErrorExit;
     }
 
     // Write our dom ID to agreed-upon path
-    rc = xe_comms_write_int_to_key( CLIENT_ID_PATH, localId );
+    bmk_snprintf( path, 
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              CLIENT_ID_KEY );
+    rc = xe_comms_write_int_to_key( path, g_state.localId );
     if ( rc )
     {
         goto ErrorExit;
     }
+
+    memset( &path, 0, XENEVENT_PATH_STR_LEN );
 
     // Wait for the server ID.
     rc = xe_comms_wait_and_read_int_from_key( SERVER_ID_PATH,
@@ -621,7 +650,14 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     }
 
     // Get the event port and bind to it
-    rc = xe_comms_wait_and_read_int_from_key( VM_EVT_CHN_PORT_PATH,
+    bmk_snprintf( path,
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              VM_EVT_CHN_PORT_KEY );
+              
+    rc = xe_comms_wait_and_read_int_from_key( path,
                                               &vm_evt_chn_prt_nmbr );
     if ( rc )
     {

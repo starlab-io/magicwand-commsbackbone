@@ -10,7 +10,7 @@ CPPFLAGS += -Ixen
 
 # Enable debugging - breakpoints and messages
 #CPPFLAGS += -DMYDEBUG
-CPPFLAGS += -DMYTRAP
+#CPPFLAGS += -DMYTRAP
 
 # Definitely do NOT define this. It breaks the build.
 #CPPFLAGS+= -D__RUMP_KERNEL__

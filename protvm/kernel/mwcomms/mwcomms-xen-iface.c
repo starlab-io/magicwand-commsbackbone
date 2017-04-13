@@ -66,8 +66,7 @@ typedef struct _mwcomms_xen_globals {
 
     mw_region_t xen_shmem;
 
-    bool client_id_watch_active;
-    bool evtchn_bound_watch_active;
+    bool xenbus_watch_active;
 
     int common_evtchn;
     int irq;
@@ -83,6 +82,95 @@ static mwcomms_xen_globals_t g_mwxen_state;
 
 
 static int
+mw_xen_rm( const char *dir, const char *node )
+{
+    struct xenbus_transaction   txn;
+    int                         err;
+    bool                        txnstarted = false;
+    int                         term = 0;
+
+    err = xenbus_transaction_start( &txn );
+    if ( err )
+    {
+        pr_err( "Error removing dir: %s%s\n", dir, node );
+        goto ErrorExit;
+    }
+
+    txnstarted = true;
+
+    if ( ! xenbus_exists( txn, dir, node ) )
+    {
+       goto ErrorExit;
+    }
+
+    err = xenbus_rm( txn, dir, node );
+    if ( err )
+    {
+        goto ErrorExit;
+    }
+
+ErrorExit:
+
+    if ( txnstarted )
+    {
+        if ( xenbus_transaction_end( txn, term ) )
+        {
+            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", dir, node );
+        }
+    }
+    return err;
+}
+
+static int
+mw_xen_mkdir( const char * dir, const char * node )
+{
+    struct xenbus_transaction   txn;
+    int                         err;
+    bool                        txnstarted = false;
+    int                         term = 0;
+
+    err = xenbus_transaction_start( &txn );
+    if ( err )
+    {
+        pr_err( "Error starting xenbus transaction\n" );
+        goto ErrorExit;
+    }
+
+    txnstarted = true;
+
+    if (  xenbus_exists( txn, dir, "" ) )
+    {
+
+        err = xenbus_rm( txn, dir, node);
+        if ( err )
+        {
+            pr_err( "Cloud not delete existing xenstore dir: dir\n" );
+            goto ErrorExit;
+        }
+
+    }
+
+    err = xenbus_mkdir( txn, dir, node );
+    if ( err )
+    {
+        pr_err( "Could not create node: %s in dir: %s\n", node, dir );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    if ( txnstarted )
+    {
+        if ( xenbus_transaction_end( txn, term ) )
+        {
+            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", dir, node );
+        }
+    }
+
+    return err;
+}
+
+
+static int
 mw_xen_write_to_key( const char * dir, const char * node, const char * value )
 {
    struct xenbus_transaction   txn;
@@ -93,7 +181,7 @@ mw_xen_write_to_key( const char * dir, const char * node, const char * value )
    //pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
    
    err = xenbus_transaction_start(&txn);
-   if (err)
+   if ( err )
    {
        pr_err("Error starting xenbus transaction\n");
        goto ErrorExit;
@@ -112,18 +200,19 @@ mw_xen_write_to_key( const char * dir, const char * node, const char * value )
    }
    
    err = xenbus_write(txn, dir, node, value);
-   if (err)
+   if ( err )
    {
       pr_err("Could not write to XenStore Key\n");
       goto ErrorExit;
    }
 
+
 ErrorExit:
    if ( txnstarted )
    {
-       if ( xenbus_transaction_end(txn, term) )
+       if ( xenbus_transaction_end( txn, term ) )
        {
-           pr_err("Failed to end transaction\n");
+           pr_err( "Failed to end transaction: %s/%s = %s\n", dir, node, value );
        }
    }
    
@@ -149,7 +238,7 @@ mw_xen_read_from_key( const char * dir, const char * node )
    str = (char *)xenbus_read(txn, dir, node, NULL);
    if (XENBUS_IS_ERR_READ(str))
    {
-      pr_err("Could not read XenStore Key\n");
+      pr_err("Could not read XenStore Key: %s/%s\n", dir, node );
       xenbus_transaction_end(txn,1);
       return NULL;
    }
@@ -180,7 +269,7 @@ mw_xen_write_server_id_to_key( void )
 
    pr_debug( "Running within Xen domid=%s\n", dom_id_str);
 
-   err = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT, SERVER_ID_KEY, dom_id_str );
+   err = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM, SERVER_ID_KEY, dom_id_str );
    if ( err )
    {
        goto ErrorExit;
@@ -203,6 +292,7 @@ mw_xen_create_unbound_evt_chn( void )
    struct evtchn_alloc_unbound alloc_unbound; 
    char                        str[MAX_GNT_REF_WIDTH]; 
    int                         err = 0;
+   char                        path[ XENEVENT_PATH_STR_LEN ] = {0};
 
    if ( !g_mwxen_state.remote_domid )
    {
@@ -229,7 +319,13 @@ mw_xen_create_unbound_evt_chn( void )
    snprintf( str, MAX_GNT_REF_WIDTH,
              "%u", g_mwxen_state.common_evtchn );
 
-   err = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
+   snprintf( path, 
+             sizeof(path),
+             "%s/%d",
+             XENEVENT_XENSTORE_ROOT,
+             g_mwxen_state.remote_domid );
+
+   err = mw_xen_write_to_key( path,
                               VM_EVT_CHN_PORT_KEY,
                               str );
 
@@ -353,6 +449,8 @@ mw_xen_write_grant_refs_to_key( void )
     // have to get this memory via kmalloc()
     char gnt_refs[ XENEVENT_GRANT_REF_COUNT * sizeof(one_ref) ] = {0};
 
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
+
     for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
     {
         if ( snprintf( one_ref, sizeof(one_ref),
@@ -372,7 +470,14 @@ mw_xen_write_grant_refs_to_key( void )
         }
     }
 
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT, GNT_REF_KEY, gnt_refs );
+    snprintf( path,
+              sizeof(path),
+              "%s/%d",
+              XENEVENT_XENSTORE_ROOT,
+              g_mwxen_state.remote_domid );
+
+
+    rc = mw_xen_write_to_key( path, GNT_REF_KEY, gnt_refs );
 
 ErrorExit:
     return rc;
@@ -380,55 +485,82 @@ ErrorExit:
 
 
 static void
-mw_xen_client_id_state_changed( struct xenbus_watch *w,
-                                const char **v,
-                                unsigned int l )
+mw_xen_vm_port_is_bound( const char *path )
 {
+    
+    char * is_bound_str = NULL;
+
+    
+
+    is_bound_str = (char *) mw_xen_read_from_key( path, 
+                                                  XENEVENT_NO_NODE );
+    if ( !is_bound_str )
+    {
+        goto ErrorExit;
+    }
+
+    if ( 0 == strcmp( is_bound_str, "0" ) )
+    {
+        goto ErrorExit;
+    }
+
+    pr_debug("The remote event channel is bound\n");
+
+    g_mwxen_state.irq =
+        bind_evtchn_to_irqhandler( g_mwxen_state.common_evtchn,
+                                   mw_xen_irq_event_handler,
+                                   0, NULL, NULL );
+
+    pr_debug( "Bound event channel %d to irq: %d\n",
+              g_mwxen_state.common_evtchn, g_mwxen_state.irq );
+
+ErrorExit:
+    kfree( is_bound_str );
+    return;
+}
+
+
+static void
+mw_ins_dom_id_found( const char *path )
+{
+
+
     char     *client_id_str = NULL;
     int       err = 0;
 
-    client_id_str = (char *)mw_xen_read_from_key( XENEVENT_XENSTORE_ROOT,
-                                                  CLIENT_ID_KEY );
+    client_id_str = (char *)mw_xen_read_from_key( path,
+                                                  XENEVENT_NO_NODE );
     if ( !client_id_str )
     {
         pr_err("Error reading client id key!!!\n");
-        return;
+        goto ErrorExit;
     }
 
     if (strcmp(client_id_str, "0") == 0)
     {
-        kfree(client_id_str);
-        return;
+        goto ErrorExit;
     }
 
     //
     // Get the client Id 
     // 
-    g_mwxen_state.remote_domid = simple_strtol(client_id_str, NULL, 10);
+    g_mwxen_state.remote_domid = simple_strtol( client_id_str, NULL, 10 );
     pr_debug( "Discovered client ID: %u\n", g_mwxen_state.remote_domid );
 
-    kfree(client_id_str);
+    kfree( client_id_str );
 
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn();
-    if ( err ) return;
+    if ( err ) goto ErrorExit;
    
     // Offer Grant to Client
     mw_xen_offer_grant( g_mwxen_state.remote_domid );
-
-    // Reset Client Id Xenstore Key
-    err = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT, CLIENT_ID_KEY, KEY_RESET_VAL );
-    if ( err )
-    {
-        // XXXX: There's more cleanup if we failed here
-        return;
-    }
 
     // Write Grant Ref to key 
     err = mw_xen_write_grant_refs_to_key();
     if ( err )
     {
-        return;
+        goto ErrorExit;
     }
 
     //
@@ -436,87 +568,79 @@ mw_xen_client_id_state_changed( struct xenbus_watch *w,
     //
     pr_debug( "Handshake with client is complete\n" );
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
-}
 
-static struct xenbus_watch
-mw_xen_client_id_watch =
-{
-    .node = CLIENT_ID_PATH,
-    .callback = mw_xen_client_id_state_changed
-};
+ErrorExit:
+    kfree(client_id_str);
+    return;
+}
 
 
 static void
-mw_xen_vm_port_is_bound( struct xenbus_watch *w,
-                         const char **v,
-                         unsigned int l )
+mw_xenstore_state_changed( struct xenbus_watch *w,
+                                const char **v,
+                                unsigned int l )
 {
-    char * is_bound_str = NULL; 
 
-   is_bound_str = (char *) mw_xen_read_from_key( XENEVENT_XENSTORE_ROOT,
-                                                 VM_EVT_CHN_BOUND_KEY );
-   if ( !is_bound_str )
-   {
-      return;
-   }
+    if ( strstr( v[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
+    {
+        mw_ins_dom_id_found( v[ XS_WATCH_PATH ] );
+        goto ErrorExit;
+    }
 
-   if ( 0 == strcmp( is_bound_str, "0" ) )
-   {
-      kfree(is_bound_str);
-      return;
-   }
-
-   pr_debug("The remote event channel is bound\n");
-
-   g_mwxen_state.irq =
-       bind_evtchn_to_irqhandler( g_mwxen_state.common_evtchn,
-                                  mw_xen_irq_event_handler,
-                                  0, NULL, NULL );
-
-   pr_debug( "Bound event channel %d to irq: %d\n",
-             g_mwxen_state.common_evtchn, g_mwxen_state.irq );
+    if ( strstr( v[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
+    {
+        mw_xen_vm_port_is_bound( v[ XS_WATCH_PATH ] );
+        goto ErrorExit;
+    }
+    
+ErrorExit:
+    return;
 }
 
 static struct xenbus_watch
-mw_xen_evtchn_bound_watch =
+mw_xenstore_watch =
 {
-    .node = VM_EVT_CHN_BOUND_PATH,
-    .callback = mw_xen_vm_port_is_bound
+    .node = XENEVENT_XENSTORE_ROOT,
+    .callback = mw_xenstore_state_changed
 };
+
+
+
+static int
+mw_xen_initialize_keystore(void)
+{
+    int rc = 0;
+    
+    rc = mw_xen_mkdir( XENEVENT_XENSTORE_ROOT, 
+                       XENEVENT_XENSTORE_PVM_NODE );
+
+    if ( rc ) goto ErrorExit;
+
+    rc = mw_xen_mkdir( XENEVENT_XENSTORE_PVM, 
+                       SERVER_ID_KEY );
+
+    if ( rc ) goto ErrorExit;
+
+ErrorExit:
+    return rc;
+    
+}
+
 
 static int 
 mw_xen_initialize_keys(void)
 {
     int rc = 0;
     
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
-                              CLIENT_ID_KEY,
-                              KEY_RESET_VAL );
-    if ( rc ) goto ErrorExit;
-    
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
+    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM,
                               SERVER_ID_KEY,
                               KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
     
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
-                              GNT_REF_KEY,
-                              KEY_RESET_VAL );
-    if ( rc ) goto ErrorExit;
-    
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
-                              VM_EVT_CHN_PORT_KEY,
-                              KEY_RESET_VAL );
-    if ( rc ) goto ErrorExit;
-    
-    rc = mw_xen_write_to_key( XENEVENT_XENSTORE_ROOT,
-                              VM_EVT_CHN_BOUND_KEY,
-                              KEY_RESET_VAL );
-    if ( rc ) goto ErrorExit;
-
 ErrorExit:
     return rc;
 }
+
 
 
 int
@@ -533,7 +657,16 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-    
+   
+
+    //Create keystore path for pvm
+    rc = mw_xen_initialize_keystore();
+    if ( rc )
+    {
+        pr_err("Keystore initialization failed\n");
+        goto ErrorExit;
+    }
+
     // Set all protocol keys to zero
     rc = mw_xen_initialize_keys();
     if ( rc )
@@ -549,25 +682,21 @@ mw_xen_init( mw_region_t * SharedMem,
         goto ErrorExit;
     }
 
+    // *******************************************************
+    // Since we have both watchers watching the root, this
+    // is ineficient, consider merging both watches into one
+    // function
+    // *******************************************************
+    
     // 2. Watch Client Id XenStore Key
-    rc = register_xenbus_watch( &mw_xen_client_id_watch );
+    rc = register_xenbus_watch( &mw_xenstore_watch );
     if (rc)
     {
-        pr_err("Failed to set client id watcher\n");
+        pr_err("Failed to set xenstore_watcher\n");
         goto ErrorExit;
     }
 
-    g_mwxen_state.client_id_watch_active = true;
-
-    // 3. Watch for our port being bound
-    rc = register_xenbus_watch( &mw_xen_evtchn_bound_watch );
-    if (rc)
-    {
-        pr_err("Failed to set client local port watcher\n");
-        goto ErrorExit;
-    }
-
-    g_mwxen_state.evtchn_bound_watch_active = true;
+    g_mwxen_state.xenbus_watch_active = true;
 
 ErrorExit:
     return rc;
@@ -585,14 +714,9 @@ mw_xen_fini( void )
         }
     }
 
-    if ( g_mwxen_state.evtchn_bound_watch_active )
+    if ( g_mwxen_state.xenbus_watch_active )
     {
-        unregister_xenbus_watch( &mw_xen_evtchn_bound_watch );
-    }
-
-    if ( g_mwxen_state.client_id_watch_active )
-    {
-        unregister_xenbus_watch( &mw_xen_client_id_watch );
+        unregister_xenbus_watch( &mw_xenstore_watch );
     }
 
     mw_xen_initialize_keys();
@@ -606,6 +730,10 @@ mw_xen_fini( void )
     {
         mw_xen_free_unbound_evt_chn();
     }
+
+    mw_xen_rm( XENEVENT_XENSTORE_ROOT, XENEVENT_XENSTORE_PVM_NODE );
+
+
 }
 
 
