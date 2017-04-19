@@ -59,3 +59,9 @@ xenevent_semaphore_down( xenevent_semaphore_t Semaphore )
 {
     down( (struct semaphore *) Semaphore );
 }
+
+int
+xenevent_semaphore_trydown( xenevent_semaphore_t Semaphore )
+{
+    return trydown( (struct semaphore *) Semaphore );
+}

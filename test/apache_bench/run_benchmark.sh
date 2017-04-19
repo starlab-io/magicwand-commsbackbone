@@ -6,14 +6,21 @@ RESULTSDIR=$PWD/results
 ATTEMPTS=1
 
 if [ ! -d "$FILEDIR" ]; then
-    
     echo ""
     echo "Please run the make_files.sh script first"
     echo ""
-
     exit 0
 fi
 
+if [ -z $PVM_IP ]; then
+   echo "Failure: PVM_IP must be defined in env"
+   exit 1
+fi
+
+if [ -z $RUMP_IP ]; then
+   echo "Failure: RUMP_IP must be defined in env"
+   exit 1
+fi
 
 if [ "$1" = "rump" ]; then
     ADDR=$RUMP_IP

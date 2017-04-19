@@ -111,7 +111,7 @@
  *       +----------------------------+
  *                 (new mwsocket)     |
  *                                    |
-                                      |
+ *                                    |
  * Application-initiated              |         Application/Kernel-initiated
  * ---------------------              v         ----------------------------
  *                                 mwsocket
@@ -124,8 +124,8 @@
  *                                +---------+
  *                                | poll    | <------ select/poll/epoll
  *                                +---------+
- *                                | release | <------ close last ref to mwsocket
- *                                +---------+
+ *                                | release | <------ close last ref to underlying 
+ *                                +---------+          file object
  *
  * The significant advantages to this design can be seen in the
  * diagram: the kernel facilities are leveraged to support (1) polling
@@ -277,26 +277,25 @@ static int
 mwbase_dev_init( void )
 {
     int rc = 0;
-
-    pr_debug("Initializing\n");
-
-    bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
-
     struct module * mod = (struct module *) THIS_MODULE;
-   // gdb> add-symbol-file char_driver.ko $eax/$rax
+    
+    // gdb> add-symbol-file char_driver.ko $eax/$rax
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
              "################################\n",
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#ifdef MYDEBUG // GDB helper - emites a breakpoint!
+#if 0
+//#ifdef MYTRAP // GDB helper - emits a breakpoint!
    asm( "int $3" // module base in *ax
         //:: "a" ((THIS_MODULE)->module_core));
         :: "a" ((THIS_MODULE)->core_layout.base)
         , "b" ((THIS_MODULE)->init_layout.base)
         , "c" (mod) );
 #endif
+
+   bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
 
    //
    // Dynamically allocate a major number for the device
@@ -305,7 +304,7 @@ mwbase_dev_init( void )
    g_mwcomms_state.dev_major_num =
        register_chrdev( 0, DEVICE_NAME, &mwcomms_fops );
 
-   if (  g_mwcomms_state.dev_major_num < 0)
+   if ( g_mwcomms_state.dev_major_num < 0 )
    {
        rc =  g_mwcomms_state.dev_major_num;
        pr_err( "register_chrdev failed: %d\n", rc );
@@ -314,7 +313,7 @@ mwbase_dev_init( void )
 
    // Register the device class
    g_mwcomms_state.dev_class = class_create( THIS_MODULE, CLASS_NAME );
-   if (IS_ERR( g_mwcomms_state.dev_class ) )
+   if ( IS_ERR( g_mwcomms_state.dev_class ) )
    {
        rc = PTR_ERR( g_mwcomms_state.dev_class );
        pr_err( "class_create failed: %d\n", rc );
@@ -349,9 +348,6 @@ mwbase_dev_init( void )
 
    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
-   pr_info( "Ring buffer has 0x%x pages. Total size is 0x%lx bytes.\n",
-            XENEVENT_GRANT_REF_COUNT, XENEVENT_GRANT_REF_COUNT * PAGE_SIZE );
-   
    // The socket iface is invoked when the ring sharing is
    // complete. Therefore, init it before the Xen iface.
    rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
@@ -440,10 +436,10 @@ mwbase_dev_release(struct inode *Inode,
 }
 
 
-/// @brief Main interface to the mwsocket system, used for mwsocket
-/// creation and checking.
-///
-/// 
+/**
+ * @brief Main interface to the mwsocket system, used for mwsocket and
+ * checking.
+ */
 static long
 mwbase_dev_ioctl( struct file  * File,
                   unsigned int   Cmd,

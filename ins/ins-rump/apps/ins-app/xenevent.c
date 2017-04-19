@@ -645,9 +645,10 @@ post_process_response( mt_request_generic_t  * Request,
     int rc = 0;
 
     // Propogate state, including remote closure status
+    Response->base.flags |= Request->base.flags;
+
     if ( NULL != Worker )
     {
-        Response->base.flags |= Request->base.flags;
         Response->base.flags |= Worker->state_flags;
     }
 

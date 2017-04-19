@@ -228,7 +228,8 @@ typedef uint32_t mt_flags_t;
 //
 // Indicates the PVM wrapper will read the response
 //
-#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
+#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x00000001
+
 
 //
 // Did the remote side of the TCP/IP connection close? This can appear
@@ -395,6 +396,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
+    mt_flags_t        flags; // flags from request
     mt_sockaddr_in_t   sockaddr;
 } mt_response_socket_accept_t;
 

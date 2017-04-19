@@ -21,4 +21,7 @@ xenevent_semaphore_up( xenevent_semaphore_t Semaphore );
 void
 xenevent_semaphore_down( xenevent_semaphore_t Semaphore );
 
+int
+xenevent_semaphore_trydown( xenevent_semaphore_t Semaphore );
+
 #endif // xenevent_minios_h

@@ -69,13 +69,9 @@ typedef struct _mwsocket_verify_args
 
 //
 // For notifying mwsocket that its flags are updated,
-// e.g. fcntl(mwfd, F_SETFD, flags ) is being called. Used to support
-// polling of mwsockets.
+// e.g. fcntl(mwfd, F_SETFD, flags ) is being called.
 //
-/*
-#define MW_IOCTL_SYNC_FLAGS                           \
-    _IO( MW_SOCKET_IOCTL_MAGIC, MW_IOCTL_SEQBASE+0 )
-*/
+
 typedef struct _mwsocket_attrib
 {
     // IN: true=set, false=get

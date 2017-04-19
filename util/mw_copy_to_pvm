@@ -22,4 +22,4 @@ docmd() {
 
 docmd scp -rq $MWROOT/protvm $PVM_USER@$PVM_IP:
 docmd scp -rq $MWROOT/common $PVM_USER@$PVM_IP:
-docmd scp -rq $MWROOT/util $PVM_USER@$PVM_IP:
+docmd scp -rq $MWROOT/util   $PVM_USER@$PVM_IP:
