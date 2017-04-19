@@ -15,6 +15,10 @@ if [ -z $MWROOT ]; then
    exit 1
 fi
 
+<<<<<<< HEAD
+
+=======
+>>>>>>> develop
 docmd() {
    echo "Command: $*"
    $*
