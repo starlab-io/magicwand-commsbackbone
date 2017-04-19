@@ -4,9 +4,6 @@
 ## Refer to setup_net.sh 
 ##
 
-echo "If debugging, use:"
-echo "gdb -tui -ex 'target remote localhost:1234' xenevent.run"
-
 if [ -z $RUMP_IP ]; then
     echo "Failure: RUMP_IP must be defined in env"
     exit 1
@@ -17,7 +14,10 @@ if [ -z $_GW ]; then
     exit 1
 fi
 
-rumprun -S xen -dip -D 1234 -M 512 -N xenevent-rump \
+echo "Running xenvent without debugging enabled"
+echo "IP address: $RUMP_IP"
+
+rumprun -S xen -di -M 256 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/24,$_GW \
-        xenevent.run
+        ins-rump.run

@@ -54,14 +54,13 @@ typedef uint16_t mt_sig_t;
 #define MT_SIGNATURE_RESPONSE (mt_sig_t)0xff33
 
 
-#define MT_RESPONSE_MASK 0x7000
-#define MT_TYPE_MASK     0x00ff
+#define MT_RESPONSE_MASK 0x8000
+#define MT_TYPE_MASK     0x7fff
 
 #define MT_REQUEST(x)     (x)
 #define MT_RESPONSE(x)    (MT_RESPONSE_MASK | (x))
 
-#define MT_REQUEST_NAME( __name ) __name##_request
-#define MT_RESPONSE_NAME( __name ) __name##_response
+#define MT_GET_REQUEST_TYPE(t) ((t) & MT_TYPE_MASK)
 
 //
 // Each message has a message ID. It is assigned and used by the
@@ -77,16 +76,13 @@ typedef uint64_t mt_id_t;
 // parallel. Here's the format of the message type:
 //
 //  position 76543210 76543210
-//  value    ssssffff tttttttt
+//  value    sfffffff tttttttt
 //
 // s = side (0 = request, 1 = response), f = flags, t = type
 //
 
-// XXXX: reexamine these
 #define _MT_TYPE_MASK_ALLOC_FD    0x0100
 #define _MT_TYPE_MASK_DEALLOC_FD  0x0200
-//#define _MT_TYPE_MASK_BLOCK       0x0400 // ??? clean up?
-//#define _MT_TYPE_MASK_NOBLOCK     0x0800
 
 // PVM-initiated close() will not execute while this operation is in-process
 #define _MT_TYPE_MASK_CLOSE_WAITS 0x0400
@@ -96,12 +92,6 @@ typedef uint64_t mt_id_t;
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
 
-// The call must block on the PVM side, regardless of file's flags
-//#define MT_BLOCKS(x)         ( (x) & _MT_TYPE_MASK_BLOCK )
-
-// The call should not block on PVM side, regardless of file's flags
-//#define MT_NOBLOCK(x)        ( (x) & _MT_TYPE_MASK_NOBLOCK )
-
 #define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
 
 // The INS should process this request in its main thread - there is no thread assignment
@@ -109,22 +99,24 @@ typedef uint64_t mt_id_t;
 typedef enum
 {
     MtRequestInvalid        = MT_REQUEST( 0x00 ),
-    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD ),
-    MtRequestSocketConnect  = MT_REQUEST( 0x02  ),
-    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD ),
-    MtRequestSocketRead     = MT_REQUEST( 0x04 ),
-    MtRequestSocketSend     = MT_REQUEST( 0x05 | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketBind     = MT_REQUEST( 0x06 ),
-    MtRequestSocketListen   = MT_REQUEST( 0x07 ),
-    MtRequestSocketAccept   = MT_REQUEST( 0x08 | _MT_TYPE_MASK_ALLOC_FD ), 
-    MtRequestSocketRecv     = MT_REQUEST( 0x09 ),
-    MtRequestSocketRecvFrom = MT_REQUEST( 0x0a ),
 
-    MtRequestSocketGetName  = MT_REQUEST( 0x0b | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketGetPeer  = MT_REQUEST( 0x0c | _MT_TYPE_MASK_CLOSE_WAITS ),
-    MtRequestSocketAttrib   = MT_REQUEST( 0x20 ),    
-    
-    MtRequestPollsetQuery   = MT_REQUEST( 0x31 ),
+    MtRequestSocketCreate   = MT_REQUEST( 0x01 | _MT_TYPE_MASK_ALLOC_FD ),
+    MtRequestSocketShutdown = MT_REQUEST( 0x02 ),
+    MtRequestSocketClose    = MT_REQUEST( 0x03 | _MT_TYPE_MASK_DEALLOC_FD ),
+
+    MtRequestSocketConnect  = MT_REQUEST( 0x10 ),
+    MtRequestSocketBind     = MT_REQUEST( 0x11 ),
+    MtRequestSocketListen   = MT_REQUEST( 0x12 ),
+    MtRequestSocketAccept   = MT_REQUEST( 0x13 | _MT_TYPE_MASK_ALLOC_FD ), 
+
+    MtRequestSocketSend     = MT_REQUEST( 0x20 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketRecv     = MT_REQUEST( 0x21 ),
+    MtRequestSocketRecvFrom = MT_REQUEST( 0x22 ),
+
+    MtRequestSocketGetName  = MT_REQUEST( 0x30 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketGetPeer  = MT_REQUEST( 0x31 | _MT_TYPE_MASK_CLOSE_WAITS ),
+    MtRequestSocketAttrib   = MT_REQUEST( 0x32 ),
+    MtRequestPollsetQuery   = MT_REQUEST( 0x33 ),
 } mt_request_type_t;
 
 
@@ -132,20 +124,21 @@ typedef enum
 {
     MtResponseInvalid           = MT_RESPONSE( MtRequestInvalid        ),
     MtResponseSocketCreate      = MT_RESPONSE( MtRequestSocketCreate   ),
-    MtResponseSocketConnect     = MT_RESPONSE( MtRequestSocketConnect  ),
+    MtResponseSocketShutdown    = MT_RESPONSE( MtRequestSocketShutdown ),
     MtResponseSocketClose       = MT_RESPONSE( MtRequestSocketClose    ),
-    MtResponseSocketRead        = MT_RESPONSE( MtRequestSocketRead     ),
-    MtResponseSocketSend        = MT_RESPONSE( MtRequestSocketSend     ),
+
+    MtResponseSocketConnect     = MT_RESPONSE( MtRequestSocketConnect  ),
     MtResponseSocketBind        = MT_RESPONSE( MtRequestSocketBind     ),
     MtResponseSocketListen      = MT_RESPONSE( MtRequestSocketListen   ),
     MtResponseSocketAccept      = MT_RESPONSE( MtRequestSocketAccept   ),
+
+    MtResponseSocketSend        = MT_RESPONSE( MtRequestSocketSend     ),
     MtResponseSocketRecv        = MT_RESPONSE( MtRequestSocketRecv     ),
     MtResponseSocketRecvFrom    = MT_RESPONSE( MtRequestSocketRecvFrom ),
+
     MtResponseSocketGetName     = MT_RESPONSE( MtRequestSocketGetName  ),
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
-
     MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
-    //MtResponsePollsetMod        = MT_RESPONSE( MtRequestPollsetMod     ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
 } mt_response_id_t;
 
@@ -215,7 +208,6 @@ typedef struct _mt_sockaddr
 typedef struct _mt_in_addr
 {
     uint64_t    s_addr;
-
 } mt_in_addr_t;
 
 
@@ -225,7 +217,6 @@ typedef struct _mt_sockaddr_in
     uint16_t              sin_port;
     mt_in_addr_t          sin_addr;
     uint8_t               sin_zero[8];
-
 } mt_sockaddr_in_t;
 
 // Inet address type
@@ -237,7 +228,24 @@ typedef uint32_t mt_flags_t;
 //
 // Indicates the PVM wrapper will read the response
 //
-#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x01
+#define _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE 0x00000001
+
+
+//
+// Did the remote side of the TCP/IP connection close? This can appear
+// in response.
+//
+#define _MT_FLAGS_REMOTE_CLOSED 0x80000000
+
+//
+// For supporting multiple send() calls, commonly used to break up
+// large messages into smaller chunks
+//
+
+#define _MT_FLAGS_BATCH_SEND_INIT 0x40000000
+#define _MT_FLAGS_BATCH_SEND      0x20000000
+#define _MT_FLAGS_BATCH_SEND_FINI 0x10000000
+
 
 #define MT_REQUEST_CALLER_WAITS(_req)                                   \
     ( (_req)->base.flags & _MT_FLAGS_PVM_CALLER_AWAITS_RESPONSE )
@@ -266,16 +274,16 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_base
     // The socket. Used in most requests.
     mw_socket_fd_t      sockfd;
 
+    // _MT_FLAGS_* go here. These can change the behavior of the PVM
+    // driver rather than the INS and are uneccessarily sent to the
+    // INS.
+
     // Will the user thread wait for a response? This does not need to
     // go over shared memory, but it's more convenient here. An
     // alternate design would be for non-blocking IO to go through
     // aio_read()/aio_write().
     mt_flags_t          flags;
 } mt_request_base_t;
-
-
-// Did the remote side of the TCP/IP connection close?
-#define _MT_RESPONSE_FLAG_REMOTE_CLOSED 0x1
 
 
 //
@@ -388,6 +396,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
+    mt_flags_t        flags; // flags from request
     mt_sockaddr_in_t   sockaddr;
 } mt_response_socket_accept_t;
 
@@ -494,6 +503,24 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_close
 #define MT_REQUEST_SOCKET_CLOSE_SIZE  sizeof(mt_request_socket_close_t)
 #define MT_RESPONSE_SOCKET_CLOSE_SIZE sizeof(mt_response_socket_close_t)
 
+//
+// Shutdown
+//
+
+typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_shutdown
+{
+    mt_request_base_t base;
+    uint32_t          how; // standardized values; translation not needed
+} mt_request_socket_shutdown_t;
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_shutdown
+{
+    mt_response_base_t base;
+} mt_response_socket_shutdown_t;
+
+#define MT_REQUEST_SOCKET_SHUTDOWN_SIZE  sizeof(mt_request_socket_shutdown_t)
+#define MT_RESPONSE_SOCKET_SHUTDOWN_SIZE sizeof(mt_response_socket_shutdown_t)
+
 
 //
 // Write
@@ -508,6 +535,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_send
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_send
 {
     mt_response_base_t base;
+    // orig flags from the request, needed by PVM for post-processing
+    mt_flags_t         flags; 
     mt_size_t          count; // bytes sent
 } mt_response_socket_send_t;
 
@@ -635,20 +664,21 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_pollset_query
 
 typedef union _mt_request_generic
 {
-    mt_request_base_t           base;
-    mt_request_socket_create_t  socket_create;
-    mt_request_socket_connect_t socket_connect;
-    mt_request_socket_close_t   socket_close;
-    mt_request_socket_send_t    socket_send;
-    mt_request_socket_bind_t    socket_bind;
-    mt_request_socket_listen_t  socket_listen;
-    mt_request_socket_accept_t  socket_accept;
-    mt_request_socket_recv_t    socket_recv;
-    mt_request_socket_getname_t socket_getname;
-    mt_request_socket_getpeer_t socket_getpeer;
+    mt_request_base_t             base;
+    mt_request_socket_create_t    socket_create;
+    mt_request_socket_connect_t   socket_connect;
+    mt_request_socket_close_t     socket_close;
+    mt_request_socket_shutdown_t  socket_shutdown;
+    mt_request_socket_send_t      socket_send;
+    mt_request_socket_bind_t      socket_bind;
+    mt_request_socket_listen_t    socket_listen;
+    mt_request_socket_accept_t    socket_accept;
+    mt_request_socket_recv_t      socket_recv;
+    mt_request_socket_getname_t   socket_getname;
+    mt_request_socket_getpeer_t   socket_getpeer;
 
-    mt_request_socket_attrib_t  socket_attrib;
-    mt_request_pollset_query_t  pollset_query;
+    mt_request_socket_attrib_t    socket_attrib;
+    mt_request_pollset_query_t    pollset_query;
 } mt_request_generic_t;
 
 #define MT_REQUEST_BASE_GET_TYPE(rqb) ((rqb)->type)
@@ -665,6 +695,7 @@ typedef union _mt_response_generic
     mt_response_socket_create_t     socket_create;
     mt_response_socket_connect_t    socket_connect;
     mt_response_socket_close_t      socket_close;
+    mt_response_socket_shutdown_t   socket_shutdown;
     mt_response_socket_send_t       socket_send;
     mt_response_socket_bind_t       socket_bind;
     mt_response_socket_listen_t     socket_listen;

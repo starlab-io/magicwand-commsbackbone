@@ -1,12 +1,15 @@
 #!/bin/bash
 
-INDEX=0
 FILEDIR=./files
 ONE_HUNDRED_BYTES="0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
 
 mkdir -p ./files
 
-for i in `seq 0 100 5000`;
+# One file: 1 byte
+#echo -n "1" > $FILEDIR/1
+
+# One file: 5000 bytes
+for i in `seq 5000 5000 5000`;
 do
     echo -n "" > $FILEDIR/$i
 
@@ -17,31 +20,16 @@ do
 done
 
 
+FIVE_THOUSAND_BYTES=`cat $FILEDIR/5000`
 
-ONE_THOUSAND_BYTES=`cat $FILEDIR/1000`
-
-for i in `seq 6000 1000 50000`;
+# Several files: 250,000 - 5,000,000 in 250,000 increments
+for i in `seq 250000 250000 5000000`;
 do
     echo -n "" > $FILEDIR/$i
 
-    for j in `seq 0 $(( ( i - 1 ) / 1000 ))`;
+    for j in `seq 0 $(( ( i - 1 ) / 5000 ))`;
     do
-        echo -n "$ONE_THOUSAND_BYTES" >> $FILEDIR/$i
+        echo -n "$FIVE_THOUSAND_BYTES" >> $FILEDIR/$i
     done
 done
 
-
-FIFTY_THOUSAND_BYTES=`cat $FILEDIR/50000`
-
-for i in `seq 100000 50000 1000000`;
-do
-    echo -n "" > $FILEDIR/$i
-
-    for j in `seq 0 $(( ( i - 1 ) / 50000 ))`;
-    do
-        echo -n "$FIFTY_THOUSAND_BYTES" >> $FILEDIR/$i
-    done
-done
-
-echo -n "1" > $FILEDIR/1
-rm -f $FILEDIR/0

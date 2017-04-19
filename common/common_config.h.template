@@ -8,7 +8,9 @@
  *
  * WARNING                                                 WARNING
  *
- * To preserve changes, edit common_config.h.template
+ *
+ * To preserve changes, edit common_config.h.template. util/mw_prep
+ * copies it to the right place.
  *
  * If you change this file, update (if needed) common_config.h and
  * rebuild everything.
@@ -21,14 +23,13 @@
 #endif
 
 //
-// Number of grant refs (1/page). This determines how much space we
-// have for our ring buffer. For instance, if the order is 6, we share
-// 2^6 = 64 (0x40) pages, or 0x40000 bytes. The max we've tried is
-// 6. Xen has an upper limit on how many pages can be shared. That
-// limit can be configured by a Xen boot parameter - specifically look
-// at gnttab_max_frames.
+// Order of the block of shared memory for the Xen ring buffer. For
+// instance, if the order is 6, we share 2^6 = 64 (0x40) pages, or
+// 0x40000 bytes. The max we've tried is 6. Xen has an upper limit on
+// how many pages can be shared. That limit can be configured by a Xen
+// boot parameter - specifically look at gnttab_max_frames. N.B. we
+// must create one grant reference per shared page.
 //
-
 #define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
 
 //
@@ -69,6 +70,38 @@
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+
+//
+// The macros below determine whether we use the event channel. In the
+// past we have observed scheduling problems on Rump that might make
+// us want to disable the event channel. If it is disabled on side X,
+// then: (1) X will poll on the ring buffer rather than wait on an
+// event, and (2) the other side will not send an event. For
+// performance reasons, you really do want to use the event channel.
+//
+// Here are approximate times for transferring 3 million bytes with
+// assorted settings (yes = uses event channel, no = does not use
+// event channel). We're using batch sending with the simple http
+// server, whose buffer size is 0x1000; MESSAGE_TARGET_MAX_SIZE is
+// 0x100
+//
+// INS yes, PVM yes: 1300ms
+// INS yes, PVM no:  9500ms
+// INS no,  PVM yes: 7500ms
+// INS no,  PVM no:  8800ms
+//
+
+//
+// Does the INS use an event channel callback for notification of
+// request arrival?
+//
+#define INS_USES_EVENT_CHANNEL 1
+
+//
+// Does the PVM use an event channel callback for notification of
+// response arrival?
+//
+#define PVM_USES_EVENT_CHANNEL 1
 
 
 #endif //common_config_h

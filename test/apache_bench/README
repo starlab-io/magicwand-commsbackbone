@@ -1,5 +1,5 @@
-This folder contians the scripts to run apache bench benchmarking tests for the StarLab INS component of
-the MAGICWAND research effort.
+This folder contians the scripts to run apache bench benchmarking
+tests for the StarLab INS component of the MAGICWAND research effort.
 
 
 USAGE:
@@ -16,25 +16,28 @@ OPTIONS:
 
 PREREQUISITES:
 
-The $USER environment variable is used to scp index.html files of varying sizes to PVM host
-$USER must have an account set up with ssh keys trusted by PVM host
+The $USER environment variable is used to scp index.html files of
+varying sizes to PVM host $USER must have an account set up with ssh
+keys trusted by PVM host
 
-The http server must be serving pages from the path $MWROOT/protvm/user/http_server on the 
-PVM side, this is the path that index.html will be copied to.  This path must exist on the PVM
+The http server must be serving pages from the path
+$MWROOT/protvm/user/http_server on the PVM side, this is the path that
+index.html will be copied to.  This path must exist on the PVM
 
 
 
 TO RUN:
 
 1) Run the script make_files.sh
-    This script will create files in the ./files directory with the repeated ascii values 0-9
-    of sizes in increments.
+
+    This script will create files in the ./files directory with the
+    repeated ascii values 0-9 of sizes in increments.
 
 
        100 byte             1000 byte                           50000 byte
       increments            increments                          increments
-    |             |                           |                                               |
-    0             5k                         50k                                             1MB
+    |             |                           |                                |
+    0             5k                         50k                             1MB
 
 
 2) Then run the script run_benchmark.sh
@@ -55,8 +58,9 @@ it should be as simple as starting gnuplot and typing the following command:
 plot 'rump.dat' with lines, 'raw.dat' with lines
 
 
-The resulting graph shows the performance diffrence between hosting a webpage on the remote PVM
-on the native TCP/IP stack vs hosting the webpage on the PVM over the INS.
+The resulting graph shows the performance difference between hosting a
+webpage on the remote PVM on the native TCP/IP stack vs hosting the
+webpage on the PVM over the INS.
 
 
 

@@ -1,22 +1,28 @@
 #!/bin/bash
 
-INDEXDIR=$MWROOT/protvm/user/http_server/
+INDEXDIR=/tmp
 FILEDIR=$PWD/files
 RESULTSDIR=$PWD/results
-TYPE=
+ATTEMPTS=1
 
 if [ ! -d "$FILEDIR" ]; then
-    
     echo ""
     echo "Please run the make_files.sh script first"
     echo ""
-
     exit 0
 fi
 
+if [ -z $PVM_IP ]; then
+   echo "Failure: PVM_IP must be defined in env"
+   exit 1
+fi
+
+if [ -z $RUMP_IP ]; then
+   echo "Failure: RUMP_IP must be defined in env"
+   exit 1
+fi
 
 if [ "$1" = "rump" ]; then
-
     ADDR=$RUMP_IP
     TYPE="rump"
 else
@@ -27,15 +33,23 @@ fi
 ABS_PATH=$RESULTSDIR/$TYPE.dat
 mkdir -p $RESULTSDIR
 
-echo "#Size(bytes)      Average Response Time ( 10 reqests )" > $ABS_PATH
+echo "#Size(bytes)      Average Response Time ( $ATTEMPTS reqests )" > $ABS_PATH
 
 for i in $( ls $FILEDIR | sort -n ); do
     
-    scp $FILEDIR/$i $USER@$PVM_IP:$INDEXDIR/index.html >> /dev/null
+    scp $FILEDIR/$i $PVM_USER@$PVM_IP:$INDEXDIR/index.html >> /dev/null
+    if [ $? -ne 0 ]; then
+        echo "Command failed"
+        break
+    fi
 
-    AVG_RESPONSE=`ab -n 10 "http://$ADDR/" | grep "\[ms\] (mean)" | awk '{ print $4 }'`
+    AVG_RESPONSE=`ab -n $ATTEMPTS "http://$ADDR/" | grep "\[ms\] (mean)" | awk '{ print $4 }'`
+    if [ $? -ne 0 ]; then
+        echo "Command failed"
+        break
+    fi
+
     SIZE=$i
-
     echo "$SIZE               $AVG_RESPONSE" >> $ABS_PATH
 
 done

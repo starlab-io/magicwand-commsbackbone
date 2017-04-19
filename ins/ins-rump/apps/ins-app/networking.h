@@ -17,14 +17,9 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                       OUT thread_item_t               * WorkerThread );
 
 int
-xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
-                    OUT mt_response_socket_attrib_t * Response,
-                    IN  thread_item_t               * WorkerThread );
-
-int
-xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
-                       OUT mt_response_socket_connect_t * Response,
-                       IN  thread_item_t                * WorkerThread );
+xe_net_shutdown_socket( IN  mt_request_socket_shutdown_t  * Request,
+                        OUT mt_response_socket_shutdown_t * Response,
+                        IN  thread_item_t                 * WorkerThread );
 
 int
 xe_net_internal_close_socket( IN thread_item_t * WorkerThread );
@@ -34,15 +29,21 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
                      OUT mt_response_socket_close_t * Response,
                      IN thread_item_t               * WorkerThread );
 
-//int
-//xe_net_read_socket( IN  mt_request_socket_read_t  * Request,
-//                    OUT mt_response_socket_read_t * Response,
-//                    IN thread_item_t              * WorkerThread );
+int
+xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
+                    OUT mt_response_socket_attrib_t * Response,
+                    IN  thread_item_t               * WorkerThread );
+
+int
+xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
+                       OUT mt_response_socket_connect_t * Response,
+                       IN  thread_item_t                * WorkerThread );
+
 
 int
 xe_net_send_socket( IN  mt_request_socket_send_t   * Request,
-                     OUT mt_response_socket_send_t  * Response,
-                     IN thread_item_t               * WorkerThread );
+                    OUT mt_response_socket_send_t  * Response,
+                    IN thread_item_t               * WorkerThread );
 
 int
 xe_net_bind_socket( IN mt_request_socket_bind_t   * Request,
@@ -72,7 +73,7 @@ xe_net_recvfrom_socket( IN  mt_request_socket_recv_t        * Request,
 int
 xe_net_get_name( IN mt_request_socket_getname_t  * Request,
                  IN mt_response_socket_getname_t * Response,
-                 IN  thread_item_t               * WorkerThread );
+                 IN thread_item_t                * WorkerThread );
 
 
 #endif // xenevent_app_networking_h

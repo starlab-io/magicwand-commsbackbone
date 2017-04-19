@@ -4,55 +4,61 @@
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
-//
-// Application for Rump userspace that manages commands from the
-// protected virtual machine (PVM) over xen shared memory, as well as
-// the associated network connections. The application is designed to
-// minimize dynamic memory allocations after startup and to handle
-// multiple blocking network operations simultaneously.
-//
-//
-// This application processes incoming requests as follows:
-//
-// 1. The dispatcher function yields its own thread to allow worker
-//    threads to process and free up their buffers. We do this because
-//    Rump uses a non-preemptive scheduler.
-//
-// 2. The dispatcher function selects an available buffer from the
-//     buffer pool and reads an incoming request into it.
-//
-// 3. The dispatcher examines the request:
-//
-//    (a) If the request is for a new socket request, it selects an
-//        available thread for the socket.
-//
-//    (b) Otherwise, the request is for an existing connection. It
-//        finds the thread that is handling the connection and assigns
-//        the request to that thread.
-//
-//    A request is assigned to a thread by placing its associated
-//    buffer index into the thread's work queue and signalling to the
-//    thread that work is available via a semaphore.
-//
-// 4. Worker threads are initialized on startup and block on a
-//    semaphore until work becomes available. When there's work to do,
-//    the thread is given control and processes the oldest request in
-//    its queue against the socket file descriptor it was assigned. In
-//    case the request is for a new socket, it is processed
-//    immediately by the dispatcher thread so subsequent requests
-//    against that socket can find the thread that handled it.
-// 
-// The primary functions for a developer to understand are:
-//
-// worker_thread_func:
-// One runs per worker thread. It waits for requests processes them
-// against the socket that the worker thread is assigned.
-//
-// message_dispatcher:
-// Finds an available buffer and reads a request into it. Finds the
-// thread that will process the request, and, if applicable, adds the
-// request to its work queue and signals to it that work is there.
-//
+/**
+ * @file    xenevent.c
+ * @author  Matt Leinhos
+ * @date    29 March 2017
+ * @version 0.1
+ * @brief   MagicWand INS request dispatcher/multiplexer.
+ *
+ * Application for Rump userspace that manages commands from the
+ * protected virtual machine (PVM) over xen shared memory, as well as
+ * the associated network connections. The application is designed to
+ * minimize dynamic memory allocations after startup and to handle
+ * multiple blocking network operations simultaneously.
+ *
+ *
+ * This application processes incoming requests as follows:
+ *
+ * 1. The dispatcher function yields its own thread to allow worker
+ *    threads to process and free up their buffers. We do this because
+ *    Rump uses a non-preemptive scheduler.
+ *
+ * 2. The dispatcher function selects an available buffer from the
+ *     buffer pool and reads an incoming request into it.
+ *
+ * 3. The dispatcher examines the request:
+ *
+ *    (a) If the request is for a new socket request, it selects an
+ *        available thread for the socket.
+ *
+ *    (b) Otherwise, the request is for an existing connection. It
+ *        finds the thread that is handling the connection and assigns
+ *        the request to that thread.
+ *
+ *    A request is assigned to a thread by placing its associated
+ *    buffer index into the thread's work queue and signalling to the
+ *    thread that work is available via a semaphore.
+ *
+ * 4. Worker threads are initialized on startup and block on a
+ *    semaphore until work becomes available. When there's work to do,
+ *    the thread is given control and processes the oldest request in
+ *    its queue against the socket file descriptor it was assigned. In
+ *    case the request is for a new socket, it is processed
+ *    immediately by the dispatcher thread so subsequent requests
+ *    against that socket can find the thread that handled it.
+ * 
+ * The primary functions for a developer to understand are:
+ *
+ * worker_thread_func:
+ * One runs per worker thread. It waits for requests processes them
+ * against the socket that the worker thread is assigned.
+ *
+ * message_dispatcher:
+ * Finds an available buffer and reads a request into it. Finds the
+ * thread that will process the request, and, if applicable, adds the
+ * request to its work queue and signals to it that work is there.
+ */
 
 #include <stdio.h> 
 #include <stdlib.h>
@@ -107,9 +113,10 @@ uint16_t   client_id;
 
 
 // These are the request types we don't want stomping on each other.
-#define REQUEST_REQUIRES_OPLOCK( _req )                 \
-    ( MtRequestSocketSend == (_req)->base.type ||       \
-      MtRequestSocketClose == (_req)->base.type )
+#define REQUEST_REQUIRES_OPLOCK( _req )                     \
+    ( MtRequestSocketSend     == (_req)->base.type ||       \
+      MtRequestSocketShutdown == (_req)->base.type ||       \
+      MtRequestSocketClose    == (_req)->base.type )
 
 
 //
@@ -442,10 +449,12 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 }
 
 
-//
-// Release the buffer item: unassign its thread and mark it as
-// available. It need not have been assigned.
-//
+/**
+ * @brief Release the buffer item.
+ *
+ * Unassign its thread and mark it as available. It need not have been
+ * assigned.
+ */
 static void
 release_buffer_item( buffer_item_t * BufferItem )
 {
@@ -461,11 +470,13 @@ release_buffer_item( buffer_item_t * BufferItem )
 }
 
 
-//
-// Find a thread for the given socket. If Socket is
-// MT_INVALID_SOCKET_FD, we find an unused thread. Otherwise, we find
-// the thread that has already been assigned to work on Socket.
-//
+/**
+ * @brief Find the thread for the given socket.
+ *
+ * If Socket is MT_INVALID_SOCKET_FD, acquire an unused thread and
+ * assign it to the socket. Otherwise, get the the thread that has
+ * already been assigned to work on Socket.
+ */
 int
 get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
                           OUT thread_item_t ** WorkerThread )
@@ -538,6 +549,11 @@ ErrorExit:
 }
 
 
+/**
+ * @brief Release worker thread so it can be assigned to a new socket.
+ *
+ * Reset its state too.
+ */
 static void
 release_worker_thread( thread_item_t * ThreadItem )
 {
@@ -553,9 +569,7 @@ release_worker_thread( thread_item_t * ThreadItem )
     MYASSERT( !ThreadItem->oplock_acquired );
     
     // Clean up the struct for the next usage
-    
-    ThreadItem->public_fd = MT_INVALID_SOCKET_FD;
-    ThreadItem->local_fd  = MT_INVALID_SOCKET_FD;
+    (void) xe_net_internal_close_socket( ThreadItem );
 
     ThreadItem->poll_events = 0;
     ThreadItem->state_flags = 0;
@@ -592,11 +606,14 @@ set_response_to_internal_error( IN  mt_request_generic_t * Request,
     Response->base.status = MT_STATUS_INTERNAL_ERROR;
 }
                                 
-//
-// Write a response for an internal error encountered by the dispatch
-// thread. This runs in the context of the dispatch thread because a
-// worker thread couldn't be identified.
-//
+
+/**
+ * @brief Write a response for an internal error encountered by the dispatch
+ * thread.
+ *
+ * This runs in the context of the dispatch thread because one path to it is where a
+ * worker thread couldn't be found.
+ */
 static int
 send_dispatch_error_response( mt_request_generic_t * Request )
 {
@@ -616,10 +633,10 @@ send_dispatch_error_response( mt_request_generic_t * Request )
 }
 
 
-//
-// Perform internal steps required after a buffer item has been
-// processed.
-//
+/**
+ * @brief Perform internal steps required after a buffer item has been
+ * processed.
+ */
 static int
 post_process_response( mt_request_generic_t  * Request,
                        mt_response_generic_t * Response,
@@ -627,14 +644,12 @@ post_process_response( mt_request_generic_t  * Request,
 {
     int rc = 0;
 
-    // Handle the case where the other side closed. Teardown
-    // immediately and relay EPIPE status to PVM. The return code from
-    // close is dropped.
-
     // Propogate state, including remote closure status
+    Response->base.flags |= Request->base.flags;
+
     if ( NULL != Worker )
     {
-        Response->base.flags = Worker->state_flags;
+        Response->base.flags |= Worker->state_flags;
     }
 
     // In accept's success case, assign the new socket to an available thread
@@ -667,10 +682,14 @@ post_process_response( mt_request_generic_t  * Request,
 }
 
 
-//
-// Processes one request and issues one response. A response MUST be
-// issued for every request.
-//
+/**
+ * @brief Process one request and issue one response.
+ *
+ * Exactly one response *MUST* be issued for each request. The
+ * response needn't follow its own request immediately; however a
+ * socket's response count must match its request count once its
+ * close() has completed.
+ */
 static int
 process_buffer_item( buffer_item_t * BufferItem )
 {
@@ -694,15 +713,20 @@ process_buffer_item( buffer_item_t * BufferItem )
                                    &response.socket_create,
                                    worker );
         break;
-    case MtRequestSocketConnect:
-        rc = xe_net_connect_socket( &request->socket_connect,
-                                    &response.socket_connect,
-                                    worker );
+    case MtRequestSocketShutdown:
+        rc = xe_net_shutdown_socket( &request->socket_shutdown,
+                                     &response.socket_shutdown,
+                                     worker );
         break;
     case MtRequestSocketClose:
         rc = xe_net_close_socket( &request->socket_close,
                                   &response.socket_close,
                                   worker );
+        break;
+    case MtRequestSocketConnect:
+        rc = xe_net_connect_socket( &request->socket_connect,
+                                    &response.socket_connect,
+                                    worker );
         break;
     case MtRequestSocketSend:
         rc = xe_net_send_socket( &request->socket_send,
@@ -765,9 +789,8 @@ process_buffer_item( buffer_item_t * BufferItem )
         sem_post( &worker->oplock );
     }
 
-    // No matter the results of the network operation, we sent the
-    // response back over the device. Write the entire response.
-    // XXXXXXXXXX Optimize data written - we don't need to write all of it!
+    // No matter the results of the network operation, send the
+    // response back over the device.
 
     MYASSERT( 0 == rc );
     MYASSERT( MT_IS_RESPONSE( &response ) );
@@ -781,11 +804,6 @@ process_buffer_item( buffer_item_t * BufferItem )
     size_t written = write( g_state.output_fd,
                             &response,
                             response.base.size );
-
-    //clock_gettime(CLOCK_REALTIME, &t2);
-    //t3 = diff(t1,t2);
-    //DEBUG_PRINT( "Time of Execution for write(). sec: %ld  nsec: %ld\n",
-             //t3.tv_sec, t3.tv_nsec);
 
     if ( written != response.base.size )
     {
@@ -813,6 +831,7 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     return rc;
 }
+
 
 /**
  * assign_work_to_thread
@@ -859,6 +878,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         break;
 
         // Processed in current thread with existing worker
+    case MtRequestSocketShutdown:
     case MtRequestSocketClose:
     case MtRequestSocketBind:
     case MtRequestSocketListen:
@@ -956,15 +976,16 @@ ErrorExit:
     return rc;
 }
 
-//
-// This is the function that the worker thread executes. Here's the
-// basic algorithm:
-//
-// forever:
-//    wait for one work item to arrive
-//    get the work item from the workqueue
-//    process the work: if it's a shutdown command, then break out of loop
-//
+/**
+ * @brief The top-level function that each worker thread executes.
+ *
+ * Here's the basic algorithm:
+ *
+ * forever:
+ * - wait for one work item to arrive
+ * - get the work item from the workqueue
+ * - process the work: if it's a shutdown command, then break out of loop
+ */
 static void *
 worker_thread_func( void * Arg )
 {
@@ -1159,10 +1180,16 @@ fini_state( void )
     return 0;
 }
 
-//
-// Reads commands from the xenevent device and dispatches them to
-// their respective threads.
-//
+
+/**
+ * @brief Reads requests from the Xen ring buffer and dispatches them
+ * to their respective threads.
+ *
+ * Responses are read from the ring buffer via the xenevent
+ * device. The threads each write their responses to the ring
+ * buffer. Synchronization to the ring buffer is handled by the
+ * driver.
+ */
 static int
 message_dispatcher( void )
 {
@@ -1272,7 +1299,6 @@ int main(void)
     }
 
     // main thread dispatches commands to the other threads
-    //rc = test_message_dispatcher2();
     rc = message_dispatcher();
 
 ErrorExit:

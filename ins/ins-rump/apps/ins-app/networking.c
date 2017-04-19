@@ -1,3 +1,21 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
+/**
+ * @file    networking.c
+ * @author  Matt Leinhos
+ * @date    29 March 2017
+ * @version 0.1
+ * @brief   MagicWand INS network API, used by xenevent.c
+ *
+ * This file defines the API that xenevent uses to interact with the
+ * TCP/IP stack. There is a function here for each message type
+ * defined in message_types.h.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -31,11 +49,6 @@
 extern xenevent_globals_t g_state;
 extern uint16_t client_id;
 
-//
-// Upon recv(), should we attempt to receive all the bytes requested?
-//
-#define XE_RECEIVE_ALL 0
-
 
 static int
 xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
@@ -65,15 +78,6 @@ xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
     return flags;
 }
 
-/*
-static int
-xe_net_translate_accept_flags( IN mt_flags_t AcceptFlags )
-{
-    int flags = 0;
-    if ( AcceptFlags & MW_SOCK_NONBLOCK ) flags |= SOCK_NONBLOCK;
-    return flags;
-}
-*/
 
 
 void
@@ -139,9 +143,6 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     WorkerThread->sock_domain    = native_fam;
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
-
-    // Apache hack
-//    (void) xe_net_set_fd_flag( sockfd, O_NONBLOCK, true );
 
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->public_fd, sockfd );
@@ -255,12 +256,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
                        IN  thread_item_t                * WorkerThread )
 {
     int rc = 0;
-//    char portBuf[6] = {0}; // Max: 65536\0
-
-//    struct addrinfo serverHints   = {0};
     struct sockaddr_in sockaddr   = {0};
-//    struct addrinfo * serverInfo  = NULL;
-//    struct addrinfo * serverIter  = NULL;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
@@ -269,9 +265,6 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
     MYASSERT( 1 == WorkerThread->in_use );
     
-//    serverHints.ai_family    = WorkerThread->sock_domain;
-//    serverHints.ai_socktype  = WorkerThread->sock_type;
-
     Response->base.status = 0;
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
@@ -280,7 +273,6 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
-    // Request->hostname, Request->port );
 
     rc = connect( WorkerThread->local_fd,
                   (const struct sockaddr * ) &sockaddr,
@@ -290,54 +282,8 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
         Response->base.status = XE_GET_NEG_ERRNO();
         DEBUG_PRINT( "connect() failed with status %ld\n",
                      (unsigned long)Response->base.status );
-        //MYASSERT( !"connect" );
     }
 
-
-/*
-    if ( snprintf( portBuf, sizeof(portBuf), "%d", htons( Request->sockaddr.sin_port ) ) <= 0 )
-    {
-        MYASSERT( !"snprintf failed to extract port number" );
-        Response->base.status = -EINVAL;
-        goto ErrorExit;
-    }
-
-    rc = getaddrinfo( (const char *)Request->hostname, portBuf, &serverHints, &serverInfo );
-    if (  0 != rc )
-    {
-        DEBUG_PRINT( "getaddrinfo failed: %s\n", gai_strerror(rc) );
-        MYASSERT( !"getaddrinfo" );
-        Response->base.status = -EADDRNOTAVAIL;
-        goto ErrorExit;
-    }
-
-    // Loop through all the results and connect to the first we can
-    for ( serverIter = serverInfo; serverIter != NULL; serverIter = serverIter->ai_next )
-    {
-        if ( serverIter->ai_family != WorkerThread->sock_domain ) continue;
-
-        rc = connect( WorkerThread->local_fd,
-                      serverIter->ai_addr,
-                      serverIter->ai_addrlen );
-        if ( rc < 0 )
-        {
-            continue; // Silently continue
-        }
-
-        break; // If we get here, we must have connected successfully
-    }
-    
-    if ( serverIter == NULL )
-    {
-        // Looped off the end of the list with no connection.
-        DEBUG_PRINT( "Couldn't connect() to %s:%s\n",
-                     Request->hostname, portBuf );
-        MYASSERT( !"connect" );
-        Response->base.status = -EADDRNOTAVAIL;
-    }
-*/
-
-//ErrorExit:
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_CONNECT_SIZE,
                               (mt_response_generic_t *)Response );
@@ -400,35 +346,6 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
         Response->base.status = XE_GET_NEG_ERRNO();
         MYASSERT( !"listen" );
     }
-
-#if 0
-    // HACK HACK HACK
-    uint32_t val = 30;
-    int rc = setsockopt( WorkerThread->local_fd,
-                         SOL_TCP,
-                         TCP_DEFER_ACCEPT, 
-                         &val,
-                         sizeof(val) );
-    MYASSERT( 0 == rc );
-    // HACK HACK HACK
-#endif
-
-#if 0
-    uint32_t val = 1;
-    int rc = 0;
-    rc = setsockopt( WorkerThread->local_fd,
-                     SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val) );
-    MYASSERT( 0 == rc );
-
-    rc = setsockopt( WorkerThread->local_fd,
-                     SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val) );
-    MYASSERT( 0 == rc );
-
-    //rc = setsockopt( WorkerThread->local_fd,
-    //SOL_TCP, TCP_NODELAY, &val, sizeof(val) );
-    //MYASSERT( 0 == rc );
-    
-#endif
     
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_LISTEN_SIZE,
@@ -456,10 +373,14 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd );
 
-    // NetBSD does not implement accept4. Therefore the flags are dropped.
+    // NetBSD does not implement accept4. Therefore the flags are
+    // ignored here. However, they are copied into the response for
+    // PVM usage.
+    Response->flags = 0;
     if ( Request->flags )
     {
-        DEBUG_PRINT( "Dropping PVM flags 0x%x in accept()\n", Request->flags );
+        DEBUG_PRINT( "Not observing PVM flags 0x%x in accept()\n", Request->flags );
+        Response->flags = Request->flags;
     }
 
     sockfd = accept( WorkerThread->local_fd,
@@ -517,6 +438,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     socklen_t      addrlen = 0;
     int             events = 0;
     int                 rc = 0;
+    ssize_t         callrc = 0;
     bool            polled = false;    
     int              flags = xe_net_translate_msg_flags( Request->flags );
 
@@ -528,40 +450,47 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     Response->count       = 0;
     Response->base.status = 0;
 
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is recvfrom() 0x%x bytes\n",
+                  WorkerThread->idx,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
+                  Request->requested );
+
     while( true )
     {
         do
         {
-            Response->count = recvfrom( WorkerThread->local_fd,
-                                        (void *) Response->bytes,
-                                        Request->requested,
-                                        flags,
-                                        ( struct sockaddr * ) &src_addr,
-                                        &addrlen );
-        } while( Response->count < 0 && EINTR == errno );
+            callrc = recvfrom( WorkerThread->local_fd,
+                           (void *) Response->bytes,
+                           Request->requested,
+                           flags,
+                           ( struct sockaddr * ) &src_addr,
+                           &addrlen );
+        } while( callrc < 0 && EINTR == errno );
 
         // recvfrom() returned without being interrupted
 
-        if ( Response->count < 0 )
+        if ( callrc < 0 )
         {
+            // recvfrom() failed
             Response->base.status = XE_GET_NEG_ERRNO();
             Response->count       = 0;
             break;
         }
 
         // Success
-        Response->base.status = Response->count;
+        Response->base.status = 0;
+        Response->count       = callrc;
 
         if ( Response->count > 0 ) break;
 
-        // recvfrom() ==> 0. Check for remote close
+        // recvfrom() returned 0. Check for remote close.
 
         // Check for events from previous loop: there was supposed
         // to be data, but we didn't read any. The connection was
         // closed on the other end.
         if ( events & (POLLIN | POLLRDNORM) )
         {
-            WorkerThread->state_flags |= _MT_RESPONSE_FLAG_REMOTE_CLOSED;
+            WorkerThread->state_flags |= _MT_FLAGS_REMOTE_CLOSED;
             break;
         }
 
@@ -574,13 +503,16 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
             break;
         }
         
-        // poll() has not been invoked yet. Invoke it and check for results again.
+        // poll() has not been invoked yet. Invoke it and check for
+        // results again. A failure here counts as an internal error.
         rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
-        // Check for failure: this counts as an internal error
         if ( rc ) goto ErrorExit;
 
         polled = true;
     } // while
+
+    DEBUG_PRINT( "recvfrom() got total of 0x%x bytes, status=%d\n",
+                 (int)Response->count, Response->base.status );
 
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
@@ -603,6 +535,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 {
     int             events = 0;
     int                 rc = 0;
+    ssize_t         callrc = 0;
     bool            polled = false;    
     int              flags = xe_net_translate_msg_flags( Request->flags );
     
@@ -624,31 +557,32 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     {
         do
         {
-            Response->count = recv( WorkerThread->local_fd,
-                                    &Response->bytes[ Response->count ],
-                                    Request->requested - Response->count,
-                                    flags );
-        } while( Response->count < 0 && EINTR == errno );
+            callrc = recv( WorkerThread->local_fd,
+                           &Response->bytes[ Response->count ],
+                           Request->requested - Response->count,
+                           flags );
+        } while( callrc < 0 && EINTR == errno );
 
         // recv() returned without being interrupted
 
-        if ( Response->count < 0 )
+        if ( callrc < 0 )
         {
-            Response->base.status = (Response->count > 0) ? 0 : XE_GET_NEG_ERRNO();
+            // recv() failed
+            Response->base.status = XE_GET_NEG_ERRNO();
             Response->count       = 0;
-            //MYASSERT( !"recv" );
             break;
         }
 
         // Success
-        Response->base.status = Response->count;
+        Response->base.status = 0;
+        Response->count       = callrc;
 
         if ( Response->count > 0 ) break;
 
-        // recv() ==> 0. Check for remote close.
+        // recv() returned 0. Check for remote close.
         if ( events & (POLLIN | POLLRDNORM) )
         {
-            WorkerThread->state_flags |= _MT_RESPONSE_FLAG_REMOTE_CLOSED;
+            WorkerThread->state_flags |= _MT_FLAGS_REMOTE_CLOSED;
             break;
         }
 
@@ -660,9 +594,9 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
             break;
         }
         
-        // poll() has not been invoked yet. Invoke it and check for results again.
+        // poll() has not been invoked yet. Invoke it and check for
+        // results again. A failure here counts as an internal error.
         rc = xe_pollset_query_one( WorkerThread->local_fd, &events );
-        // Check for failure: this counts as an internal error
         if ( rc ) goto ErrorExit;
 
         polled = true;
@@ -674,9 +608,34 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               Response->count + MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *)Response );
-
 ErrorExit:
-    return rc;;
+    return rc;
+}
+
+
+int
+xe_net_shutdown_socket( IN  mt_request_socket_shutdown_t  * Request,
+                        OUT mt_response_socket_shutdown_t * Response,
+                        IN  thread_item_t                 * WorkerThread )
+{
+    int rc = 0;
+
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
+
+    rc = shutdown( WorkerThread->local_fd,
+                   Request->how );
+
+    Response->base.status = (0 == rc) ? 0 : XE_GET_NEG_ERRNO();
+    DEBUG_PRINT( "shutdown(%d, %d) ==> %d\n",
+                 WorkerThread->local_fd, Request->how, Response->base.status );
+
+    xe_net_set_base_response( (mt_request_generic_t *)Request,
+                              MT_RESPONSE_SOCKET_SHUTDOWN_SIZE,
+                              (mt_response_generic_t *)Response );
+    return 0;
 }
 
 
@@ -685,17 +644,22 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 {
     int rc = 0;
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd );
-
-    rc = close( WorkerThread->local_fd );
-    if ( rc )
+    if ( MT_INVALID_SOCKET_FD != WorkerThread->local_fd )
     {
-        rc = XE_GET_NEG_ERRNO();
-        MYASSERT( !"close" );
+        DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
+                      WorkerThread->idx,
+                      WorkerThread->public_fd, WorkerThread->local_fd );
+
+        rc = close( WorkerThread->local_fd );
+        if ( rc )
+        {
+            rc = XE_GET_NEG_ERRNO();
+            MYASSERT( !"close" );
+            goto ErrorExit;
+        }
     }
 
+ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
 
@@ -730,21 +694,20 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      IN thread_item_t                * WorkerThread )
 {
     int flags = xe_net_translate_msg_flags( Request->flags );
+    // payload length is declared size minus header size
+    ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
 
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
-
-    //ssize_t totSent = 0; // track total bytes sent here
-
-    // payload length is declared size minus header size
-    ssize_t maxExpected = Request->base.size - MT_REQUEST_SOCKET_SEND_SIZE;
+    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
+    
     Response->count       = 0;
     Response->base.status = 0;
+    // Pass flags back to the PVM for processing
+    Response->flags       = Request->flags;
 
-    MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
-
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is writing %ld bytes\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is sending %ld bytes\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   maxExpected );
@@ -759,11 +722,24 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                              flags );
         if ( sent < 0 )
         {
-            Response->base.status = XE_GET_NEG_ERRNO();
+            int err = errno;
+
+            // Never return EAGAIN to the PVM. This effectively makes
+            // the send() blocking and it relieves the PVM of doing
+            // send requests serially, where it must wait for a
+            // response before issuing the next send().
+            if ( (EAGAIN == err || EWOULDBLOCK == err)  )
+            {
+                // The send would block on this non-blocking
+                // socket. Force retry.
+                continue;
+            }
+
+            Response->base.status = XE_GET_NEG_ERRNO_VAL( err );
             // The remote side of this connection has closed
             if ( -MW_EPIPE == Response->base.status )
             {
-                WorkerThread->state_flags = _MT_RESPONSE_FLAG_REMOTE_CLOSED;
+                WorkerThread->state_flags = _MT_FLAGS_REMOTE_CLOSED;
             }
             else
             {
@@ -821,7 +797,6 @@ xe_net_get_name( IN mt_request_socket_getname_t  * Request,
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_GETNAME_SIZE,
                               (mt_response_generic_t *)Response );
-
 ErrorExit:
     return rc;
 }
