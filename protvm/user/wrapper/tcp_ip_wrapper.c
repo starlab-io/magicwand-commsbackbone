@@ -1254,6 +1254,9 @@ mwcomms_set_sockattr( IN int Level,
         case SO_KEEPALIVE:
             Attribs->attrib = MtSockAttribKeepalive;
             break;
+        case SO_REUSEPORT:
+            Attribs->attrib = MtSockAttribReuseport;
+            break;
         default:
             DEBUG_PRINT( "Failing on unsupported SOL_SOCKET option %d\n", OptName );
             rc = EINVAL;

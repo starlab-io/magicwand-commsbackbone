@@ -209,6 +209,10 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         // This option is not supported on Rump. We'll drop it.
         rc = 0;
         goto ErrorExit;
+    case MtSockAttribReuseport:
+        level = SOL_SOCKET;
+        name = SO_REUSEPORT;
+        break;
     default:
         MYASSERT( !"Unrecognized attribute given" );
         rc = -EINVAL;

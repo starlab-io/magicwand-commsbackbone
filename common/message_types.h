@@ -582,6 +582,7 @@ typedef enum
     MtSockAttribNone,
     MtSockAttribNonblock,
     MtSockAttribReuseaddr,
+    MtSockAddribReuseport,
     MtSockAttribKeepalive,
     MtSockAttribDeferAccept,
     MtSockAttribNodelay,
