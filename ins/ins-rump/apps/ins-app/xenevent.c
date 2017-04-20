@@ -1305,4 +1305,3 @@ ErrorExit:
     fini_state();
     return rc;
 }
-

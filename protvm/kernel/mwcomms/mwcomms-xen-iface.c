@@ -82,7 +82,7 @@ static mwcomms_xen_globals_t g_mwxen_state;
 
 
 static int
-mw_xen_rm( const char *dir, const char *node )
+mw_xen_rm( const char *Dir, const char *Node )
 {
     struct xenbus_transaction   txn;
     int                         err;
@@ -92,18 +92,18 @@ mw_xen_rm( const char *dir, const char *node )
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
-        pr_err( "Error removing dir: %s%s\n", dir, node );
+        pr_err( "Error removing dir: %s%s\n", Dir, Node );
         goto ErrorExit;
     }
 
     txnstarted = true;
 
-    if ( ! xenbus_exists( txn, dir, node ) )
+    if ( ! xenbus_exists( txn, Dir, Node ) )
     {
        goto ErrorExit;
     }
 
-    err = xenbus_rm( txn, dir, node );
+    err = xenbus_rm( txn, Dir, Node );
     if ( err )
     {
         goto ErrorExit;
@@ -115,14 +115,14 @@ ErrorExit:
     {
         if ( xenbus_transaction_end( txn, term ) )
         {
-            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", dir, node );
+            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", Dir, Node );
         }
     }
     return err;
 }
 
 static int
-mw_xen_mkdir( const char * dir, const char * node )
+mw_xen_mkdir( const char * Dir, const char * Node )
 {
     struct xenbus_transaction   txn;
     int                         err;
@@ -138,10 +138,10 @@ mw_xen_mkdir( const char * dir, const char * node )
 
     txnstarted = true;
 
-    if (  xenbus_exists( txn, dir, "" ) )
+    if (  xenbus_exists( txn, Dir, "" ) )
     {
 
-        err = xenbus_rm( txn, dir, node);
+        err = xenbus_rm( txn, Dir, Node);
         if ( err )
         {
             pr_err( "Cloud not delete existing xenstore dir: dir\n" );
@@ -150,10 +150,10 @@ mw_xen_mkdir( const char * dir, const char * node )
 
     }
 
-    err = xenbus_mkdir( txn, dir, node );
+    err = xenbus_mkdir( txn, Dir, Node );
     if ( err )
     {
-        pr_err( "Could not create node: %s in dir: %s\n", node, dir );
+        pr_err( "Could not create node: %s in dir: %s\n", Node, Dir );
         goto ErrorExit;
     }
 
@@ -162,7 +162,7 @@ ErrorExit:
     {
         if ( xenbus_transaction_end( txn, term ) )
         {
-            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", dir, node );
+            pr_err( "Failed to end transaction makedir dir:%s node:%s\n", Dir, Node );
         }
     }
 
@@ -171,7 +171,7 @@ ErrorExit:
 
 
 static int
-mw_xen_write_to_key( const char * dir, const char * node, const char * value )
+mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 {
    struct xenbus_transaction   txn;
    int                         err;
@@ -189,17 +189,17 @@ mw_xen_write_to_key( const char * dir, const char * node, const char * value )
 
    txnstarted = true;
 
-   err = xenbus_exists( txn, dir, "" );
+   err = xenbus_exists( txn, Dir, "" );
    // 1 ==> exists
    if ( !err )
    {
-       pr_err( "Xenstore directory %s does not exist.\n", dir );
+       pr_err( "Xenstore directory %s does not exist.\n", Dir );
        err = -EIO;
        term = 1;
        goto ErrorExit;
    }
    
-   err = xenbus_write(txn, dir, node, value);
+   err = xenbus_write(txn, Dir, Node, Value);
    if ( err )
    {
       pr_err("Could not write to XenStore Key\n");
@@ -212,7 +212,7 @@ ErrorExit:
    {
        if ( xenbus_transaction_end( txn, term ) )
        {
-           pr_err( "Failed to end transaction: %s/%s = %s\n", dir, node, value );
+           pr_err( "Failed to end transaction: %s/%s = %s\n", Dir, Node, Value );
        }
    }
    
@@ -221,7 +221,7 @@ ErrorExit:
 
 
 static char *
-mw_xen_read_from_key( const char * dir, const char * node )
+mw_xen_read_from_key( const char * Dir, const char * Node )
 {
    struct xenbus_transaction   txn;
    char                       *str;
@@ -235,10 +235,10 @@ mw_xen_read_from_key( const char * dir, const char * node )
       return NULL;
    }
 
-   str = (char *)xenbus_read(txn, dir, node, NULL);
+   str = (char *)xenbus_read(txn, Dir, Node, NULL);
    if (XENBUS_IS_ERR_READ(str))
    {
-      pr_err("Could not read XenStore Key: %s/%s\n", dir, node );
+      pr_err("Could not read XenStore Key: %s/%s\n", Dir, Node );
       xenbus_transaction_end(txn,1);
       return NULL;
    }
@@ -335,7 +335,7 @@ ErrorExit:
 
 
 static irqreturn_t
-mw_xen_irq_event_handler( int port, void * data )
+mw_xen_irq_event_handler( int Port, void * Data )
 {
     g_mwxen_state.event_cb();
 
@@ -485,14 +485,14 @@ ErrorExit:
 
 
 static void
-mw_xen_vm_port_is_bound( const char *path )
+mw_xen_vm_port_is_bound( const char *Path )
 {
     
     char * is_bound_str = NULL;
 
     
 
-    is_bound_str = (char *) mw_xen_read_from_key( path, 
+    is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
     if ( !is_bound_str )
     {
@@ -521,14 +521,14 @@ ErrorExit:
 
 
 static void
-mw_ins_dom_id_found( const char *path )
+mw_ins_dom_id_found( const char *Path )
 {
 
 
     char     *client_id_str = NULL;
     int       err = 0;
 
-    client_id_str = (char *)mw_xen_read_from_key( path,
+    client_id_str = (char *)mw_xen_read_from_key( Path,
                                                   XENEVENT_NO_NODE );
     if ( !client_id_str )
     {
@@ -576,20 +576,20 @@ ErrorExit:
 
 
 static void
-mw_xenstore_state_changed( struct xenbus_watch *w,
-                                const char **v,
-                                unsigned int l )
+mw_xenstore_state_changed( struct xenbus_watch *W,
+                                const char **V,
+                                unsigned int L )
 {
 
-    if ( strstr( v[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
+    if ( strstr( V[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
     {
-        mw_ins_dom_id_found( v[ XS_WATCH_PATH ] );
+        mw_ins_dom_id_found( V[ XS_WATCH_PATH ] );
         goto ErrorExit;
     }
 
-    if ( strstr( v[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
+    if ( strstr( V[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
     {
-        mw_xen_vm_port_is_bound( v[ XS_WATCH_PATH ] );
+        mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
         goto ErrorExit;
     }
     
@@ -732,8 +732,6 @@ mw_xen_fini( void )
     }
 
     mw_xen_rm( XENEVENT_XENSTORE_ROOT, XENEVENT_XENSTORE_PVM_NODE );
-
-
 }
 
 

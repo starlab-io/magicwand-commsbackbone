@@ -1178,6 +1178,7 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
         if ( rc < 0 )
         {
             err = errno;
+            tot = rc;
             goto ErrorExit;
         }
         tot += rc;

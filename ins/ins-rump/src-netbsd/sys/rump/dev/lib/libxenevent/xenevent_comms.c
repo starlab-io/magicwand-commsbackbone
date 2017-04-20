@@ -210,6 +210,49 @@ ErrorExit:
 }
 
 static int
+xe_comms_remove_directory( const char *Path )
+{
+    xenbus_transaction_t txn;
+    int                retry;
+    char                *err;
+    int                  res = 0;
+    bool             started = false;
+   
+    err = xenbus_transaction_start( &txn );
+    if ( err )
+    {
+        MYASSERT( !"xenbus_transaction_start" );
+        goto ErrorExit;
+    }
+
+    started = true;
+
+    err = xenbus_rm( txn, Path );
+    if ( err )
+    {
+        MYASSERT( !"xenbus_rm" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    if ( err )
+    {
+        res = 1;
+        DEBUG_PRINT( "Failure: %s\n", err );
+        bmk_memfree( err, BMK_MEMWHO_WIREDBMK );
+    }
+
+    if ( started )
+    {
+        (void) xenbus_transaction_end( txn, 0, &retry );
+    }
+
+
+    return res;
+}
+
+
+static int
 xe_comms_read_int_from_key( IN const char *Path,
                             OUT int * OutVal)
 {
@@ -274,13 +317,13 @@ xe_comms_wait_and_read_int_from_key( IN const char *Path,
 
 #if PVM_USES_EVENT_CHANNEL
 static int
-send_event(evtchn_port_t port)
+send_event(evtchn_port_t Port)
 {
 
     int  err;
 
-    DEBUG_PRINT( "Sending event to (local) port %d\n", port );
-    err = minios_notify_remote_via_evtchn( port );
+    DEBUG_PRINT( "Sending event to (local) port %d\n", Port );
+    err = minios_notify_remote_via_evtchn( Port );
 
     if ( err )
     {
@@ -294,11 +337,11 @@ send_event(evtchn_port_t port)
 
 #if (INS_USES_EVENT_CHANNEL || PVM_USES_EVENT_CHANNEL)
 static void
-xe_comms_event_callback( evtchn_port_t port,
-                         struct pt_regs *regs,
-                         void *data )
+xe_comms_event_callback( evtchn_port_t Port,
+                         struct pt_regs *Regs,
+                         void *Data )
 {
-    DEBUG_PRINT("Event Channel %u\n", port );
+    DEBUG_PRINT("Event Channel %u\n", Port );
 
 #if INS_USES_EVENT_CHANNEL
     //
@@ -531,8 +574,8 @@ ErrorExit:
 
 
 static int
-xe_comms_bind_to_interdom_chn (domid_t srvr_id,
-                               evtchn_port_t remote_prt_nmbr)
+xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
+                               evtchn_port_t Remote_Prt_Nmbr)
 {
     int err = 0;
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
@@ -552,8 +595,8 @@ xe_comms_bind_to_interdom_chn (domid_t srvr_id,
 
 #if (INS_USES_EVENT_CHANNEL || PVM_USES_EVENT_CHANNEL)
     // Ports are bound in the masked state
-    err = minios_evtchn_bind_interdomain( srvr_id,
-                                          remote_prt_nmbr,
+    err = minios_evtchn_bind_interdomain( Srvr_Id,
+                                          Remote_Prt_Nmbr,
                                           xe_comms_event_callback,
                                           g_state.event_channel_mem,
                                           &g_state.local_event_port );
@@ -614,8 +657,6 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     bmk_memset( &g_state, 0, sizeof(g_state) );
-
-    DEBUG_BREAK();
 
     rc = xenevent_semaphore_init( &g_state.messages_available );
     if ( 0 != rc )
@@ -703,6 +744,7 @@ int
 xe_comms_fini( void )
 {
     int rc = 0;
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
 
     DEBUG_PRINT("Unbinding from Local Interdomain Event Channel Port: %u ...\n",
                 g_state.local_event_port);
@@ -720,6 +762,16 @@ xe_comms_fini( void )
     }
 
     gntmap_fini( &g_state.gntmap_map );
+
+    //Cleanup entries in xenstore
+    bmk_snprintf( path,
+                  sizeof( path ),
+                  "%s/%d",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.localId );
+    xe_comms_remove_directory( path );
+
+    DEBUG_PRINT( "Cleaning up xenstore path: %s\n", path );
 
     // XXXX g_state.shared_ring was allocated with allocate_ondemand()
     // in gntmap_map_grant_refs(). Is this the right way to free it?
