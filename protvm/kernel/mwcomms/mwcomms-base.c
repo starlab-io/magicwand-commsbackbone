@@ -173,6 +173,8 @@
 #include "mwcomms-xen-iface.h"
 #include "mwcomms-socket.h"
 
+#include "mwcomms-backchannel.h"
+
 #include "mwcomms-ioctls.h"
 
 // In case of rundown, how many times will we await a response across
@@ -286,6 +288,7 @@ mwbase_dev_init( void )
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
+
 #if 0
 //#ifdef MYTRAP // GDB helper - emits a breakpoint!
    asm( "int $3" // module base in *ax
@@ -367,6 +370,8 @@ mwbase_dev_init( void )
    {
        goto ErrorExit;
    }
+
+   mw_backchannel_init();
 
 ErrorExit:
    if ( rc )
