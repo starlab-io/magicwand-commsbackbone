@@ -10,11 +10,6 @@
 
 source _setenv
 
-if [ -z $MWROOT ]; then
-   echo "Failure: MWROOT must be defined in env"
-   exit 1
-fi
-
 insapp_dir=$MWROOT/ins/ins-rump/apps/ins-app
 insapp_makefile=$insapp_dir/Makefile
 
