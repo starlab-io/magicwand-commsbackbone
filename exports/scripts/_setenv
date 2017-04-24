@@ -1,3 +1,13 @@
 #!/bin/bash
 
-export MWROOT=$USER
+##
+## Script that sets environmental variables for the other scripts in
+## this directory. Do not use this script directly. Do modify it to
+## suit.
+##
+
+if [ -z $MWROOT ]; then
+   echo "Failure: MWROOT must be defined in environment"
+   exit 1
+fi
+

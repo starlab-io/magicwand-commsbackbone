@@ -7,9 +7,10 @@
 #include <netinet/in.h>
 #include <netdb.h> 
 #include <pthread.h>
-#include "app_common.h"
+#include "user_common.h"
 
-#define NUM_THREADS     4
+// Limit is 100. Teardown fails if it's 101.
+#define NUM_THREADS     100
 
 void error(const char *msg)
 {
