@@ -67,6 +67,7 @@ export RUMPRUN_WARNING_STFU=please
 ##
 
 dbgbuildrump() {
+    echo "Building rump; build log is build.log"
     ./build-rr.sh xen -- -F DBG=-ggdb > build.log
 }
 export -f dbgbuildrump
