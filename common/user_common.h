@@ -4,8 +4,11 @@
 //
 // Basic definitions for user-mode code, whether on PVM or Rump side
 //
+#ifndef DEBUG_FILE_STREAM
+    #define DEBUG_FILE_STREAM stdout
+#endif
 
-#define DEBUG_PRINT_FUNCTION printf
+#define DEBUG_PRINT_FUNCTION fprintf
 #define DEBUG_FLUSH_FUNCTION fflush
 
 #include <pthread.h>
@@ -45,7 +48,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Using gettid() would be better, but it's only available on Linux
 #define _DEBUG_EMIT_META() \
-    DEBUG_PRINT_FUNCTION( "P%d [%s:%d] ", getpid(), SHORT_FILE, __LINE__ )
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "%d [%s:%d] ", getpid(), SHORT_FILE, __LINE__ )
 
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")
@@ -86,7 +89,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     if(!(x)) {                                                          \
         pthread_mutex_lock( &__debug_mutex );                           \
         _DEBUG_EMIT_META();                                             \
-        DEBUG_PRINT_FUNCTION( "Assertion failure: %s\n", #x );          \
+        DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "Assertion failure: %s\n", #x );          \
         DEBUG_EMIT_BREAKPOINT();                                        \
         pthread_mutex_unlock( &__debug_mutex );                         \
     }
@@ -100,8 +103,8 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_PRINT(...)                                              \
     pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION(__VA_ARGS__);                                  \
-    DEBUG_FLUSH_FUNCTION(stdout);                                       \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);                                  \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                                       \
     pthread_mutex_unlock( &__debug_mutex )
 
 

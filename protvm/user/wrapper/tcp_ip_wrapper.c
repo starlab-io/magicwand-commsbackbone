@@ -37,9 +37,11 @@
 
 #include <message_types.h>
 #include <translate.h>
-#include <user_common.h>
 
 #include <mwcomms-ioctls.h>
+
+#define DEBUG_FILE_STREAM g_log_file
+#include <user_common.h>
 
 #define DEV_FILE "/dev/mwcomms"
 
@@ -48,6 +50,7 @@
 // 1 - wrap operations and use mwcomms driver for TCP traffic
 //
 #define USE_MWCOMMS 1
+
 
 
 //
@@ -62,6 +65,11 @@
 // Should we wait if we encounter EAGAIN?
 #define EAGAIN_TRIGGERS_SLEEP 1
 
+//
+//Prepare the log file for writing
+//
+
+static FILE *g_log_file = NULL;
 
 static int devfd = -1; // FD to MW device
 
@@ -1561,6 +1569,24 @@ ErrorExit:
 void __attribute__((constructor))
 init_wrapper( void )
 {
+
+    //
+    //Prepare the log file for writing
+    // 
+    char shim_log[32] = {0};
+
+    snprintf( shim_log,
+              32,
+              "./ins_%d.log",
+              getpid() );
+    
+    g_log_file = fopen( shim_log, "w" );
+    if ( NULL == g_log_file )
+    {
+        perror( "fopen" );
+        exit(1);
+    }
+    
     DEBUG_PRINT("Intercept module loaded\n");
 
 #if (!USE_MWCOMMS)
@@ -1622,6 +1648,11 @@ fini_wrapper( void )
     if ( devfd > 0 )
     {
         libc_close( devfd );
+    }
+
+    if( NULL != g_log_file )
+    {
+        libc_close( g_log_file )
     }
 
     DEBUG_PRINT("Intercept module unloaded\n");
