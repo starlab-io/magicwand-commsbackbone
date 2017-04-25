@@ -13,7 +13,7 @@ int
 mw_backchannel_init( void )
 {
 
-    struct sockaddr_in saddr, caddr;
+    struct sockaddr_in saddr;
     struct socket *server_sock = NULL;
     struct socket *new_sock = NULL;
     int err = -1;
@@ -28,12 +28,12 @@ mw_backchannel_init( void )
 
     saddr.sin_family = AF_INET;
     saddr.sin_addr.s_addr = htonl( INADDR_ANY );
-    saddr.sin_port = htons( INS_BACKCHANNEL_PORT );
+    saddr.sin_port = htons( 0 );
 
     //Bind
     err = server_sock->ops->bind( server_sock,
-                           ( struct sockaddr* )&caddr,
-                           sizeof( caddr ) );
+                           ( struct sockaddr* )&saddr,
+                           sizeof( saddr ) );
     if ( err )
     {
         pr_err( "Ins could not bind to backchannel socket\n" ); 
@@ -48,7 +48,7 @@ mw_backchannel_init( void )
         goto ErrorExit;
     }
 
-    pr_info( "Backchannel listening on port %d\n", INS_BACKCHANNEL_PORT );
+    printk( "Listening on port %d ip address: %pI4\n", saddr.sin_port, &saddr.sin_addr.s_addr );
 
     //Accept
     err = server_sock->ops->accept( server_sock, new_sock, 0 );
