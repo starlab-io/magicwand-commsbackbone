@@ -278,6 +278,7 @@ ErrorExit:
     return res;
 }
 
+
 static int
 xe_comms_wait_and_read_int_from_key( IN const char *Path,
                                      OUT int * OutVal)

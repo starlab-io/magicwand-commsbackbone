@@ -4,10 +4,13 @@
   * Unauthorized copying of this file, via any medium is strictly prohibited.
   ***************************************************************************/
 
+/**
+ * Provides support for netflow/metadata stream to Invincea analysis
+ * engine(s).
+ */
 
 #ifndef mwcomms_backchannel_h
 #define mwcomms_backchannel_h
-
 
 
 int

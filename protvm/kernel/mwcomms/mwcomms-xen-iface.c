@@ -138,7 +138,7 @@ mw_xen_mkdir( const char * Dir, const char * Node )
 
     txnstarted = true;
 
-    if (  xenbus_exists( txn, Dir, "" ) )
+    if ( xenbus_exists( txn, Dir, "" ) )
     {
 
         err = xenbus_rm( txn, Dir, Node);
