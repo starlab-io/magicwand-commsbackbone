@@ -371,7 +371,7 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
-   mw_backchannel_init();
+   //mw_backchannel_init();
 
 ErrorExit:
    if ( rc )
