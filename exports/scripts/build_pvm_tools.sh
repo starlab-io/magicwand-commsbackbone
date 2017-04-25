@@ -1,13 +1,7 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
 #Script to build magicwand shim and driver
+
 source _setenv
 
 if [ -z $MWROOT ]; then

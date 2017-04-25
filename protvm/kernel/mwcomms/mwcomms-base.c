@@ -46,24 +46,24 @@
  * This model implies some strict standards:
  *
  * - The remote side *must* send a response for every request it
- *   receives during normal (vs. rundown) operation
+ *   receives.
  * 
- *  - The programs that use this LKM must be well-written: upon
- *    writing a request, they must indicate to the LKM whether or
- *    not they will read a response. Failure to do this correctly can
- *    result in kernel memory leaks until the LKM is unloaded.
+ * - The programs that use this LKM must be well-written: upon writing
+ *   a request, they must indicate to the LKM whether or not they will
+ *   read a response. Failure to do this correctly can result in
+ *   kernel memory leaks until the LKM is unloaded. Basically this
+ *   means that the user-mode shim should be correct.
  *
  * This LKM backs each Magic Wand socket (mwsocket) with a kernel file
- * object to enable integration with the kernel's VFS system. This
- * provide important functionality that programs make use of; in
- * particular:
+ * object to enable integration with the kernel's VFS. This provides
+ * important functionality that programs make use of; in particular:
  *
  * - release() allows for clean destruction of an mwsocket upon
  *   program termination,
  *
  * - poll() allows for seemless usage of select(), poll() and epoll.
  *
- * Moreover, mwsockets implement these callbacks, which are used by
+ * Moreover, mwsockets implement these operations, which are used by
  * the user-mode shim:
  *
  * - write() for putting a request on the ring buffer
@@ -73,7 +73,7 @@
  * - ioctl() for modifying the bahavior of an mwsocket, i.e. mimicking
  *   the functionality of setsockopt() and fcntl()
  *
- * This LKM is structured such that this object, mwcomms-base, servers
+ * This LKM is structured such that this object, mwcomms-base, serves
  * as the main entry point. It initializes its own kernel device and
  * then asks the Xen interface (see mwcomms-xen-iface) to initialize,
  * which in turn waits for an INS client to appear and completes a
@@ -172,7 +172,6 @@
 
 #include "mwcomms-xen-iface.h"
 #include "mwcomms-socket.h"
-
 #include "mwcomms-backchannel.h"
 
 #include "mwcomms-ioctls.h"
@@ -288,7 +287,6 @@ mwbase_dev_init( void )
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-
 #if 0
 //#ifdef MYTRAP // GDB helper - emits a breakpoint!
    asm( "int $3" // module base in *ax
@@ -371,7 +369,13 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
-   //mw_backchannel_init();
+#ifdef BACKCHANNEL
+   rc = mw_backchannel_init();
+   if ( rc )
+   {
+       goto ErrorExit;
+   }
+#endif
 
 ErrorExit:
    if ( rc )
