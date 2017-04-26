@@ -16,4 +16,9 @@
 int
 mw_backchannel_init( void );
 
+
+void
+mw_backchannel_fini( void );
+
+
 #endif //mwcomms_backchannel_h
