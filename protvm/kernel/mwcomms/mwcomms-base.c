@@ -280,20 +280,20 @@ mwbase_dev_init( void )
     int rc = 0;
     struct module * mod = (struct module *) THIS_MODULE;
     
-    // gdb> add-symbol-file char_driver.ko $eax/$rax
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
              "################################\n",
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#if 0
-//#ifdef MYTRAP // GDB helper - emits a breakpoint!
-   asm( "int $3" // module base in *ax
-        //:: "a" ((THIS_MODULE)->module_core));
-        :: "a" ((THIS_MODULE)->core_layout.base)
-        , "b" ((THIS_MODULE)->init_layout.base)
-        , "c" (mod) );
+#ifdef MYTRAP // GDB helper - emits a breakpoint!
+    // gdb> add-symbol-file char_driver.ko $eax/$rax
+
+    asm( "int $3" // module base in *ax
+         //:: "a" ((THIS_MODULE)->module_core));
+         :: "a" ((THIS_MODULE)->core_layout.base)
+          , "b" ((THIS_MODULE)->init_layout.base)
+          , "c" (mod) );
 #endif
 
    bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
@@ -396,6 +396,10 @@ mwbase_dev_fini( void )
 
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
+
+#ifdef BACKCHANNEL
+    mw_backchannel_fini();
+#endif
 
     if ( NULL != g_mwcomms_state.xen_shmem.ptr )
     {
