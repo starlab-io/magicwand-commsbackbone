@@ -1584,7 +1584,7 @@ init_wrapper( void )
     g_log_file = fopen( shim_log, "w" );
     if ( NULL == g_log_file )
     {
-        perror( "Could not open file %s\n" shim_log );
+        perror( "fopen" );
         exit(1);
     }
     
