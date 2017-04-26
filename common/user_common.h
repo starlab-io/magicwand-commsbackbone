@@ -53,6 +53,12 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")
 
+#ifdef DEVLOG
+#  define SHIM_LOG_PATH "/tmp"
+#else
+#  define SHIM_LOG_PATH "/var/log/output"
+#endif
+
 #ifdef MYDEBUG
 #  define DEBUG_EMIT_META() _DEBUG_EMIT_META()
 #else

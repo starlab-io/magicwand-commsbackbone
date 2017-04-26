@@ -1577,13 +1577,14 @@ init_wrapper( void )
 
     snprintf( shim_log,
               32,
-              "./ins_%d.log",
+              "%s/ins_%d.log",
+              SHIM_LOG_PATH,
               getpid() );
     
     g_log_file = fopen( shim_log, "w" );
     if ( NULL == g_log_file )
     {
-        perror( "fopen" );
+        perror( "Could not open file %s\n" shim_log );
         exit(1);
     }
     
@@ -1652,7 +1653,7 @@ fini_wrapper( void )
 
     if( NULL != g_log_file )
     {
-        libc_close( g_log_file )
+        fclose( g_log_file );
     }
 
     DEBUG_PRINT("Intercept module unloaded\n");

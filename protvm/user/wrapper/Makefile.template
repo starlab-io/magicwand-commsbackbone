@@ -11,6 +11,7 @@ CFLAGS += -I.. -I../../../common -I../../common
 CFLAGS += -ggdb
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
+#CFLAGS +=  -DDEVLOG
 
 LD = ld
 LDFLAGS = -ggdb -shared
