@@ -3,6 +3,7 @@
 * Copyright (C) 2016, Star Lab — All Rights Reserved
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
+
 /**
  * This file handles the initial handshake between the PVM and the
  * INS, meaning that it monitors and publishes to certain paths in
@@ -176,7 +177,6 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 {
    struct xenbus_transaction   txn;
@@ -195,8 +195,7 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 
    txnstarted = true;
 
-
-   err = xenbus_exists( txn, Dir, "" );
+   err = xenbus_exists( txn, Dir, XENEVENT_NO_NODE );
    // 1 ==> exists
    if ( !err )
    {
@@ -251,8 +250,6 @@ mw_xen_read_from_key( const char * Dir, const char * Node )
 
    err = xenbus_transaction_end(txn, 0);
 
-   //pr_debug( "End read %s/%s <== %s\n", dir, node, str );
-   
    return str;
 }
 
@@ -264,7 +261,8 @@ mw_xen_write_server_id_to_key( void )
    int err = 0;
    
    // Get my domain id
-   dom_id_str = (const char *) mw_xen_read_from_key( PRIVATE_ID_PATH, "" );
+   dom_id_str = (const char *)
+       mw_xen_read_from_key( PRIVATE_ID_PATH, XENEVENT_NO_NODE );
 
    if ( NULL == dom_id_str )
    {
@@ -296,44 +294,38 @@ static int
 mw_xen_create_unbound_evt_chn( void )
 {
    struct evtchn_alloc_unbound alloc_unbound; 
-   char                        str[MAX_GNT_REF_WIDTH]; 
-   int                         err = 0;
+   char                        str[MAX_GNT_REF_WIDTH] = {0};
    char                        path[ XENEVENT_PATH_STR_LEN ] = {0};
+   int                         err = 0;
 
    if ( !g_mwxen_state.remote_domid )
    {
        goto ErrorExit;
    }
 
-   //alloc_unbound.dom = DOMID_SELF;
    alloc_unbound.dom        = g_mwxen_state.my_domid;
    alloc_unbound.remote_dom = g_mwxen_state.remote_domid; 
 
-   err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
-   if (err) {
+   err = HYPERVISOR_event_channel_op( EVTCHNOP_alloc_unbound, &alloc_unbound );
+   if ( err )
+   {
        pr_err("Failed to set up event channel\n");
        goto ErrorExit;
    }
 
    g_mwxen_state.common_evtchn = alloc_unbound.port;
 
-   pr_debug("Event Channel Port (%d <=> %d): %d\n",
-            alloc_unbound.dom, g_mwxen_state.remote_domid,
-            g_mwxen_state.common_evtchn );
+   pr_debug( "Event Channel Port (%d <=> %d): %d\n",
+             alloc_unbound.dom, g_mwxen_state.remote_domid,
+             g_mwxen_state.common_evtchn );
 
-   memset( str, 0, MAX_GNT_REF_WIDTH );
    snprintf( str, MAX_GNT_REF_WIDTH,
              "%u", g_mwxen_state.common_evtchn );
 
-   snprintf( path, 
-             sizeof(path),
-             "%s/%d",
-             XENEVENT_XENSTORE_ROOT,
-             g_mwxen_state.remote_domid );
+   snprintf( path, sizeof(path), "%s/%d",
+             XENEVENT_XENSTORE_ROOT, g_mwxen_state.remote_domid );
 
-   err = mw_xen_write_to_key( path,
-                              VM_EVT_CHN_PORT_KEY,
-                              str );
+   err = mw_xen_write_to_key( path, VM_EVT_CHN_PORT_KEY, str );
 
 ErrorExit:
    return err;
@@ -358,9 +350,9 @@ mw_xen_send_event( void )
 
    //xen_clear_irq_pending(irq);
 
-   if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send))
+   if ( HYPERVISOR_event_channel_op(EVTCHNOP_send, &send) )
    {
-      pr_err("Failed to send event\n");
+       pr_err("Failed to send event\n");
    }
 }
 
@@ -388,24 +380,29 @@ mw_xen_is_evt_chn_closed( void )
 static void 
 mw_xen_free_unbound_evt_chn( void )
 {
-   struct evtchn_close close;
-   int err;
+    struct evtchn_close close = { 0 };
+   int err = 0;
 
-   if (!g_mwxen_state.common_evtchn)
-      return;
-      
+   if ( !g_mwxen_state.common_evtchn )
+   {
+       goto ErrorExit;
+   }
+
    close.port = g_mwxen_state.common_evtchn;
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
 
-   if (err)
+   if ( err )
    {
-      pr_err("Failed to close event channel\n");
+      pr_err( "Failed to close event channel\n" );
    }
    else
    {
-      pr_debug("Closed event channel port=%d\n", close.port);
+      pr_debug( "Closed event channel port=%d\n", close.port );
    }
+
+ErrorExit:
+   return;
 }
 
 
@@ -427,12 +424,16 @@ mw_xen_offer_grant( domid_t ClientId )
                                          0 );
        if ( rc < 0 )
        {
-           pr_err( "gnttab_grant_foreign_access: %d\n", rc );
+           pr_err( "gnttab_grant_foreign_access failed: %d\n", rc );
            goto ErrorExit;
        }
 
        g_mwxen_state.grant_refs[ i ] = rc;
-       //pr_info("VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
+       pr_debug( "VA: %p MFN: %p grant 0x%x\n",
+                 (void *) ((unsigned long)g_mwxen_state.xen_shmem.ptr +
+                           i * PAGE_SIZE),
+                 (void *)(mfn+i),
+                 rc );
    }
 
    // Success:
@@ -466,9 +467,9 @@ mw_xen_write_grant_refs_to_key( void )
             rc = -E2BIG;
             goto ErrorExit;
         }
-        
-        if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >=
-            gnt_refs + sizeof(gnt_refs) )
+
+        if ( strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >=
+             gnt_refs + sizeof(gnt_refs) )
         {
             pr_err("Insufficient space to write all grant refs.\n");
             rc = -E2BIG;
@@ -476,12 +477,8 @@ mw_xen_write_grant_refs_to_key( void )
         }
     }
 
-    snprintf( path,
-              sizeof(path),
-              "%s/%d",
-              XENEVENT_XENSTORE_ROOT,
-              g_mwxen_state.remote_domid );
-
+    snprintf( path, sizeof(path), "%s/%d",
+              XENEVENT_XENSTORE_ROOT, g_mwxen_state.remote_domid );
 
     rc = mw_xen_write_to_key( path, GNT_REF_KEY, gnt_refs );
 
@@ -493,7 +490,6 @@ ErrorExit:
 static void
 mw_xen_vm_port_is_bound( const char *Path )
 {
-    
     char * is_bound_str = NULL;
 
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
@@ -530,8 +526,6 @@ ErrorExit:
 static void
 mw_ins_dom_id_found( const char *Path )
 {
-
-
     char     *client_id_str = NULL;
     int       err = 0;
 
@@ -615,7 +609,6 @@ mw_xenstore_watch =
 };
 
 
-
 static int
 mw_xen_initialize_keystore(void)
 {
@@ -650,7 +643,6 @@ mw_xen_initialize_keys(void)
 ErrorExit:
     return rc;
 }
-
 
 
 int
