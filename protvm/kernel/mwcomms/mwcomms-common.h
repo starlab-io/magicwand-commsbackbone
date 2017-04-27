@@ -24,6 +24,10 @@ typedef struct _mw_region
 #define   OUT
 #define INOUT
 
+// Disables optimization on a per-function basis. 
+#define MWSOCKET_DEBUG_ATTRIB  __attribute__((optimize("O0")))
+
+
 //
 // General helper macros
 //

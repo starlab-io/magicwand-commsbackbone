@@ -92,13 +92,13 @@ mw_xen_rm( const char *Dir, const char *Node )
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
-        pr_err( "Error removing dir: %s%s\n", Dir, Node );
+        pr_err( "Error removing dir:%s node:%s\n", Dir, Node );
         goto ErrorExit;
     }
 
     txnstarted = true;
 
-    if ( ! xenbus_exists( txn, Dir, Node ) )
+    if ( !xenbus_exists( txn, Dir, Node ) )
     {
        goto ErrorExit;
     }
@@ -129,6 +129,8 @@ mw_xen_mkdir( const char * Dir, const char * Node )
     bool                        txnstarted = false;
     int                         term = 0;
 
+    pr_debug( "Making dir %s/%s\n", Dir, Node );
+
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
@@ -138,22 +140,23 @@ mw_xen_mkdir( const char * Dir, const char * Node )
 
     txnstarted = true;
 
-    if ( xenbus_exists( txn, Dir, "" ) )
+    if ( xenbus_exists( txn, Dir, Node ) )
     {
-
+        pr_debug( "dir:%s node:%s exists; removing it.\n", Dir, Node );
         err = xenbus_rm( txn, Dir, Node);
         if ( err )
         {
-            pr_err( "Cloud not delete existing xenstore dir: dir\n" );
+            pr_err( "Could not delete existing xenstore dir:%s node:%s\n", Node, Dir );
             goto ErrorExit;
         }
-
+        pr_debug( "%s: removed\n", Dir );
     }
 
+    pr_debug( "Creating dir:%s node:%s\n", Dir, Node );
     err = xenbus_mkdir( txn, Dir, Node );
     if ( err )
     {
-        pr_err( "Could not create node: %s in dir: %s\n", Node, Dir );
+        pr_err( "Could not create node:%s in dir:%s\n", Node, Dir );
         goto ErrorExit;
     }
 
@@ -166,20 +169,23 @@ ErrorExit:
         }
     }
 
+    pr_debug( "Complete - dir:%s node:%s\n", Dir, Node );
+
     return err;
 }
 
 
-static int
+int
+MWSOCKET_DEBUG_ATTRIB
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 {
    struct xenbus_transaction   txn;
    int                         err;
    bool                  txnstarted = false;
    int                   term = 0;
-   
-   //pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
-   
+
+   pr_debug( "Writing %s to %s/%s\n", Value, Dir, Node );
+
    err = xenbus_transaction_start(&txn);
    if ( err )
    {
@@ -188,6 +194,7 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
    }
 
    txnstarted = true;
+
 
    err = xenbus_exists( txn, Dir, "" );
    // 1 ==> exists
@@ -199,13 +206,12 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
        goto ErrorExit;
    }
    
-   err = xenbus_write(txn, Dir, Node, Value);
+   err = xenbus_write( txn, Dir, Node, Value );
    if ( err )
    {
-      pr_err("Could not write to XenStore Key\n");
+       pr_err("Could not write to XenStore Key dir:%s node:%s\n", Dir, Node );
       goto ErrorExit;
    }
-
 
 ErrorExit:
    if ( txnstarted )
@@ -220,14 +226,14 @@ ErrorExit:
 }
 
 
-static char *
+char *
 mw_xen_read_from_key( const char * Dir, const char * Node )
 {
    struct xenbus_transaction   txn;
    char                       *str;
    int                         err;
 
-   //pr_debug( "Begin read %s/%s <== ?\n", dir, node );
+   pr_debug( "Reading value in dir:%s node:%s\n", Dir, Node );
 
    err = xenbus_transaction_start(&txn);
    if (err) {
@@ -260,7 +266,7 @@ mw_xen_write_server_id_to_key( void )
    // Get my domain id
    dom_id_str = (const char *) mw_xen_read_from_key( PRIVATE_ID_PATH, "" );
 
-   if (!dom_id_str)
+   if ( NULL == dom_id_str )
    {
        pr_err("Error: Failed to read my Dom Id Key\n");
        err = -EIO;
@@ -278,9 +284,9 @@ mw_xen_write_server_id_to_key( void )
    g_mwxen_state.my_domid = simple_strtol(dom_id_str, NULL, 10);
 
 ErrorExit:
-   if ( dom_id_str )
+   if ( NULL != dom_id_str )
    {
-       kfree(dom_id_str);
+       kfree( dom_id_str );
    }
    return err;
 }
@@ -490,8 +496,6 @@ mw_xen_vm_port_is_bound( const char *Path )
     
     char * is_bound_str = NULL;
 
-    
-
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
     if ( !is_bound_str )
@@ -515,7 +519,10 @@ mw_xen_vm_port_is_bound( const char *Path )
               g_mwxen_state.common_evtchn, g_mwxen_state.irq );
 
 ErrorExit:
-    kfree( is_bound_str );
+    if ( NULL != is_bound_str )
+    {
+        kfree( is_bound_str );
+    }
     return;
 }
 
@@ -547,8 +554,6 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.remote_domid = simple_strtol( client_id_str, NULL, 10 );
     pr_debug( "Discovered client ID: %u\n", g_mwxen_state.remote_domid );
 
-    kfree( client_id_str );
-
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn();
     if ( err ) goto ErrorExit;
@@ -570,16 +575,20 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
 
 ErrorExit:
-    kfree(client_id_str);
+    if ( NULL != client_id_str )
+    {
+        kfree(client_id_str);
+    }
     return;
 }
 
 
 static void
 mw_xenstore_state_changed( struct xenbus_watch *W,
-                                const char **V,
-                                unsigned int L )
+                           const char **V,
+                           unsigned int L )
 {
+    pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
     {
@@ -597,6 +606,7 @@ ErrorExit:
     return;
 }
 
+
 static struct xenbus_watch
 mw_xenstore_watch =
 {
@@ -610,7 +620,7 @@ static int
 mw_xen_initialize_keystore(void)
 {
     int rc = 0;
-    
+
     rc = mw_xen_mkdir( XENEVENT_XENSTORE_ROOT, 
                        XENEVENT_XENSTORE_PVM_NODE );
 
@@ -657,7 +667,6 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-   
 
     //Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
@@ -674,7 +683,7 @@ mw_xen_init( mw_region_t * SharedMem,
         pr_err("Key initialization failed: %d\n", rc );
         goto ErrorExit;
     }
-   
+
     // 1. Write Dom Id for Server to Key
     rc = mw_xen_write_server_id_to_key();
     if ( rc )
@@ -687,7 +696,7 @@ mw_xen_init( mw_region_t * SharedMem,
     // is ineficient, consider merging both watches into one
     // function
     // *******************************************************
-    
+
     // 2. Watch Client Id XenStore Key
     rc = register_xenbus_watch( &mw_xenstore_watch );
     if (rc)
@@ -701,6 +710,7 @@ mw_xen_init( mw_region_t * SharedMem,
 ErrorExit:
     return rc;
 }
+
 
 void
 mw_xen_fini( void )

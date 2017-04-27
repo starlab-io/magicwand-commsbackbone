@@ -1,13 +1,20 @@
-# To preserve changes to Makefile, edit Makefile.template
-# See also: utils/mw_prep
+##
+## To preserve changes to Makefile, edit Makefile.template
+## See also: utils/mw_prep
+##
+## THIS MAKEFILE IS THE ONE THE UP-CHAIN DEVELOPERS (OUR CONSUMERS)
+## WILL USE. IT MUST BUILD PRODUCTION-READY BINARIES.
+##
+
 
 # The target module name
 obj-m += mwcomms.o
 
 # The objects that are linked to create the module
 mwcomms-y += mwcomms-base.o mwcomms-xen-iface.o mwcomms-socket.o
-## not ready yet...
-##mwcomms-y += mwcomms-backchannel.o
+
+# experimental
+mwcomms-y += mwcomms-backchannel.o
 
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
 ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
@@ -17,7 +24,7 @@ ccflags-y += -ggdb
 #ccflags-y += -DMYTRAP
 #ccflags-y +=  -DDEBUG # enable pr_debug
 #ccflags-y += -DVERBOSE # enable our custom "pr_verbose"
-#CFLAGS += -DBACKCHANNEL # support the netflow back-channel (experimental)
+ccflags-y += -DBACKCHANNEL # support the netflow side-channel (experimental)
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules

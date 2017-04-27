@@ -1,4 +1,10 @@
-# To preserve changes to Makefile, edit Makefile.template
+##
+## To preserve changes to Makefile, edit Makefile.template
+## See also: utils/mw_prep
+##
+## THIS MAKEFILE IS THE ONE THE UP-CHAIN DEVELOPERS (OUR CONSUMERS)
+## WILL USE. IT MUST BUILD PRODUCTION-READY BINARIES.
+##
 
 # Standard no-strings-attached compilation of the test TCP/IP app and
 # its accompanying shared library.  The shared library preloads the

@@ -141,6 +141,8 @@
 #include <message_types.h>
 #include <xen_keystore_defs.h>
 
+#include "mwcomms-backchannel.h"
+
 // Defines:
 // union mwevent_sring_entry
 // struct mwevent_sring_t
@@ -151,8 +153,6 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 // Magic for the mwsocket filesystem
 #define MWSOCKET_FS_MAGIC  0x4d77536f // MwSo
 
-// Disables optimization on a per-function basis. 
-#define MWSOCKET_DEBUG_ATTRIB  __attribute__((optimize("O0")))
 
 //
 // Timeouts for responses
@@ -285,7 +285,6 @@ typedef struct _mwsocket_instance
     // user) on the final request/response.
     ssize_t             send_tally;
 
-
     // Error encountered on INS that has not (yet) been delivered to
     // caller. Supports fire-and-forget model.
     int                 pending_errno;
@@ -311,7 +310,8 @@ typedef struct _mwsocket_instance
     // Do not allow close() while certain operations are
     // in-flight. Implement this behavior with a read-write lock,
     // wherein close takes a write lock and all the other operations a
-    // read lock.
+    // read lock. Don't block the close indefinitely -- the INS might
+    // have died.
     struct rw_semaphore close_lock;
 
     // All the instances. Must hold global sockinst_lock to access.
@@ -1187,6 +1187,82 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
 static void
 MWSOCKET_DEBUG_ATTRIB
+mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
+                                mt_response_generic_t     * Response )
+{
+    MYASSERT( ActiveRequest );
+    MYASSERT( ActiveRequest->sockinst );
+    MYASSERT( Response );
+
+    if ( !mw_backchannel_consumer_exists() )
+    {
+        goto ErrorExit;
+    }
+
+    switch( Response->base.type )
+    {
+    case MtResponseSocketCreate:
+        mw_backchannel_write_msg( "%lx: created\n",
+                                  Response->base.sockfd );
+        break;
+    case MtResponseSocketShutdown:
+    case MtResponseSocketClose:
+        mw_backchannel_write_msg( "%lx: shutdown/closed\n",
+                                  Response->base.sockfd );
+        break;
+    case MtResponseSocketConnect:
+        mw_backchannel_write_msg( "%lx: connected\n",
+                                  Response->base.sockfd );
+        break;
+    case MtResponseSocketBind:
+        mw_backchannel_write_msg( "%lx: bound\n",
+                                  Response->base.sockfd );
+        break;
+    case MtResponseSocketAccept:
+        mw_backchannel_write_msg( "%lx: accepted from %pI4:%hu\n",
+                                  Response->base.sockfd,
+                                  &Response->socket_accept.sockaddr.sin_addr.s_addr,
+                                  Response->socket_accept.sockaddr.sin_port );
+        break;
+    case MtResponseSocketSend:
+        mw_backchannel_write_msg( "%lx: wrote %d bytes\n",
+                                  Response->base.sockfd,
+                                  Response->socket_send.count );
+        break;
+    case MtResponseSocketRecv:
+        mw_backchannel_write_msg( "%lx: received %d bytes\n",
+                                  Response->base.sockfd,
+                                  Response->socket_recv.count );
+        break;
+    case MtResponseSocketRecvFrom:
+        mw_backchannel_write_msg( "%lx: received %d bytes from %pI4:%hu\n",
+                                  Response->base.sockfd,
+                                  Response->socket_recvfrom.count,
+                                  Response->socket_recvfrom.src_addr.sin_addr.s_addr,
+                                  Response->socket_recvfrom.src_addr.sin_port );
+        break;
+    case MtResponseSocketListen:
+        mw_backchannel_write_msg( "%lx: listening\n",
+                                  Response->base.sockfd );
+        break;
+    case MtResponseSocketGetName:
+    case MtResponseSocketGetPeer:
+    case MtResponseSocketAttrib:
+    case MtResponsePollsetQuery:
+        // Ignored cases
+        break;
+    default:
+        MYASSERT( !"Unhandled response" );
+        break;
+    }
+
+ErrorExit:
+    return;
+}
+
+
+static void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                               mt_response_generic_t     * Response )
 {
@@ -1617,6 +1693,7 @@ mwsocket_response_consumer( void * Arg )
         //
         // The active request has been found.
         //
+        mwsocket_postproc_emit_netflow( actreq, response );
 
         mwsocket_postproc_no_context( actreq, response );
 

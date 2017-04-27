@@ -21,4 +21,16 @@ void
 mw_backchannel_fini( void );
 
 
+bool
+mw_backchannel_consumer_exists( void );
+
+
+int
+mw_backchannel_write_msg( const char * Fmt, ... );
+
+
+int
+mw_backchannel_write( void * Message, size_t Len );
+
+
 #endif //mwcomms_backchannel_h

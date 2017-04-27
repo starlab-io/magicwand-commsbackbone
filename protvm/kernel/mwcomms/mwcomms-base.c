@@ -386,6 +386,7 @@ ErrorExit:
    return rc;
 }
 
+
 static void
 mwbase_dev_fini( void )
 {
@@ -425,7 +426,7 @@ mwbase_dev_fini( void )
         unregister_chrdev( g_mwcomms_state.dev_major_num, DEVICE_NAME );
     }
 
-    pr_debug("cleanup is complete\n");
+    pr_info( "Cleanup is complete\n" );
 }
 
 

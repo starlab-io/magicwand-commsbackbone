@@ -56,4 +56,13 @@ void
 mw_xen_send_event( void );
 
 
+int
+mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value );
+
+
+char *
+mw_xen_read_from_key( const char * Dir, const char * Node );
+
+
+
 #endif // mwcomms_xen_iface_h
