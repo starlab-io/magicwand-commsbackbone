@@ -1184,7 +1184,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
     return rc;
 }
 
-
+#if 0
 static void
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
@@ -1259,7 +1259,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
 ErrorExit:
     return;
 }
-
+#endif
 
 static void
 MWSOCKET_DEBUG_ATTRIB
@@ -1693,7 +1693,7 @@ mwsocket_response_consumer( void * Arg )
         //
         // The active request has been found.
         //
-        mwsocket_postproc_emit_netflow( actreq, response );
+        //mwsocket_postproc_emit_netflow( actreq, response );
 
         mwsocket_postproc_no_context( actreq, response );
 

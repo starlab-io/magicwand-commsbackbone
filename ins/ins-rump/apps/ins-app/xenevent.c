@@ -69,6 +69,7 @@
 #include "rumpdeps.h"
 
 #include <sys/time.h>
+#include <sys/ioctl.h>
 
 #include <sys/fcntl.h>
 #include <unistd.h>
@@ -87,6 +88,8 @@
 #include "xenevent_app_common.h"
 
 #include "mwerrno.h"
+
+#include "ins-ioctls.h"
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
@@ -1291,7 +1294,8 @@ ErrorExit:
 int main(void)
 {
     int rc = 0;
-  
+
+      
     rc = init_state();
     if ( rc )
     {

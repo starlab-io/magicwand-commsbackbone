@@ -59,6 +59,7 @@
 #include "message_types.h"
 #include "xen_keystore_defs.h"
 #include "xenevent_netbsd.h"
+#include "ins-ioctls.h"
 
 // The RING macros use memset
 #define memset bmk_memset

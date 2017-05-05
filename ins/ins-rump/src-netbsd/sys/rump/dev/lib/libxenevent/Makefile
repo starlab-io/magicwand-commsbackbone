@@ -4,12 +4,13 @@
 CPPFLAGS += -I../../../../../../../platform/xen/xen/include
 CPPFLAGS += -I../../../../../../../include
 CPPFLAGS += -I../../../../../../../../../common
+CPPFLAGS += -I../../../../../../../../../ins/ins-rump/rump-common
 
 # Search host xen includes, such that <xen/xen.h> can be included
 CPPFLAGS += -Ixen
 
 # Enable debugging - breakpoints and messages
-#CPPFLAGS += -DMYDEBUG
+CPPFLAGS += -DMYDEBUG
 #CPPFLAGS += -DMYTRAP
 
 # Definitely do NOT define this. It breaks the build.
