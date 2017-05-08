@@ -19,12 +19,19 @@ mwcomms-y += mwcomms-backchannel.o
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
 ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
 
+# experimental
+ccflags-y += -DBACKCHANNEL # support the netflow side-channel (experimental)
+
 # For debugging
 ccflags-y += -ggdb
+
+# These *should* be disabled in production code. Enable only if you
+# know what you're doing.
+
 #ccflags-y += -DMYTRAP
-#ccflags-y +=  -DDEBUG # enable pr_debug
+#ccflags-y += -DDEBUG # enable pr_debug
 #ccflags-y += -DVERBOSE # enable our custom "pr_verbose"
-ccflags-y += -DBACKCHANNEL # support the netflow side-channel (experimental)
+
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules

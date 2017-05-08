@@ -53,7 +53,7 @@ $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 	@echo "Run   ./run.sh"
 	@echo "Or debug with ./debug.sh and"
-	@echo " gdb -ex 'target remote:1234' $@"
+	@echo " gdb -ex 'target remote localhost:1234' $@"
 
 $(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c
 	$(CC) $(CFLAGS) -o $@ $^
