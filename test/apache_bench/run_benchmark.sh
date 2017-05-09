@@ -22,6 +22,14 @@ if [ -z $RUMP_IP ]; then
    exit 1
 fi
 
+if [ -z $1 ]; then
+    echo
+    echo "Do you want to test the raw server times or the rump server times?"
+    echo "usage: run_benchmark.sh <rump|raw>"
+    echo
+    exit 0
+fi
+
 if [ "$1" = "rump" ]; then
     ADDR=$RUMP_IP
     TYPE="rump"
