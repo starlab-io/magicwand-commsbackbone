@@ -19,5 +19,5 @@ fi
 
 rumprun -S xen -dip -D 1234 -M 512 -N mw-ins-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$RUMP_IP/24,$_GW \
+        -W xen0,inet,static,$RUMP_IP/8,$_GW \
         ins-rump.run
