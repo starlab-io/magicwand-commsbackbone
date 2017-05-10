@@ -172,9 +172,10 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ * 2 ) // >= 1 sec
 
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 2 ) // 4x/sec
-#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 8x/sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 8x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 4 ) // 16x/sec
-//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
+#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 6 ) // 64x/sec
 
 #if (!PVM_USES_EVENT_CHANNEL)
 #  define RING_BUFFER_POLL_INTERVAL (HZ >> 6) // 64x / sec
