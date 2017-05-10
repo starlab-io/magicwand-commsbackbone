@@ -487,10 +487,7 @@ ErrorExit:
 static void
 mw_xen_vm_port_is_bound( const char *Path )
 {
-    
     char * is_bound_str = NULL;
-
-    
 
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
@@ -515,7 +512,10 @@ mw_xen_vm_port_is_bound( const char *Path )
               g_mwxen_state.common_evtchn, g_mwxen_state.irq );
 
 ErrorExit:
-    kfree( is_bound_str );
+    if ( is_bound_str )
+    {
+        kfree( is_bound_str );
+    }
     return;
 }
 
@@ -523,8 +523,6 @@ ErrorExit:
 static void
 mw_ins_dom_id_found( const char *Path )
 {
-
-
     char     *client_id_str = NULL;
     int       err = 0;
 
@@ -547,8 +545,6 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.remote_domid = simple_strtol( client_id_str, NULL, 10 );
     pr_debug( "Discovered client ID: %u\n", g_mwxen_state.remote_domid );
 
-    kfree( client_id_str );
-
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn();
     if ( err ) goto ErrorExit;
@@ -570,7 +566,10 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
 
 ErrorExit:
-    kfree(client_id_str);
+    if ( client_id_str )
+    {
+        kfree(client_id_str);
+    }
     return;
 }
 

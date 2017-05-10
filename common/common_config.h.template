@@ -58,18 +58,19 @@
 // Useful sizes to consider:
 //     mt_request_base_t: 0x18
 //     non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
+//     non-buffer portion of mt_request_socket_send_t:      0x22
 //
 //
 // Ensure that MESSAGE_TARGET_MAX_SIZE is a power of 2 to make the
 // best use of shared memory.
 //
 
-#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
+//#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
 //#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
-//#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
+#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x1c - 1)
 
 //
 // The macros below determine whether we use the event channel. In the
