@@ -1424,19 +1424,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
             ActiveRequest->rr.request.base.size );
 
     ++g_mwsocket_state.front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    bool notify = false;
-    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY( &g_mwsocket_state.front_ring, notify );
-    if ( notify )
-        // ( notify || !notify )
-    {
-        mw_xen_send_event();
-    }
-#else
-    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
+    mw_xen_send_event();
 #endif
-    
+        
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
 
@@ -1502,10 +1495,8 @@ mwsocket_response_consumer( void * Arg )
     mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t * response = NULL;
 
-#define RING_CONSUME_RESPONSE()                                         \
-    ++g_mwsocket_state.front_ring.rsp_cons;                             \
-    RING_FINAL_CHECK_FOR_RESPONSES( &g_mwsocket_state.front_ring, available )
-
+#define RING_CONSUME_RESPONSE()   ++g_mwsocket_state.front_ring.rsp_cons;
+    
     pr_info( "Ring buffer is 0x%lx bytes (0x%x pages). "
              "0x%lx entries x 0x%lx bytes each\n",
              XENEVENT_GRANT_REF_COUNT * PAGE_SIZE,
@@ -1534,8 +1525,7 @@ mwsocket_response_consumer( void * Arg )
     //
     // Consume responses until the module is unloaded. When it is
     // unloaded, consume whatever is still on the ring, then
-    // quit. Only leave this loop on a requested exit or a fatal
-    // error.
+    // quit. Only leave this loop upon requested exit or fatal error.
     //
     // Policy: continue upon error.
     // Policy: in case of pending exit, keep consuming the requests

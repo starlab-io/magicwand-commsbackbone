@@ -65,8 +65,8 @@
 // best use of shared memory.
 //
 
-//#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
-#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
+#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
+//#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
 //#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
