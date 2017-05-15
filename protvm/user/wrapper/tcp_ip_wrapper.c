@@ -52,7 +52,6 @@
 #define USE_MWCOMMS 1
 
 
-
 //
 // Which send() implementation should we use?
 //
@@ -76,40 +75,40 @@ static int devfd = -1; // FD to MW device
 static void * g_dlh_libc = NULL;
 
 static int
-(*libc_socket)(int domain, int type, int protocol);
+(*libc_socket)(int domain, int type, int protocol) = NULL;
 
 static int
-(*libc_bind)(int fd, const struct sockaddr * addr, socklen_t addrlen );
+(*libc_bind)(int fd, const struct sockaddr * addr, socklen_t addrlen ) = NULL;
 
 static int
-(*libc_listen)(int fd, int backlog );
+(*libc_listen)(int fd, int backlog ) = NULL;
 
 static int
-(*libc_accept)(int fd, struct sockaddr * sockaddr, socklen_t * socklen);
+(*libc_accept)(int fd, struct sockaddr * sockaddr, socklen_t * socklen) = NULL;
 
 static int
-(*libc_connect)(int fd, const struct sockaddr * addr, socklen_t addrlen );
+(*libc_connect)(int fd, const struct sockaddr * addr, socklen_t addrlen ) = NULL;
 
 static int
-(*libc_read)(int fd, void *buf, size_t count);
+(*libc_read)(int fd, void *buf, size_t count) = NULL;
 
 static ssize_t
-(*libc_readv)(int fd, const struct iovec *iov, int iovcnt);
+(*libc_readv)(int fd, const struct iovec *iov, int iovcnt) = NULL;
 
 static int
-(*libc_write)(int fd, const void *buf, size_t count);
+(*libc_write)(int fd, const void *buf, size_t count) = NULL;
 
 static ssize_t
-(*libc_writev)(int fd, const struct iovec *iov, int iovcnt);
+(*libc_writev)(int fd, const struct iovec *iov, int iovcnt) = NULL;
 
 static int
-(*libc_close)(int fd);
+(*libc_close)(int fd) = NULL;
 
 static int
-(*libc_shutdown)(int fd, int how);
+(*libc_shutdown)(int fd, int how) = NULL;
 
 static ssize_t
-(*libc_send)(int sockfd, const void* buf, size_t len, int flags);
+(*libc_send)(int sockfd, const void* buf, size_t len, int flags) = NULL;
 
 static ssize_t
 (*libc_sendto)(int sockfd,
@@ -117,13 +116,13 @@ static ssize_t
                size_t len,
                int flags,
                const struct sockaddr* dest_addr,
-               socklen_t addrlen);
+               socklen_t addrlen) = NULL;
 
 static ssize_t
 (*libc_recv)(int sockfd,
              void* buf,
              size_t len,
-             int flags);
+             int flags) = NULL;
 
 static ssize_t
 (*libc_recvfrom)(int sockfd,
@@ -131,30 +130,48 @@ static ssize_t
                  size_t len,
                  int flags,
                  struct sockaddr* src_addr,
-                 socklen_t* addrlen);
+                 socklen_t* addrlen) = NULL;
 
 static int 
 (*libc_getsockopt)( int Fd,
                     int Level,
                     int OptName,
                     void * OptVal,
-                    socklen_t  * OptLen );
+                    socklen_t  * OptLen ) = NULL;
 
 static int
 (*libc_setsockopt)( int Fd,
                     int Level,
                     int OptName,
                     const void * OptVal,
-                    socklen_t OptLen );
+                    socklen_t OptLen ) = NULL;
 
 static int
-(*libc_getsockname)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+(*libc_getsockname)(int sockfd, struct sockaddr *addr, socklen_t *addrlen) = NULL;
 
 static int
-(*libc_getpeername)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+(*libc_getpeername)(int sockfd, struct sockaddr *addr, socklen_t *addrlen) = NULL;
 
 static int
-(*libc_fcntl)(int fd, int cmd, ... );
+(*libc_fcntl)(int fd, int cmd, ... ) = NULL;
+
+
+static void
+wrapper_error( const char * Err )
+{
+    //print to log file AND standard error
+    if( NULL != stderr )
+    {
+        fprintf( stderr,     "%s - %s\n", Err, strerror( errno ) );
+        fflush( stderr );
+    }
+
+    if( NULL != g_log_file )
+    {
+        fprintf( g_log_file, "%s - %s\n", Err, strerror( errno ) );
+        fflush( g_log_file );
+    }
+}
 
 
 static void *
@@ -162,9 +179,10 @@ get_libc_symbol( void ** Addr, const char * Symbol )
 {
     dlerror();
     *Addr = dlsym( g_dlh_libc, Symbol );
+
     if ( NULL == *Addr )
     {
-        DEBUG_PRINT( "Failure: %s\n", dlerror() );
+        exit(1);
     }
 
     return *Addr;
@@ -189,7 +207,7 @@ mwcomms_is_mwsocket( IN int Fd )
     int rc = ioctl( devfd, MW_IOCTL_IS_MWSOCKET, &verify );
     if ( rc )
     {
-        perror( "ioctl" );
+        wrapper_error( "ioctl" );
         goto ErrorExit;
     }
 
@@ -469,7 +487,7 @@ bind( int                     SockFd,
     if ( SockAddr->sa_family != AF_INET
          || AddrLen != sizeof(struct sockaddr_in) )
     {
-        perror("Only AF_INET is supported at this time\n");
+        wrapper_error("Only AF_INET is supported at this time\n");
         errno = EINVAL;
         rc =  -1;
         goto ErrorExit;
@@ -1566,60 +1584,30 @@ ErrorExit:
     return rc;
 }
 
-void __attribute__((constructor))
-init_wrapper( void )
+
+void
+get_libc_symbols( void )
 {
-
-    //
-    //Prepare the log file for writing
-    // 
-    char shim_log[32] = {0};
-
-    snprintf( shim_log,
-              32,
-              "%s/ins_%d.log",
-              SHIM_LOG_PATH,
-              getpid() );
-    
-    g_log_file = fopen( shim_log, "w" );
-    if ( NULL == g_log_file )
-    {
-        perror( "fopen" );
-        exit(1);
-    }
-    
-    DEBUG_PRINT("Intercept module loaded\n");
-
-#if (!USE_MWCOMMS)
-    devfd = -1;
-#else
-    devfd = open( DEV_FILE, O_RDWR);
-    if (devfd < 0)
-    {
-        perror("Failed to open the device...");
-        exit(1);
-    }
-#endif
 
     g_dlh_libc = dlopen( "libc.so.6", RTLD_NOW );
     if ( NULL == g_dlh_libc )
     {
-        DEBUG_PRINT("Failure: %s\n", dlerror() );
+        //Without libc we cannot write an error message :(
         exit(1);
     }
+
+    get_libc_symbol( (void **) &libc_write,    "write"    );
+    get_libc_symbol( (void **) &libc_read,     "read"     );
+    get_libc_symbol( (void **) &libc_readv,    "readv"    );
+    get_libc_symbol( (void **) &libc_writev,   "writev"   );
+    get_libc_symbol( (void **) &libc_close,    "close"    );
+    get_libc_symbol( (void **) &libc_shutdown, "shutdown" );
 
     get_libc_symbol( (void **) &libc_socket,   "socket"   );
     get_libc_symbol( (void **) &libc_bind,     "bind"     );
     get_libc_symbol( (void **) &libc_listen,   "listen"   );
     get_libc_symbol( (void **) &libc_accept,   "accept"   );
     get_libc_symbol( (void **) &libc_connect,  "connect"  );
-
-    get_libc_symbol( (void **) &libc_read,     "read"     );
-    get_libc_symbol( (void **) &libc_readv,    "readv"    );
-    get_libc_symbol( (void **) &libc_write,    "write"    );
-    get_libc_symbol( (void **) &libc_writev,   "writev"   );
-    get_libc_symbol( (void **) &libc_close,    "close"    );
-    get_libc_symbol( (void **) &libc_shutdown, "shutdown" );
 
     get_libc_symbol( (void **) &libc_send,     "send"     );
     get_libc_symbol( (void **) &libc_sendto,   "sendto"   );
@@ -1633,6 +1621,45 @@ init_wrapper( void )
     get_libc_symbol( (void **) &libc_getpeername, "getpeername" );
 
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
+
+}
+
+void __attribute__((constructor))
+init_wrapper( void )
+{
+    char wrapper_log[SHIM_LOG_PATH_SIZE] = {0};
+    
+    //The first thing we need to do is get the libc symbols
+    //so the shim can write to stdout without breaking ourselves.
+    get_libc_symbols();
+
+
+    snprintf( wrapper_log,
+              sizeof( wrapper_log ),
+              "%s/ins_%d.log",
+              SHIM_LOG_PATH,
+              getpid() );
+    
+    g_log_file = fopen( wrapper_log, "w" );
+    if ( NULL == g_log_file )
+    {
+        fprintf( stderr, "Could not open log file %s\n", wrapper_log );
+        exit(1);
+    }
+    
+    DEBUG_PRINT("Intercept module loaded\n");
+
+#if (!USE_MWCOMMS)
+    devfd = -1;
+#else
+    devfd = open( DEV_FILE, O_RDWR);
+    if (devfd < 0)
+    {
+        wrapper_error("Failed to open the device...");
+        exit(1);
+    }
+#endif
+
 }
 
 
