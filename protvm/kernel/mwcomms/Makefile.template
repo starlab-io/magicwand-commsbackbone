@@ -24,6 +24,7 @@ ccflags-y += -DBACKCHANNEL # support the netflow side-channel (experimental)
 
 # For debugging
 ccflags-y += -ggdb
+<<<<<<< HEAD
 
 # These *should* be disabled in production code. Enable only if you
 # know what you're doing.

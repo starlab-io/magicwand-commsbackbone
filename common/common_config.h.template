@@ -58,6 +58,7 @@
 // Useful sizes to consider:
 //     mt_request_base_t: 0x18
 //     non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
+//     non-buffer portion of mt_request_socket_send_t:      0x1c
 //
 //
 // Ensure that MESSAGE_TARGET_MAX_SIZE is a power of 2 to make the

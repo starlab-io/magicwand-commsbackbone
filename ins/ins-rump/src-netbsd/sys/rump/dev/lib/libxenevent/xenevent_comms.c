@@ -464,19 +464,12 @@ xe_comms_write_item( void * Memory,
 
     // We're producing a response
     ++g_state.back_ring.rsp_prod_pvt;
+    RING_PUSH_RESPONSES( &g_state.back_ring );
 
 #if PVM_USES_EVENT_CHANNEL
-    bool notify = false;
-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, notify );
-    if ( notify )
-        //( notify || !notify )
-    {
-        (void) send_event( g_state.local_event_port );
-    }
-#else
-    RING_PUSH_RESPONSES( &g_state.back_ring );
+    (void) send_event( g_state.local_event_port );
 #endif
-
+    
     DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
 
     return rc;
@@ -502,7 +495,6 @@ receive_grant_references( domid_t RemoteId )
     char * refstr = NULL;
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
 
-    
     xenbus_event_queue_init(&events);
 
     bmk_snprintf( path,
