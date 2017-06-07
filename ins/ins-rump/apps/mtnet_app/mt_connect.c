@@ -22,7 +22,7 @@
 #include <sys/time.h>
 
 
-#include "app_common.h"
+#include "user_common.h"
 
 // Observe differing behaviors when this is or is not defined
 //#define SLEEP 1
@@ -36,8 +36,8 @@
 
 // Update run.sh so the unikernel and the listener are on the same
 // subnet.
-const char * g_remote_host = "192.168.0.12";
-const char * g_remote_port = "21845";
+const char * g_remote_host = "10.30.30.19";
+const char * g_remote_port = "5555";
 
 #define TEST_MESSAGE "Hello from multi-threaded Rump app!\n"
 
@@ -148,12 +148,12 @@ int main(void)
     } else {
         DEBUG_PRINT( "Bad: Connect has NOT completed before join()\n" );
     }
-    
+/*
     for ( int i = 0; i < NUMBER_OF(threads); i++ )
     {
         pthread_join( threads[i], (void *)&rc );
         DEBUG_PRINT( "Worker thread joined\n" );
     }
-
+*/
     return rc;
 }
