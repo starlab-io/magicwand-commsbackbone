@@ -155,12 +155,8 @@ set_runnable(struct bmk_thread *thread)
 	/*
 	 * Already runnable?  Nothing to do, then.
 	 */
-//	if ((tflags & THR_RUNQ) == THR_RUNQ)
-//		return;	
-    
-    if ((tflags & THR_QMASK) == THR_RUNQ)
+	if ((tflags & THR_RUNQ) == THR_RUNQ)
 		return;
-
 
 	/* get current queue */
 	switch (tflags & THR_QMASK) {
@@ -265,7 +261,6 @@ stackfree(struct bmk_thread *thread)
 
 	bmk_pgfree(thread->bt_stackbase, bmk_stackpageorder);
 }
-
 
 void
 bmk_sched_dumpqueue(void)
