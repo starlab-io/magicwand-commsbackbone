@@ -159,22 +159,47 @@ xe_dev_fini( void )
 int
 xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
 {
+    int rc = -1;
     
+    domid_t *outbound = (domid_t*)Data;
+
     switch ( Cmd ){
     
     case INSHEARTBEATIOCTL:
-        DEBUG_PRINT( "Got HEARTBEAT ioctl\n" );
+
+        rc = xe_comms_heartbeat();
+
+        if ( 0 != rc )
+        {
+            rc = EPASSTHROUGH;
+            goto ErrorExit;
+        }
+
         break;
 
     case DOMIDIOCTL:
-        DEBUG_PRINT( "Got domid ioctl\n" );
+
+        
+        rc =  xe_comms_get_domid();
+
+        if( rc <= 0 )
+        {
+            rc = EPASSTHROUGH;
+            goto ErrorExit;
+        }
+
+        *outbound = (domid_t)rc;
+        DEBUG_PRINT( "xe_dev_ioctl returning domid: %u\n", *outbound );
+        rc = 0;
+
         break;
 
     default:
-        DEBUG_PRINT( "No ioctl command found\n" );
+        DEBUG_PRINT( "xe_dev_ioctl called, but command not found\n" );
     }
 
-    return 0;
+ErrorExit:
+    return rc;
 }
 
 

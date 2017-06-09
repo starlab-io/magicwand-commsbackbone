@@ -65,6 +65,8 @@
 
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
 
+#define HEARTBEAT_KEY               "heartbeat"
+
 //
 //  Grant Mapping Variables 
 //

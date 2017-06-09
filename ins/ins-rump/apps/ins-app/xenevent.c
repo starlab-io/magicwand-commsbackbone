@@ -103,8 +103,11 @@ xenevent_globals_t g_state;
 // XXXX: put this in globals and share globals; add IOCTL to driver to get domid.
 
 // What's my domid? Needed by networking.c
-uint16_t   client_id;
+domid_t   client_id;
 
+pthread_t heartbeat_thread;
+bool continue_heartbeat = true;
+struct timeval elapsed;
 
 #define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
     ( MtRequestSocketCreate == _mytype ||         \
@@ -1000,6 +1003,7 @@ worker_thread_func( void * Arg )
     
     DEBUG_PRINT( "Thread %d is executing\n", myitem->idx );
     
+
     while ( true )
     {
         currbuf = NULL;
@@ -1051,6 +1055,30 @@ worker_thread_func( void * Arg )
     } // while
 
     pthread_exit(Arg);
+}
+
+void *
+heartbeat_thread_func( void* Args )
+{
+
+    
+    int i = 0; 
+
+    while( continue_heartbeat )
+    {
+        i++;
+
+        printf( "Calling heartbeat ioctl: %d\n", i );
+        printf( "Thread id: %d\n", getpid() );
+        fflush(stdout);
+
+        ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
+
+        //sched_yield();
+        sleep(1);
+    }
+
+    pthread_exit( Args );
 }
 
 
@@ -1117,8 +1145,18 @@ init_state( void )
         goto ErrorExit;
     }
 
-    // XXXX: use IOCTL to get domid
+
     client_id = 1;
+/*
+    // XXXX: use IOCTL to get domid
+    rc = ioctl( g_state.input_fd, DOMIDIOCTL, &client_id );
+    if ( 0 != rc )
+    {
+       MYASSERT( !"Getting dom id from ioctl failed");
+       goto ErrorExit;
+    }
+*/
+    DEBUG_PRINT( "INS got domid: %u from ioctl\n", client_id );
     
     //
     // Start up the threads
@@ -1135,6 +1173,26 @@ init_state( void )
             goto ErrorExit;
         }
     }
+
+
+
+#define runthread    
+#ifdef runthread
+    //
+    // Start up heartbeat thread
+    //
+    rc = pthread_create( &heartbeat_thread,
+                         NULL,
+                         heartbeat_thread_func,
+                         NULL );
+    if ( rc )
+    {
+        MYASSERT( !"Heartbeat thread" );
+        goto ErrorExit;
+    }
+
+#endif
+
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
     //xe_yield();
@@ -1167,6 +1225,9 @@ fini_state( void )
         workqueue_free( curr->work_queue );
         sem_destroy( &curr->awaiting_work_sem );
     }
+
+    continue_heartbeat = false;
+    pthread_join( heartbeat_thread, NULL );
 
     if ( g_state.input_fd > 0 )
     {

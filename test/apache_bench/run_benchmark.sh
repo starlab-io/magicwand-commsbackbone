@@ -3,7 +3,7 @@
 INDEXDIR=/tmp
 FILEDIR=$PWD/files
 RESULTSDIR=$PWD/results
-ATTEMPTS=1
+ATTEMPTS=10
 
 if [ ! -d "$FILEDIR" ]; then
     echo ""

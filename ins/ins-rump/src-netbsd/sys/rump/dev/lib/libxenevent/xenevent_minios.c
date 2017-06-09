@@ -2,6 +2,7 @@
 #include <mini-os/semaphore.h>
 #include <bmk-core/memalloc.h> // bmk_memalloc(size, align, who)
 #include <bmk-core/printf.h>
+#include <bmk-core/sched.h>
 
 #include "xenevent_minios.h"
 

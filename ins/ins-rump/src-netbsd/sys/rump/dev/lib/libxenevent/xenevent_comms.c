@@ -59,7 +59,6 @@
 #include "message_types.h"
 #include "xen_keystore_defs.h"
 #include "xenevent_netbsd.h"
-#include "ins-ioctls.h"
 
 // The RING macros use memset
 #define memset bmk_memset
@@ -382,7 +381,10 @@ xe_comms_read_item( void * Memory,
             // Nothing was available. Block until either (a) event
             // arrives or (b) a timeout has expired, and try again.
 #if INS_USES_EVENT_CHANNEL
+
             xenevent_semaphore_down( g_state.messages_available );
+
+
 /*
             // XXXX: poor man's semaphore_timeout()
             if ( !xenevent_semaphore_trydown( g_state.messages_available ) )
@@ -390,6 +392,7 @@ xe_comms_read_item( void * Memory,
                 xenevent_kpause("Semaphore poll", true, 1, NULL);
             }
 */
+
 #else
             xenevent_kpause("Poll ring buffer", true, 1, NULL);
 #endif
@@ -633,6 +636,56 @@ ErrorExit:
     return err;
 }
 
+int
+xe_comms_heartbeat()
+{
+    int heartbeat = 0;
+    int err = 0;
+    char path[XENEVENT_PATH_STR_LEN] = {0};
+
+    bmk_snprintf( path, 
+             sizeof( path ),
+             "%s/%d/%s",
+             XENEVENT_XENSTORE_ROOT,
+             g_state.localId,
+             HEARTBEAT_KEY );
+
+    err = xe_comms_read_int_from_key( path, &heartbeat );
+    if( 0 != err )
+    {
+        DEBUG_PRINT( "Failed to read heartbeat from xenstore" );
+        goto ErrorExit;
+    }
+
+    heartbeat++;
+
+    err = xe_comms_write_int_to_key( path, heartbeat );
+    if( 0 != err )
+    {
+        DEBUG_PRINT( "Failed to write updated heartbeat to xenstore" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+
+
+int
+xe_comms_get_domid()
+{
+    int rc = 0;
+    int ret = 0;
+
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, &ret );
+    if( rc )
+    {
+        //if rc is anything but 0, return the value
+        ret = rc;
+    }
+
+    return ret;
+}
 
 ////////////////////////////////////////////////////
 //
@@ -719,6 +772,20 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     rc = xe_comms_bind_to_interdom_chn( remoteId, vm_evt_chn_prt_nmbr );
     if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    //Initialize heartbeat
+    bmk_snprintf( path,
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              HEARTBEAT_KEY );
+
+    rc = xe_comms_write_int_to_key( path, 0 );
+    if( 0 != rc )
     {
         goto ErrorExit;
     }
