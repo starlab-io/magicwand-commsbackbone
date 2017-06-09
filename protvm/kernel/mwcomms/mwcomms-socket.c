@@ -1552,7 +1552,7 @@ mwsocket_response_consumer( void * Arg )
 #if PVM_USES_EVENT_CHANNEL
                 if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
                 {
-                    pr_info( "Received interrupt in worker thread\n" );
+                    pr_info( "Received interrupt in response consumer thread\n" );
                     goto ErrorExit;
                 }
 #else

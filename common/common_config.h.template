@@ -65,7 +65,8 @@
 // best use of shared memory.
 //
 
-#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256
+//#define MESSAGE_TARGET_MAX_SIZE  0x80 // 128
+#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256 << best performance
 //#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
 //#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
@@ -86,10 +87,15 @@
 // server, whose buffer size is 0x1000; MESSAGE_TARGET_MAX_SIZE is
 // 0x100
 //
-// INS yes, PVM yes: 1300ms
-// INS yes, PVM no:  9500ms
-// INS no,  PVM yes: 7500ms
-// INS no,  PVM no:  8800ms
+// These times are probably heavily influenced by the file descriptor
+// polling interval defined in the PVM driver, since the poll request
+// is the most common. That is fixed at 32 times/sec for these
+// numbers.
+//
+// INS yes, PVM yes: 315ms
+// INS yes, PVM no:  >10000ms
+// INS no,  PVM yes: >10000ms
+// INS no,  PVM no:  >10000ms
 //
 
 //
