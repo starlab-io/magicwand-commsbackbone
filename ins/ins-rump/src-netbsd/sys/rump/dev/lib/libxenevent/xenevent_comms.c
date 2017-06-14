@@ -45,7 +45,6 @@
 #include <mini-os/mm.h>
 #include <mini-os/gnttab.h>
 #include <mini-os/gntmap.h>
-#include <mini-os/semaphore.h>
 
 #include <bmk-core/string.h>
 #include <bmk-core/printf.h>
@@ -381,10 +380,7 @@ xe_comms_read_item( void * Memory,
             // Nothing was available. Block until either (a) event
             // arrives or (b) a timeout has expired, and try again.
 #if INS_USES_EVENT_CHANNEL
-
             xenevent_semaphore_down( g_state.messages_available );
-
-
 /*
             // XXXX: poor man's semaphore_timeout()
             if ( !xenevent_semaphore_trydown( g_state.messages_available ) )

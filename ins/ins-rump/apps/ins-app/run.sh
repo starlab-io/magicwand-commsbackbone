@@ -2,6 +2,7 @@
 
 ##
 ## Refer to setup_net.sh 
+## Use debug.sh for a debug run
 ##
 
 if [ -z $RUMP_IP ]; then

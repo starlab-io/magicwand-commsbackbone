@@ -569,11 +569,7 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
 
 ErrorExit:
-<<<<<<< HEAD
     if ( NULL != client_id_str )
-=======
-    if ( client_id_str )
->>>>>>> develop
     {
         kfree(client_id_str);
     }
