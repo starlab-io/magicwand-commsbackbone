@@ -68,22 +68,27 @@ xenevent_semaphore_down( xenevent_semaphore_t Semaphore )
     // Here we attempt to down the semaphore. If that fails, then we
     // might have to wait a long time before the semaphore can be
     // acquired. Due to the way the Rump scheduler works, this means
-    // that we must unbind this thread from the current CPU; otherwise
-    // we could starve other threads.
+    // that we must release this thread from the current CPU context;
+    // otherwise we could starve other threads. See
+    // rumpuser_clock_sleep() for another example of this usage. An
+    // alternate workaround might be to give the Rump VM several
+    // virtual CPUs. Cross ref:
+    // https://www.freelists.org/post/rumpkernel-users/Issue-with-Rump-scheduler,1
 
     if ( trydown( (struct semaphore *) Semaphore ) )
     {
         goto ErrorExit;
     }
 
-    // We're going to have to wait, possibly for a long time
+    // We're going to have to wait, possibly for a long time. Release
+    // CPU context.
     rumpkern_unsched( &nlocks, NULL );
 
-    // Wait....
+    // Blocking call
     down( (struct semaphore *) Semaphore );
 
-    // The wait is complete and the thread is resuming. Re-bind us to
-    // the CPU.
+    // The wait is complete and the thread is resuming. Re-acquire CPU
+    // context.
     rumpkern_sched( nlocks, NULL );
 
 ErrorExit:
