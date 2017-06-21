@@ -24,7 +24,7 @@
 
 // XXXX: When this is 1, we hit a deadlock upon receiving incoming
 // data and later unloading
-#define HANDLE_INCOMING_DATA 0
+#define HANDLE_INCOMING_DATA 1
 
 
 typedef int
@@ -62,6 +62,7 @@ typedef struct _mwcomms_backchannel_state
 static mwcomms_backchannel_state_t g_mwbc_state = {0};
 
 
+#if 0
 // @brief Make the socket non-blocking
 //
 // Likely not needed; cannot be used until sock_alloc_file() has been called
@@ -78,7 +79,7 @@ mw_backchannel_nonblock( struct socket * Sock )
     Sock->file->f_flags |= O_NONBLOCK;
     spin_unlock( &Sock->file->f_lock );
 }
-
+#endif
 
 // @brief Read data off the given buffer. Won't block.
 static int
@@ -88,10 +89,11 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
 {
     int rc = 0;
     struct msghdr hdr = {0};
-    struct iovec iov;
+    struct iovec iov = {0};
 
     MYASSERT( Len );
     MYASSERT( *Len > 0 );
+
 
     // See sendto syscall def in net/socket.c
     rc = g_mwbc_state.p_import_single_range( READ,
@@ -134,9 +136,9 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
         goto ErrorExit;
     }
 
-    *Len += rc;
+    //    *Len += rc;
     pr_debug( "Read %d bytes from socket\n", rc );
-    rc = 0;
+    //rc = 0;
 
 ErrorExit:
     return rc;
@@ -148,13 +150,14 @@ static int
 mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
 {
     int rc = 0;
-    uint32_t buf[32];
+    uint32_t buf[32] = {0};
 
     while ( true )
     {
         size_t size = sizeof(buf);
 
         rc = mw_backchannel_read( Channel, buf, &size );
+
         if ( rc )
         {
             break;
@@ -165,7 +168,7 @@ mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
         }
     }
 
-ErrorExit:
+    //ErrorExit:
     return rc;
 }
 
@@ -454,9 +457,10 @@ mw_backchannel_monitor( void * Arg )
         list_for_each_entry_safe( curr, next, &g_mwbc_state.connection_list, list )
         {
             unsigned int events = mw_backchannel_poll_socket( curr->conn );
-            if ( POLLHUP & events )
+	    
+            if ( (POLLHUP & events) || (POLLRDHUP & events ) )
             {
-                curr->active = false;
+                 curr->active = false;
             }
             else if ( POLLIN & events )
             {
@@ -548,6 +552,8 @@ mw_backchannel_init( void )
 
     g_mwbc_state.initialized = true;
 
+    printk("In mw_backchannel_init");
+    
     INIT_LIST_HEAD( &g_mwbc_state.connection_list );
     init_completion( &g_mwbc_state.listen_thread_done );
     init_rwsem( &g_mwbc_state.connection_list_lock );

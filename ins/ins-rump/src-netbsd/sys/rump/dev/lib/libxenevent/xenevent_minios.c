@@ -8,7 +8,6 @@
 #include <bmk-core/sched.h>
 
 #include "xenevent_minios.h"
-#include "xenevent_rump.h"
 #include "xenevent_common.h"
 
 int

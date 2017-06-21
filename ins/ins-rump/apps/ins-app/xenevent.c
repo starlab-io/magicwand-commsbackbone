@@ -1060,21 +1060,10 @@ worker_thread_func( void * Arg )
 void *
 heartbeat_thread_func( void* Args )
 {
-
-    
-    int i = 0; 
-
     while( continue_heartbeat )
     {
-        i++;
-
-        printf( "Calling heartbeat ioctl: %d\n", i );
-        printf( "Thread id: %d\n", getpid() );
-        fflush(stdout);
 
         ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
-
-        //sched_yield();
         sleep(1);
     }
 

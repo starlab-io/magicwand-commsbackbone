@@ -286,8 +286,8 @@ mwbase_dev_init( void )
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#ifdef MYTRAP // GDB helper - emits a breakpoint!
-    // gdb> add-symbol-file char_driver.ko $eax/$rax
+#ifdef DEBUG_BACKCHANNEL
+    // gdb> add-symbol-file mwcomms.ko $eax/$rax
 
     asm( "int $3" // module base in *ax
          //:: "a" ((THIS_MODULE)->module_core));
