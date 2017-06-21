@@ -1,3 +1,8 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
 
 #include <sys/types.h>
 #include <bmk-rumpuser/rumpuser.h>
@@ -72,7 +77,7 @@ xenevent_semaphore_down( xenevent_semaphore_t Semaphore )
     // rumpuser_clock_sleep() for another example of this usage. An
     // alternate workaround might be to give the Rump VM several
     // virtual CPUs. Cross ref:
-    // https://www.freelists.org/post/rumpkernel-users/Issue-with-Rump-scheduler,1
+    // https://www.freelists.org/post/rumpkernel-users/Issue-with-Rump-scheduler
 
     if ( trydown( (struct semaphore *) Semaphore ) )
     {
