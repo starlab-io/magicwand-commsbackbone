@@ -20,7 +20,8 @@ ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
 ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
 
 # experimental
-ccflags-y += -DBACKCHANNEL # support the netflow side-channel (experimental)
+ccflags-y += -DBACKCHANNEL # support the netflow side-channel
+#ccflags-y += -DDEBUG_BACKCHANNEL
 
 # For debugging
 ccflags-y += -ggdb

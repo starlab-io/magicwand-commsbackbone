@@ -45,21 +45,53 @@ typedef struct _mwcomms_backchannel_state
 
     pfn_import_single_range_t * p_import_single_range;
 
-    bool             initialized;
-    struct list_head connection_list;
-    struct rw_semaphore connection_list_lock;
-    atomic_t         connection_ct;
+    bool                      initialized;
+    struct list_head          connection_list;
+    struct rw_semaphore       connection_list_lock;
+    atomic_t                  connection_ct;
 
-    uint16_t         listen_port;
-    struct socket *  listen_sock;
-    struct poll_table_struct poll_tbl;
+    uint16_t                  listen_port;
+    struct socket *           listen_sock;
+    struct poll_table_struct  poll_tbl;
 
-    bool                 exit_pending;
-    struct task_struct * listen_thread;
-    struct completion    listen_thread_done;
+    bool                      exit_pending;
+    struct task_struct *      listen_thread;
+    struct completion         listen_thread_done;
 } mwcomms_backchannel_state_t;
 
 static mwcomms_backchannel_state_t g_mwbc_state = {0};
+
+#ifdef DEBUG
+static void
+print_backchannel_state(void)
+{
+
+        mwcomms_backchannel_info_t * curr = NULL;
+        int i = 0;
+        struct sockaddr_in addr;
+        int addrlen = sizeof(struct sockaddr_in);
+
+        
+        pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
+        pr_debug("connection count:    %d\n", g_mwbc_state.connection_ct.counter );
+        pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
+
+        pr_debug("\nsocket list: \n");
+        list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
+        {
+
+                 curr->conn->ops->getname( curr->conn,
+                                     (struct sockaddr *) &addr,
+                                     &addrlen,
+                                     1 ); // get peer name
+             pr_debug( "Connection %d connection from %pI4:%hu\n", i,
+             &addr.sin_addr, ntohs( addr.sin_port ) );
+
+             i++;
+        }
+}
+#endif
+
 
 
 #if 0
@@ -81,8 +113,11 @@ mw_backchannel_nonblock( struct socket * Sock )
 }
 #endif
 
+
+
 // @brief Read data off the given buffer. Won't block.
 static int
+MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
                      OUT   void   * Message,
                      INOUT size_t * Len )
@@ -117,11 +152,12 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
     rc = sock_recvmsg( Channel->conn, &hdr, *Len, 0 );
     //rc = sock_recvmsg( Channel->conn, &hdr, 0 );
 
+    pr_debug("Read %d bytes from socket", rc);
     // Returns number of bytes returned (>=0) or error (<0)
     if ( 0 == rc )
     {
         // POLLIN event indicated but no data
-        Channel->active = false;
+        //Channel->active = false;
         goto ErrorExit;
     }
     else if ( -EAGAIN == rc )
@@ -136,9 +172,10 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
         goto ErrorExit;
     }
 
-    //    *Len += rc;
+    *Len = rc;
+    rc = 0;
+
     pr_debug( "Read %d bytes from socket\n", rc );
-    //rc = 0;
 
 ErrorExit:
     return rc;
@@ -147,18 +184,21 @@ ErrorExit:
 
 // @brief Consume all read buffers in the given socket
 static int
+MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
 {
     int rc = 0;
-    uint32_t buf[32] = {0};
+    char buf[32] = {0};
 
     while ( true )
     {
+            
         size_t size = sizeof(buf);
+        memset( &buf, 0, sizeof(buf) );
 
         rc = mw_backchannel_read( Channel, buf, &size );
-
-        if ( rc )
+        
+        if ( ! rc )
         {
             break;
         }
@@ -166,6 +206,7 @@ mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
         {
             break;
         }
+
     }
 
     //ErrorExit:
@@ -173,6 +214,7 @@ mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
 }
 
 int
+MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_write( void * Message, size_t Len )
 {
     int rc = 0;
@@ -180,12 +222,15 @@ mw_backchannel_write( void * Message, size_t Len )
     struct iovec iov;
     mwcomms_backchannel_info_t * curr = NULL;
 
+    
     // See sendto syscall def in net/socket.c
     rc = g_mwbc_state.p_import_single_range( WRITE,
                                              Message,
                                              Len,
                                              &iov,
                                              &hdr.msg_iter );
+    
+
     if ( rc )
     {
         MYASSERT( !"import of message failed" );
@@ -196,6 +241,8 @@ mw_backchannel_write( void * Message, size_t Len )
 
     list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
     {
+
+
         rc = sock_sendmsg( curr->conn, &hdr );
         // continue upon failure
 
@@ -270,7 +317,7 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
 {
     int rc = 0;
     mwcomms_backchannel_info_t * backinfo = NULL;
-    char msg[48] = {0};
+    char msg[80] = {0};
     struct sockaddr_in addr;
     int addrlen = sizeof(struct sockaddr_in);
 
@@ -297,15 +344,15 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
         goto ErrorExit;
     }
 
+    
     pr_info( "Accepted connection from %pI4:%hu\n",
              &addr.sin_addr, ntohs( addr.sin_port ) );
 
     snprintf( msg, sizeof(msg),
-              "Hello from backchannel, connection #%d. You are %pI4:%hu\n",
+              "Hello, you are connection #%d. You are %pI4:%hu\n",
               atomic_read( &g_mwbc_state.connection_ct ),
               &addr.sin_addr, ntohs( addr.sin_port ) );
 
-    rc = mw_backchannel_write( (void *) msg, strlen(msg) + 1 );
     if ( rc )
     {
         goto ErrorExit;
@@ -316,6 +363,8 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
     list_add( &backinfo->list,
               &g_mwbc_state.connection_list );
     up_write( &g_mwbc_state.connection_list_lock );
+    
+    rc = mw_backchannel_write( (void *) msg, strlen(msg) + 1 );
 
 ErrorExit:
     return rc;
@@ -410,6 +459,7 @@ ErrorExit:
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_monitor( void * Arg )
 {
     int rc = 0;
@@ -458,7 +508,7 @@ mw_backchannel_monitor( void * Arg )
         {
             unsigned int events = mw_backchannel_poll_socket( curr->conn );
 	    
-            if ( (POLLHUP & events) || (POLLRDHUP & events ) )
+            if ( ( POLLHUP | POLLRDHUP ) & events )
             {
                  curr->active = false;
             }
@@ -469,7 +519,7 @@ mw_backchannel_monitor( void * Arg )
                 // system. For now, read the data and throw it away to
                 // clear the POLLIN event.
 #if HANDLE_INCOMING_DATA
-                pr_info( "Data is available on socket\n" );
+
                 (void) mw_backchannel_readall_drop( curr );
 #else
                 pr_info( "Ignoring incoming data on socket\n" );
@@ -478,6 +528,10 @@ mw_backchannel_monitor( void * Arg )
 
             if ( !curr->active )
             {
+                pr_debug("Killing socket\n");
+
+                //Killing connection to $IP port $PORT
+
                 kernel_sock_shutdown( curr->conn, SHUT_RDWR );
                 sock_release( curr->conn );
                 atomic_dec( &g_mwbc_state.connection_ct );
@@ -552,7 +606,7 @@ mw_backchannel_init( void )
 
     g_mwbc_state.initialized = true;
 
-    printk("In mw_backchannel_init");
+
     
     INIT_LIST_HEAD( &g_mwbc_state.connection_list );
     init_completion( &g_mwbc_state.listen_thread_done );
