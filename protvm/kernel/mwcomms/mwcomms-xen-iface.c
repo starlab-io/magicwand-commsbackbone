@@ -60,7 +60,17 @@
 #include "mwcomms-xen-iface.h"
 #include <xen_keystore_defs.h>
 
-typedef struct _mwcomms_xen_globals {
+
+// Per-INS data
+typedef struct _mwcomms_xen_ins
+{
+
+} mwcomms_xen_ins_t;
+
+
+
+typedef struct _mwcomms_xen_globals
+{
     domid_t  my_domid;
     domid_t  remote_domid;
 
@@ -304,7 +314,8 @@ mw_xen_create_unbound_evt_chn( void )
    alloc_unbound.remote_dom = g_mwxen_state.remote_domid; 
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
-   if (err) {
+   if (err)
+   {
        pr_err("Failed to set up event channel\n");
        goto ErrorExit;
    }
@@ -359,7 +370,7 @@ mw_xen_send_event( void )
 }
 
 
-static int 
+static bool
 mw_xen_is_evt_chn_closed( void )
 {
    struct evtchn_status status;
@@ -368,14 +379,18 @@ mw_xen_is_evt_chn_closed( void )
    status.dom = DOMID_SELF;
    status.port = g_mwxen_state.common_evtchn;
 
-   rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
-   if (rc < 0)
-     return 1;
+   rc = HYPERVISOR_event_channel_op( EVTCHNOP_status, &status );
+   if ( rc < 0 )
+   {
+       return true;
+   }
 
-   if (status.status != EVTCHNSTAT_closed)
-      return 0;
+   if ( status.status != EVTCHNSTAT_closed )
+   {
+      return false;
+   }
 
-   return 1;
+   return true;
 }
 
 
@@ -547,17 +562,14 @@ mw_ins_dom_id_found( const char *Path )
 
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn();
-    if ( err ) goto ErrorExit;
+    if ( err ) { goto ErrorExit; }
    
     // Offer Grant to Client
     mw_xen_offer_grant( g_mwxen_state.remote_domid );
 
     // Write Grant Ref to key 
     err = mw_xen_write_grant_refs_to_key();
-    if ( err )
-    {
-        goto ErrorExit;
-    }
+    if ( err ) { goto ErrorExit; }
 
     //
     // Complete: the handshake is done
@@ -657,8 +669,7 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
    
-
-    //Create keystore path for pvm
+    // Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
     if ( rc )
     {

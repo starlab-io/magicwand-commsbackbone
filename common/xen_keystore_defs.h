@@ -34,12 +34,12 @@
 // the system.
 //
 
-//These are defined for initializing the keystore from within the driver
+// These are defined for initializing the keystore from within the driver
 #define XENEVENT_XENSTORE_PVM_NODE      "pvm"
 #define XENEVENT_XENSTORE_INS_NODE      "ins"
 #define XENEVENT_NO_NODE                ""
 
-//These definitions are used for navigating the keystore
+// These definitions are used for navigating the keystore
 
 #define XENEVENT_XENSTORE_ROOT      "/mw"
 
@@ -51,7 +51,7 @@
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
 
-//INS constants
+// INS constants
 #define XENEVENT_PATH_STR_LEN       32
 
 #define CLIENT_ID_KEY               "ins_dom_id" 
