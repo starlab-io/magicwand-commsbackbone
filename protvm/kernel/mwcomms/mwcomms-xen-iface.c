@@ -316,13 +316,8 @@ mw_xen_create_unbound_evt_chn( void )
    alloc_unbound.dom        = g_mwxen_state.my_domid;
    alloc_unbound.remote_dom = g_mwxen_state.remote_domid; 
 
-<<<<<<< HEAD
-   err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
-   if (err)
-=======
    err = HYPERVISOR_event_channel_op( EVTCHNOP_alloc_unbound, &alloc_unbound );
    if ( err )
->>>>>>> heartbeat_domid_ioctls
    {
        pr_err("Failed to set up event channel\n");
        goto ErrorExit;
@@ -675,13 +670,8 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-<<<<<<< HEAD
    
     // Create keystore path for pvm
-=======
-
-    //Create keystore path for pvm
->>>>>>> heartbeat_domid_ioctls
     rc = mw_xen_initialize_keystore();
     if ( rc )
     {
