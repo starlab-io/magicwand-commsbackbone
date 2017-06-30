@@ -50,6 +50,8 @@
 #define SERVER_ID_KEY               "id"
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
+#define SERVER_BACKCHANNEL_PORT_KEY  "backchannel_port"
+#define SERVER_BACKCHANNEL_PORT_PATH XENEVENT_XENSTORE_PVM "/" SERVER_BACKCHANNEL_PORT_KEY
 
 // INS constants
 #define XENEVENT_PATH_STR_LEN       32
@@ -61,6 +63,8 @@
 #define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
 
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
+
+#define HEARTBEAT_KEY               "heartbeat"
 
 //
 //  Grant Mapping Variables 

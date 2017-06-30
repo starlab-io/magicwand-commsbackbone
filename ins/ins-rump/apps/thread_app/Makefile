@@ -5,7 +5,9 @@
 ##
 
 CC=x86_64-rumprun-netbsd-gcc 
-CFLAGS=-ggdb -I..
+CFLAGS=-ggdb
+CFLAGS += -I..
+CFLAGS += -I../../../../common
 CFLAGS += -DMYDEBUG
 
 BAKE=rumprun-bake

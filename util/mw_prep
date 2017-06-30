@@ -16,7 +16,8 @@ fi
 for d in $MWROOT/ins/ins-rump/apps/ins-app           \
          $MWROOT/protvm/user/wrapper                 \
          $MWROOT/protvm/kernel/mwcomms               \
-         $MWROOT/protvm/kernel/char_driver; 
+         $MWROOT/protvm/kernel/char_driver           \
+         $MWROOT/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent;
 do
    cp $d/Makefile.template $d/Makefile
 done

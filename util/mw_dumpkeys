@@ -1,5 +1,5 @@
 #!/bin/sh
 
-KEYPATH=/unikernel/random
+KEYPATH=/mw
 
 sudo xenstore-ls -fp $KEYPATH
