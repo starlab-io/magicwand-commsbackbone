@@ -1064,7 +1064,7 @@ heartbeat_thread_func( void* Args )
     {
 
         ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
-        sleep(1);
+        sleep( INS_HEARTBEAT_INTERVAL );
     }
 
     pthread_exit( Args );
