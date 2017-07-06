@@ -110,5 +110,6 @@
 //
 #define PVM_USES_EVENT_CHANNEL 1
 
+#define MAX_INS_COUNT 10
 
 #endif //common_config_h

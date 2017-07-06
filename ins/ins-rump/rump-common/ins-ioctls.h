@@ -11,4 +11,6 @@
 #define INSHEARTBEATIOCTL   _IO(   'i', 62 )
 #define DOMIDIOCTL          _IOWR( 'i', 63, domid_t )
 
+#define INS_HEARTBEAT_INTERVAL 1
+
 #endif
