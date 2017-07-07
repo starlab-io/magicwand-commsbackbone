@@ -66,6 +66,9 @@
 
 #define HEARTBEAT_KEY               "heartbeat"
 
+#define VM_IP_ADDR_KEY              "ip"
+
+
 //
 //  Grant Mapping Variables 
 //

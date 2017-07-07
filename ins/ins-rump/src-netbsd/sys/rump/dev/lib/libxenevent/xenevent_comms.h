@@ -26,7 +26,14 @@ typedef uint64_t event_id_t;
 
 int
 xe_comms_init( void );
-//xe_comms_init( IN xenevent_semaphore_t MsgAvailableSemaphore );
+
+
+int
+xe_comms_write_str_to_key( const char * Path,
+                           const char * Value );
+
+int
+xe_comms_publish_ip_addr( const char * Ip );
 
 int
 xe_comms_fini( void );
@@ -46,4 +53,5 @@ xe_comms_get_domid( void );
 
 int
 xe_comms_heartbeat( void );
+
 #endif //xenevent_comms_h

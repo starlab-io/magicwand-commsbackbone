@@ -74,7 +74,7 @@ typedef struct _xen_comm_state
 {
     bool comms_established;
 
-    domid_t         localId;
+    domid_t         local_id;
 
     // Grant map 
     struct gntmap gntmap_map;
@@ -108,26 +108,17 @@ static xen_comm_state_t g_state;
  * Basic utility functions
  ***************************************************************************/
 
-static int
-xe_comms_write_int_to_key( const char * Path,
-                           const int Value );
-
-
-static int
-xe_comms_write_int_to_key( const char * Path,
-                           const int Value )
+int
+xe_comms_write_str_to_key( const char * Path,
+                           const char * Value )
 {
     xenbus_transaction_t    txn;
     int                   retry;
     char                   *err;
     int                     res = 0;
-    char buf[MAX_KEY_VAL_WIDTH];
     bool             started = false;
 
-    bmk_memset( buf, 0, sizeof(buf) );
-    bmk_snprintf( buf, sizeof(buf), "%u", Value );
-
-    DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, buf );
+    DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
     
     err = xenbus_transaction_start(&txn);
     if (err)
@@ -138,7 +129,7 @@ xe_comms_write_int_to_key( const char * Path,
 
     started = true;
     
-    err = xenbus_write(txn, Path, buf);
+    err = xenbus_write(txn, Path, Value);
     if (err)
     {
         MYASSERT( !"xenbus_transaction_start" );
@@ -160,6 +151,43 @@ ErrorExit:
     
     return res;
 }
+
+
+
+static int
+xe_comms_write_int_to_key( const char * Path,
+                           const int Value )
+{
+    int rc = 0;
+    char buf[MAX_KEY_VAL_WIDTH];
+
+    bmk_memset( buf, 0, sizeof(buf) );
+    bmk_snprintf( buf, sizeof(buf), "%u", Value );
+
+    rc = xe_comms_write_str_to_key( Path, buf );
+
+    return rc;
+}
+
+
+int
+xe_comms_publish_ip_addr( const char * Ip )
+{
+    int rc = 0;
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
+
+    bmk_snprintf( path, sizeof( path ),
+                  "%s/%d/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  VM_IP_ADDR_KEY );
+
+    rc = xe_comms_write_str_to_key( path, Ip );
+
+    return rc;
+}
+
+
 
 static int
 xe_comms_read_str_from_key( IN const char *Path,
@@ -497,15 +525,16 @@ receive_grant_references( domid_t RemoteId )
     xenbus_event_queue_init(&events);
 
     bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              GNT_REF_KEY ); 
+                  sizeof( path ),
+                  "%s/%d/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  GNT_REF_KEY ); 
               
     xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
     while ( (err = xenbus_read(XBT_NIL, path, &msg)) != NULL
-            ||  msg[0] == '0') {
+            ||  msg[0] == '0')
+    {
         bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
         bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
         xenbus_wait_for_watch(&events);
@@ -605,12 +634,11 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
 #endif
 
     // Indicate that the VM's event channel is bound
-    bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              VM_EVT_CHN_BOUND_KEY );
+    bmk_snprintf( path, sizeof( path ),
+                  "%s/%d/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  VM_EVT_CHN_BOUND_KEY );
 
     err = xe_comms_write_int_to_key( path, 1 );
     if ( err )
@@ -643,7 +671,7 @@ xe_comms_heartbeat()
              sizeof( path ),
              "%s/%d/%s",
              XENEVENT_XENSTORE_ROOT,
-             g_state.localId,
+             g_state.local_id,
              HEARTBEAT_KEY );
 
     err = xe_comms_read_int_from_key( path, &heartbeat );
@@ -712,7 +740,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     //
 
     // Read our own dom ID
-    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &g_state.localId );
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &g_state.local_id );
     if ( rc )
     {
         goto ErrorExit;
@@ -720,12 +748,12 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     // Write our dom ID to agreed-upon path
     bmk_snprintf( path, 
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              CLIENT_ID_KEY );
-    rc = xe_comms_write_int_to_key( path, g_state.localId );
+                  sizeof( path ),
+                  "%s/%d/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  CLIENT_ID_KEY );
+    rc = xe_comms_write_int_to_key( path, g_state.local_id );
     if ( rc )
     {
         goto ErrorExit;
@@ -756,7 +784,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
               sizeof( path ),
               "%s/%d/%s",
               XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
+              g_state.local_id,
               VM_EVT_CHN_PORT_KEY );
               
     rc = xe_comms_wait_and_read_int_from_key( path,
@@ -777,7 +805,7 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
               sizeof( path ),
               "%s/%d/%s",
               XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
+              g_state.local_id,
               HEARTBEAT_KEY );
 
     rc = xe_comms_write_int_to_key( path, 0 );
@@ -825,7 +853,7 @@ xe_comms_fini( void )
                   sizeof( path ),
                   "%s/%d",
                   XENEVENT_XENSTORE_ROOT,
-                  g_state.localId );
+                  g_state.local_id );
     xe_comms_remove_directory( path );
 
     DEBUG_PRINT( "Cleaning up xenstore path: %s\n", path );

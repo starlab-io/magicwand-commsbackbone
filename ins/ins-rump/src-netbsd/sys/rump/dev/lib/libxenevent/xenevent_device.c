@@ -26,6 +26,10 @@
 #include <sys/stat.h>
 #include <sys/systm.h> // printf
 
+#include <net/route.h>
+#include <net/if.h>
+#include <netinet/in.h>
+
 #include <sys/vfs_syscalls.h>
 
 #include <rump-sys/kern.h>
@@ -37,6 +41,8 @@
 
 #include "xenevent_netbsd.h"
 #include "xenevent_minios.h"
+
+#include "xen_keystore_defs.h"
 
 #include "ioconf.h"
 
@@ -88,10 +94,68 @@ typedef struct _xen_dev_state
     // Only one handle to device allowed
     //
     uint32_t open_count;
-    
+
+    //
+    // Have we found the IP address?
+    //
+    bool ip_found;
+
 } xen_dev_state_t;
 
 static xen_dev_state_t g_state;
+
+
+//
+// The next 2 functions are used to discover the public IP address of
+// the Rump instance. Presently they just publish the first AF_INET
+// address found, which works for now.
+//
+static int
+xe_dev_iface_callback( struct rtentry * RtEntry, void * Arg )
+{
+    int rc = 0;
+    char ip[ 4 * 4 ]; // IP4: 4 chars per octet
+    struct ifaddr *ifa = NULL;
+
+    if ( g_state.ip_found ) { goto ErrorExit; }
+
+    IFADDR_READER_FOREACH( ifa, RtEntry->rt_ifp )
+    {
+        if ( AF_INET == ifa->ifa_addr->sa_family )
+        {
+            g_state.ip_found = true; // only try once
+
+            sin_print( ip, sizeof(ip), (const void *) ifa->ifa_addr );
+
+            rc = xe_comms_publish_ip_addr( ip );
+            if ( rc ) { goto ErrorExit; }
+
+            break;
+        }
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+static int
+xe_dev_publish_ip( void )
+{
+    int rc = 0;
+
+    if ( g_state.ip_found ) { goto ErrorExit; }
+
+    rc = rt_walktree( AF_INET, xe_dev_iface_callback, NULL );
+
+    // Whether or not we found the IP, we did search for it; so don't
+    // try again.
+    g_state.ip_found = true;
+
+ErrorExit:
+    return rc;
+}
+
 
 
 // TODO: we don't get or establish meaningful major/minor numbers here
@@ -160,29 +224,30 @@ int
 xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
 {
     int rc = -1;
-    
     domid_t *outbound = (domid_t*)Data;
 
-    switch ( Cmd ){
-    
+    // Publish the IP only after user-mode component has loaded;
+    // otherwise the IP hasn't been assigned yet. Do it only once.
+    rc = xe_dev_publish_ip();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    switch ( Cmd )
+    {
     case INSHEARTBEATIOCTL:
-
         rc = xe_comms_heartbeat();
-
         if ( 0 != rc )
         {
             rc = EPASSTHROUGH;
             goto ErrorExit;
         }
-
         break;
 
     case DOMIDIOCTL:
-
-        
         rc =  xe_comms_get_domid();
-
-        if( rc <= 0 )
+        if ( rc <= 0 )
         {
             rc = EPASSTHROUGH;
             goto ErrorExit;
@@ -191,11 +256,10 @@ xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
         *outbound = (domid_t)rc;
         DEBUG_PRINT( "xe_dev_ioctl returning domid: %u\n", *outbound );
         rc = 0;
-
         break;
 
     default:
-        DEBUG_PRINT( "xe_dev_ioctl called, but command not found\n" );
+        MYASSERT( !"Invalid IOCTL code" );
     }
 
 ErrorExit:

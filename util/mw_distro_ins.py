@@ -64,6 +64,13 @@ class ConnectionRouter:
     Class that manages iptables rules for TCP traffic forwarding to
     support MagicWand's management of multiple INSs. Only one forwarding 
     rule is enabled at a time.
+
+    These two rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
+    1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT 
+
+    2. iptables -t nat -I PREROUTING -m tcp -p tcp --dport 2200 \
+        -j DNAT --to-destination 1.2.3.4
+
     """
     def __init__( self ):
         # List of tuples: (chain, rule). The first is always baseline
@@ -349,7 +356,7 @@ def print_dict(desc, mydict):
 
 def test_redir():
     r = ConnectionRouter()
-    r.redirect_conn_to_iface( 2200, 'vif3.0' )
+    r.redirect_conn_to_iface( 2200, 'vif23.0' )
 
     r.dump()
     while True:
