@@ -13,6 +13,11 @@
  *          network calls.
  */
 
+#define _GNU_SOURCE // dladdr()
+#include <dlfcn.h>
+#include <elf.h>
+#include <link.h> // ^^^ for introspection
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -29,7 +34,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-#include <dlfcn.h>
+
 #include <pthread.h>
 #include <signal.h>
 
@@ -158,6 +163,8 @@ get_libc_symbol( void ** Addr, const char * Symbol )
     {
         DEBUG_PRINT( "Failure: %s\n", dlerror() );
     }
+
+    DEBUG_PRINT( "libc: %s ==> %p\n", Symbol, *Addr );
 
     return *Addr;
 }
@@ -609,6 +616,7 @@ recvfrom( int    SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "recvfrom(%d, buf, %d, %d, ... )\n", SockFd, (int)Len, Flags );
     mwcomms_init_request( &request,
                           MtRequestSocketRecv,
                           MT_REQUEST_SOCKET_RECV_SIZE,
@@ -625,8 +633,8 @@ recvfrom( int    SockFd,
         received = &response.socket_recvfrom.count;
     }
 
-    //DEBUG_PRINT( "Receiving %d bytes\n",
-    //request.socket_recv.requested );
+    DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
+
     rc = (ssize_t)mwcomms_write_request( SockFd, true, &request, &response );
     err = errno;
     if ( rc )
@@ -1088,6 +1096,8 @@ send( int          SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "send( %d, buf, %d, %x )\n", SockFd, (int)Len, Flags );
+
     mwcomms_init_request( &request,
                           MtRequestSocketSend,
                           MT_REQUEST_SOCKET_SEND_SIZE,
@@ -1207,6 +1217,8 @@ shutdown( int SockFd, int How )
         err = errno;
         goto ErrorExit;
     }
+
+    DEBUG_PRINT( "shutdown( %d, %d )\n", SockFd, How );
 
     mwcomms_init_request( &request,
                           MtRequestSocketShutdown,
@@ -1558,6 +1570,50 @@ ErrorExit:
     return rc;
 }
 
+
+#ifdef WRAP_CHECK_FUNCTIONS
+
+//
+// Set up function aliases here for reason stated in the Makefile. The
+// signature doesn't matter; we're instructing the loader to redirect
+// one function call to another. Since only socket-related calls are
+// intercepted, only a few functions are aliased.
+//
+
+void __read_chk(void) __attribute__((weak, alias ("read")));
+void __recv_chk(void) __attribute__((weak, alias ("recv")));
+void __recvfrom_chk(void) __attribute__((weak, alias ("recvfrom")));
+
+#endif // WRAP_CHECK_FUNCTIONS
+
+
+#ifdef DEBUG
+static int
+dl_callback(struct dl_phdr_info * Info,
+            size_t                Size,
+            void                * Data)
+{
+    char buf[64];
+
+    snprintf( buf, sizeof(buf), "%s => %p\n",
+              Info->dlpi_name,
+              (void *) Info->dlpi_addr );
+
+    (void) fwrite( buf, strlen(buf), 1, stdout );
+
+    for (int j = 0; j < Info->dlpi_phnum; j++)
+    {
+        printf( "\t header %2d: address=%16p size=%6lx fl=%lx\n",
+                j,
+                (void *) (Info->dlpi_addr + Info->dlpi_phdr[j].p_vaddr),
+                (unsigned long) Info->dlpi_phdr[j].p_memsz,
+                (unsigned long) Info->dlpi_phdr[j].p_flags );
+    }
+
+    return 0;
+}
+#endif // DEBUG
+
 void __attribute__((constructor))
 init_wrapper( void )
 {
@@ -1606,6 +1662,14 @@ init_wrapper( void )
     get_libc_symbol( (void **) &libc_getpeername, "getpeername" );
 
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
+
+#ifdef DEBUG
+    //
+    // XXXX: Linux-only function
+    //
+    dl_iterate_phdr(dl_callback, NULL);
+#endif // DEBUG
+
 }
 
 
