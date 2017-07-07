@@ -43,7 +43,7 @@ int main(int argc, char* argv[])
     
     //Default Values PATH = ~/ and PORT=10000
     char PORT[6];
-    ROOT = ".";
+    ROOT = "/tmp";
     strcpy(PORT,"80");
 
     int slot=0;

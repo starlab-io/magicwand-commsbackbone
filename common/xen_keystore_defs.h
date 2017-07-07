@@ -34,12 +34,12 @@
 // the system.
 //
 
-//These are defined for initializing the keystore from within the driver
+// These are defined for initializing the keystore from within the driver
 #define XENEVENT_XENSTORE_PVM_NODE      "pvm"
 #define XENEVENT_XENSTORE_INS_NODE      "ins"
 #define XENEVENT_NO_NODE                ""
 
-//These definitions are used for navigating the keystore
+// These definitions are used for navigating the keystore
 
 #define XENEVENT_XENSTORE_ROOT      "/mw"
 
@@ -50,8 +50,11 @@
 #define SERVER_ID_KEY               "id"
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
+#define SERVER_BACKCHANNEL_PORT_KEY  "backchannel_port"
+#define SERVER_BACKCHANNEL_PORT_PATH XENEVENT_XENSTORE_PVM "/" SERVER_BACKCHANNEL_PORT_KEY
 
-//INS constants
+
+// INS constants
 #define XENEVENT_PATH_STR_LEN       32
 
 #define CLIENT_ID_KEY               "ins_dom_id" 
@@ -61,6 +64,8 @@
 #define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
 
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
+
+#define HEARTBEAT_KEY               "heartbeat"
 
 //
 //  Grant Mapping Variables 

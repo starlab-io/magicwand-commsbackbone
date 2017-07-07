@@ -1,4 +1,10 @@
-# To preserve changes to Makefile, edit Makefile.template
+##
+## To preserve changes to Makefile, edit Makefile.template
+## See also: utils/mw_prep
+##
+## THIS MAKEFILE IS THE ONE THE UP-CHAIN DEVELOPERS (OUR CONSUMERS)
+## WILL USE. IT MUST BUILD PRODUCTION-READY BINARIES.
+##
 
 # Standard no-strings-attached compilation of the test TCP/IP app and
 # its accompanying shared library.  The shared library preloads the
@@ -11,6 +17,7 @@ CFLAGS += -I.. -I../../../common -I../../common
 CFLAGS += -ggdb
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
+#CFLAGS +=  -DDEVLOG
 
 # Some programs use "check" versions of certain libc functions, which
 # we may have to wrap for proper exection (since they may contain

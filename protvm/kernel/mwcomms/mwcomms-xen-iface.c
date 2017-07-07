@@ -3,6 +3,7 @@
 * Copyright (C) 2016, Star Lab — All Rights Reserved
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
+
 /**
  * This file handles the initial handshake between the PVM and the
  * INS, meaning that it monitors and publishes to certain paths in
@@ -92,13 +93,13 @@ mw_xen_rm( const char *Dir, const char *Node )
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
-        pr_err( "Error removing dir: %s%s\n", Dir, Node );
+        pr_err( "Error removing dir:%s node:%s\n", Dir, Node );
         goto ErrorExit;
     }
 
     txnstarted = true;
 
-    if ( ! xenbus_exists( txn, Dir, Node ) )
+    if ( !xenbus_exists( txn, Dir, Node ) )
     {
        goto ErrorExit;
     }
@@ -129,6 +130,8 @@ mw_xen_mkdir( const char * Dir, const char * Node )
     bool                        txnstarted = false;
     int                         term = 0;
 
+    pr_debug( "Making dir %s/%s\n", Dir, Node );
+
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
@@ -138,22 +141,23 @@ mw_xen_mkdir( const char * Dir, const char * Node )
 
     txnstarted = true;
 
-    if (  xenbus_exists( txn, Dir, "" ) )
+    if ( xenbus_exists( txn, Dir, Node ) )
     {
-
+        pr_debug( "dir:%s node:%s exists; removing it.\n", Dir, Node );
         err = xenbus_rm( txn, Dir, Node);
         if ( err )
         {
-            pr_err( "Cloud not delete existing xenstore dir: dir\n" );
+            pr_err( "Could not delete existing xenstore dir:%s node:%s\n", Node, Dir );
             goto ErrorExit;
         }
-
+        pr_debug( "%s: removed\n", Dir );
     }
 
+    pr_debug( "Creating dir:%s node:%s\n", Dir, Node );
     err = xenbus_mkdir( txn, Dir, Node );
     if ( err )
     {
-        pr_err( "Could not create node: %s in dir: %s\n", Node, Dir );
+        pr_err( "Could not create node:%s in dir:%s\n", Node, Dir );
         goto ErrorExit;
     }
 
@@ -166,20 +170,22 @@ ErrorExit:
         }
     }
 
+    pr_debug( "Complete - dir:%s node:%s\n", Dir, Node );
+
     return err;
 }
 
 
-static int
+int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 {
    struct xenbus_transaction   txn;
    int                         err;
    bool                  txnstarted = false;
    int                   term = 0;
-   
-   //pr_debug( "Begin write %s/%s <== %s\n", dir, node, value );
-   
+
+   pr_debug( "Writing %s to %s/%s\n", Value, Dir, Node );
+
    err = xenbus_transaction_start(&txn);
    if ( err )
    {
@@ -189,7 +195,7 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 
    txnstarted = true;
 
-   err = xenbus_exists( txn, Dir, "" );
+   err = xenbus_exists( txn, Dir, XENEVENT_NO_NODE );
    // 1 ==> exists
    if ( !err )
    {
@@ -199,13 +205,12 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
        goto ErrorExit;
    }
    
-   err = xenbus_write(txn, Dir, Node, Value);
+   err = xenbus_write( txn, Dir, Node, Value );
    if ( err )
    {
-      pr_err("Could not write to XenStore Key\n");
+       pr_err("Could not write to XenStore Key dir:%s node:%s\n", Dir, Node );
       goto ErrorExit;
    }
-
 
 ErrorExit:
    if ( txnstarted )
@@ -220,14 +225,14 @@ ErrorExit:
 }
 
 
-static char *
+char *
 mw_xen_read_from_key( const char * Dir, const char * Node )
 {
    struct xenbus_transaction   txn;
    char                       *str;
    int                         err;
 
-   //pr_debug( "Begin read %s/%s <== ?\n", dir, node );
+   pr_debug( "Reading value in dir:%s node:%s\n", Dir, Node );
 
    err = xenbus_transaction_start(&txn);
    if (err) {
@@ -245,8 +250,6 @@ mw_xen_read_from_key( const char * Dir, const char * Node )
 
    err = xenbus_transaction_end(txn, 0);
 
-   //pr_debug( "End read %s/%s <== %s\n", dir, node, str );
-   
    return str;
 }
 
@@ -258,9 +261,10 @@ mw_xen_write_server_id_to_key( void )
    int err = 0;
    
    // Get my domain id
-   dom_id_str = (const char *) mw_xen_read_from_key( PRIVATE_ID_PATH, "" );
+   dom_id_str = (const char *)
+       mw_xen_read_from_key( PRIVATE_ID_PATH, XENEVENT_NO_NODE );
 
-   if (!dom_id_str)
+   if ( NULL == dom_id_str )
    {
        pr_err("Error: Failed to read my Dom Id Key\n");
        err = -EIO;
@@ -278,9 +282,9 @@ mw_xen_write_server_id_to_key( void )
    g_mwxen_state.my_domid = simple_strtol(dom_id_str, NULL, 10);
 
 ErrorExit:
-   if ( dom_id_str )
+   if ( NULL != dom_id_str )
    {
-       kfree(dom_id_str);
+       kfree( dom_id_str );
    }
    return err;
 }
@@ -290,44 +294,38 @@ static int
 mw_xen_create_unbound_evt_chn( void )
 {
    struct evtchn_alloc_unbound alloc_unbound; 
-   char                        str[MAX_GNT_REF_WIDTH]; 
-   int                         err = 0;
+   char                        str[MAX_GNT_REF_WIDTH] = {0};
    char                        path[ XENEVENT_PATH_STR_LEN ] = {0};
+   int                         err = 0;
 
    if ( !g_mwxen_state.remote_domid )
    {
        goto ErrorExit;
    }
 
-   //alloc_unbound.dom = DOMID_SELF;
    alloc_unbound.dom        = g_mwxen_state.my_domid;
    alloc_unbound.remote_dom = g_mwxen_state.remote_domid; 
 
-   err = HYPERVISOR_event_channel_op(EVTCHNOP_alloc_unbound, &alloc_unbound);
-   if (err) {
+   err = HYPERVISOR_event_channel_op( EVTCHNOP_alloc_unbound, &alloc_unbound );
+   if ( err )
+   {
        pr_err("Failed to set up event channel\n");
        goto ErrorExit;
    }
 
    g_mwxen_state.common_evtchn = alloc_unbound.port;
 
-   pr_debug("Event Channel Port (%d <=> %d): %d\n",
-            alloc_unbound.dom, g_mwxen_state.remote_domid,
-            g_mwxen_state.common_evtchn );
+   pr_debug( "Event Channel Port (%d <=> %d): %d\n",
+             alloc_unbound.dom, g_mwxen_state.remote_domid,
+             g_mwxen_state.common_evtchn );
 
-   memset( str, 0, MAX_GNT_REF_WIDTH );
    snprintf( str, MAX_GNT_REF_WIDTH,
              "%u", g_mwxen_state.common_evtchn );
 
-   snprintf( path, 
-             sizeof(path),
-             "%s/%d",
-             XENEVENT_XENSTORE_ROOT,
-             g_mwxen_state.remote_domid );
+   snprintf( path, sizeof(path), "%s/%d",
+             XENEVENT_XENSTORE_ROOT, g_mwxen_state.remote_domid );
 
-   err = mw_xen_write_to_key( path,
-                              VM_EVT_CHN_PORT_KEY,
-                              str );
+   err = mw_xen_write_to_key( path, VM_EVT_CHN_PORT_KEY, str );
 
 ErrorExit:
    return err;
@@ -352,9 +350,9 @@ mw_xen_send_event( void )
 
    //xen_clear_irq_pending(irq);
 
-   if (HYPERVISOR_event_channel_op(EVTCHNOP_send, &send))
+   if ( HYPERVISOR_event_channel_op(EVTCHNOP_send, &send) )
    {
-      pr_err("Failed to send event\n");
+       pr_err("Failed to send event\n");
    }
 }
 
@@ -382,24 +380,29 @@ mw_xen_is_evt_chn_closed( void )
 static void 
 mw_xen_free_unbound_evt_chn( void )
 {
-   struct evtchn_close close;
-   int err;
+    struct evtchn_close close = { 0 };
+   int err = 0;
 
-   if (!g_mwxen_state.common_evtchn)
-      return;
-      
+   if ( !g_mwxen_state.common_evtchn )
+   {
+       goto ErrorExit;
+   }
+
    close.port = g_mwxen_state.common_evtchn;
 
    err = HYPERVISOR_event_channel_op(EVTCHNOP_close, &close);
 
-   if (err)
+   if ( err )
    {
-      pr_err("Failed to close event channel\n");
+      pr_err( "Failed to close event channel\n" );
    }
    else
    {
-      pr_debug("Closed event channel port=%d\n", close.port);
+      pr_debug( "Closed event channel port=%d\n", close.port );
    }
+
+ErrorExit:
+   return;
 }
 
 
@@ -421,12 +424,16 @@ mw_xen_offer_grant( domid_t ClientId )
                                          0 );
        if ( rc < 0 )
        {
-           pr_err( "gnttab_grant_foreign_access: %d\n", rc );
+           pr_err( "gnttab_grant_foreign_access failed: %d\n", rc );
            goto ErrorExit;
        }
 
        g_mwxen_state.grant_refs[ i ] = rc;
-       //pr_info("VA: %p MFN: %p grant 0x%x\n", va, (void *)mfn, ret);
+       pr_debug( "VA: %p MFN: %p grant 0x%x\n",
+                 (void *) ((unsigned long)g_mwxen_state.xen_shmem.ptr +
+                           i * PAGE_SIZE),
+                 (void *)(mfn+i),
+                 rc );
    }
 
    // Success:
@@ -460,9 +467,9 @@ mw_xen_write_grant_refs_to_key( void )
             rc = -E2BIG;
             goto ErrorExit;
         }
-        
-        if (strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >=
-            gnt_refs + sizeof(gnt_refs) )
+
+        if ( strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >=
+             gnt_refs + sizeof(gnt_refs) )
         {
             pr_err("Insufficient space to write all grant refs.\n");
             rc = -E2BIG;
@@ -470,12 +477,8 @@ mw_xen_write_grant_refs_to_key( void )
         }
     }
 
-    snprintf( path,
-              sizeof(path),
-              "%s/%d",
-              XENEVENT_XENSTORE_ROOT,
-              g_mwxen_state.remote_domid );
-
+    snprintf( path, sizeof(path), "%s/%d",
+              XENEVENT_XENSTORE_ROOT, g_mwxen_state.remote_domid );
 
     rc = mw_xen_write_to_key( path, GNT_REF_KEY, gnt_refs );
 
@@ -512,7 +515,7 @@ mw_xen_vm_port_is_bound( const char *Path )
               g_mwxen_state.common_evtchn, g_mwxen_state.irq );
 
 ErrorExit:
-    if ( is_bound_str )
+    if ( NULL != is_bound_str )
     {
         kfree( is_bound_str );
     }
@@ -566,7 +569,7 @@ mw_ins_dom_id_found( const char *Path )
     g_mwxen_state.completion_cb( g_mwxen_state.remote_domid );
 
 ErrorExit:
-    if ( client_id_str )
+    if ( NULL != client_id_str )
     {
         kfree(client_id_str);
     }
@@ -576,9 +579,10 @@ ErrorExit:
 
 static void
 mw_xenstore_state_changed( struct xenbus_watch *W,
-                                const char **V,
-                                unsigned int L )
+                           const char **V,
+                           unsigned int L )
 {
+    pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
     {
@@ -596,6 +600,7 @@ ErrorExit:
     return;
 }
 
+
 static struct xenbus_watch
 mw_xenstore_watch =
 {
@@ -604,12 +609,11 @@ mw_xenstore_watch =
 };
 
 
-
 static int
 mw_xen_initialize_keystore(void)
 {
     int rc = 0;
-    
+
     rc = mw_xen_mkdir( XENEVENT_XENSTORE_ROOT, 
                        XENEVENT_XENSTORE_PVM_NODE );
 
@@ -641,7 +645,6 @@ ErrorExit:
 }
 
 
-
 int
 mw_xen_init( mw_region_t * SharedMem,
              mw_xen_init_complete_cb_t CompletionCallback,
@@ -656,7 +659,6 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-   
 
     //Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
@@ -673,7 +675,7 @@ mw_xen_init( mw_region_t * SharedMem,
         pr_err("Key initialization failed: %d\n", rc );
         goto ErrorExit;
     }
-   
+
     // 1. Write Dom Id for Server to Key
     rc = mw_xen_write_server_id_to_key();
     if ( rc )
@@ -686,7 +688,7 @@ mw_xen_init( mw_region_t * SharedMem,
     // is ineficient, consider merging both watches into one
     // function
     // *******************************************************
-    
+
     // 2. Watch Client Id XenStore Key
     rc = register_xenbus_watch( &mw_xenstore_watch );
     if (rc)
@@ -700,6 +702,7 @@ mw_xen_init( mw_region_t * SharedMem,
 ErrorExit:
     return rc;
 }
+
 
 void
 mw_xen_fini( void )
