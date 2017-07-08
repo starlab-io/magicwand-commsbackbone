@@ -37,6 +37,7 @@ inst_num = 0
 
 import sys
 import os
+import signal
 import time
 import re
 import subprocess
@@ -53,6 +54,41 @@ import xen
 import xen.xm.XenAPI as XenAPI
 
 import pyxs
+
+# Generic storage for INS
+class INS:
+    def __init__( self, domid ):
+        self.domid        = domid
+        self.ip           = None
+        self.stats        = None
+        self.last_contact = time.time()
+
+    def __str__( self ):
+        return ("id {0} IP {1} stats {2} contact {3}".
+                format( self.domid, self.ip, self.stats, self.last_contact ) )
+
+
+# Map: domid => INS instance
+ins_map = dict()
+
+# MACs for usage by INSs; this way we don't overflow DHCP's mappings
+macs = { '00:16:3e:28:2a:58' : { 'in_use' : False },
+         '00:16:3e:28:2a:59' : { 'in_use' : False },
+         '00:16:3e:28:2a:5a' : { 'in_use' : False },
+         '00:16:3e:28:2a:5b' : { 'in_use' : False },
+         '00:16:3e:28:2a:5c' : { 'in_use' : False },
+         '00:16:3e:28:2a:5d' : { 'in_use' : False } }
+
+
+exit_requested = False
+def handler(signum, frame):
+    print 'Signal handler called with signal', signum
+    exit_requested = True
+
+
+# Set the signal handler and a 5-second alarm
+signal.signal(signal.SIGALRM, handler)
+
 
 ##import libvirt # system-installed build doesn't support new XenAPI
 
@@ -175,7 +211,32 @@ class XenStoreEventHandler:
         s_newval = newval
         if not newval:
             s_newval = "<deleted>"
-        print( "{0} => {1}".format( path, s_newval ) )
+
+        # example path:
+        # s.split('/')
+        # ['', 'mw', '77', 'network_stats']
+        #print( "Observing {0} => {1}".format( path, s_newval ) )
+        #import pdb;pdb.set_trace()
+        domid = None
+
+        if 'ins_dom_id' in path:
+            domid = int(s_newval)
+            i = INS( domid )
+            ins_map[ domid ] = i
+        elif 'ip_addrs' in path:
+            domid = int( path.split('/')[2] )
+            ips = filter( lambda s: '127.0.0.1' not in s, s_newval.split() )
+            assert len(ips) == 1, "too many public IP addresses"
+            ins_map[ domid ].ip = ips[0]
+        elif 'network_stats' in path:
+            domid = int( path.split('/')[2] )
+            ins_map[ domid ].stats = s_newval.split(':')
+        elif 'heartbeat' in path:
+            domid = int( path.split('/')[2] )
+            ins_map[ domid ].last_contact = time.time()
+        else:
+            #print( "Ignoring {0} => {1}".format( path, s_newval ) )
+            pass
 
 
 class XenStoreWatch( threading.Thread ):
@@ -191,8 +252,13 @@ class XenStoreWatch( threading.Thread ):
             m = c.monitor()
             m.watch( MW_XENSTORE_ROOT, b"MW INS watcher" )
             events = m.wait()
+            if exit_requested:
+                return
 
             for e in events: # blocking is here on generator
+                if exit_requested:
+                    return
+
                 path = e[0]
                 value = None
                 if c.exists( path ):
@@ -200,50 +266,78 @@ class XenStoreWatch( threading.Thread ):
 
                 self._handler.event( path, value )
 
-def spawn_ins():
-    """ 
-    Spawn the Rump INS domU. Normally this is done via rumprun, which
-    runs 'xl create xr.conf', where xr.conf looks like this:
+class InsSpawner:
+    def __init__( self, xenstore_watcher ):
+        """ 
+        Spawn the Rump INS domU. Normally this is done via rumprun, which
+        runs 'xl create xr.conf', where xr.conf looks like this:
 
-    kernel="ins-rump.run"
-    name="mw-ins-rump"
-    vcpus=1
-    memory=256
-    on_poweroff="destroy"
-    on_crash="destroy"
-    vif=['xenif']
-
-    --------------------
-
-    Spawn the Rump INS domU. Normally this is done via rumprun like this:
-
-    rumprun -T /tmp/rump.tmp -S xen -di -M 256 -N mw-ins-rump \
+        kernel="ins-rump.run"
+        name="mw-ins-rump"
+        vcpus=1
+        memory=256
+        on_poweroff="destroy"
+        on_crash="destroy"
+        vif=['xenif']
+        
+        --------------------
+        
+        Spawn the Rump INS domU. Normally this is done via rumprun like this:
+        
+        rumprun -T /tmp/rump.tmp -S xen -di -M 256 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/8,$_GW \
         ins-rump.run
-    """
+        """
 
-    global inst_num
+        global inst_num
 
-    ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
+        self._watcher = xenstore_watcher
 
-    print("PATH: {0}".format( os.environ['PATH'] ) )
+        ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
 
-    # We will not connect to the console (no "-i") so we won't wait for exit below.
-    cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
-    cmd += '-N mw-ins-rump-{0:x} '.format( inst_num )
-    cmd += '-I xen0,xenif -W xen0,inet,dhcp {0}'.format( ins_run_file )
+        print("PATH: {0}".format( os.environ['PATH'] ) )
 
-    inst_num += 1
+        # Find available MAC
+        mac = None
+        for m in macs.iterkeys():
+            if macs[m]['in_use']:
+                continue
+            macs[m]['in_use'] = True
+            mac = m
+            break
+            if not mac:
+                raise RuntimeError( "No more MACs are available" )
 
-    print( "Running command {0}".format(cmd) )
+        # We will not connect to the console (no "-i") so we won't wait for exit below.
+        cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
+        cmd += '-N mw-ins-rump-{0:x} '.format( inst_num )
+        cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
 
-    p = subprocess.Popen( cmd.split(),
-                          stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-    (stdout, stderr ) = p.communicate()
-    rc = p.wait()
-    if rc:
-        raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
+        inst_num += 1
+
+        print( "Running command {0}".format(cmd) )
+
+        p = subprocess.Popen( cmd.split(),
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+        (stdout, stderr ) = p.communicate()
+        rc = p.wait()
+        if rc:
+            raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
+
+        self._domid = int( stdout.split(':')[1] )
+
+    def wait( self ):
+        """ Waits until the INS is ready to use """
+        
+        # The watcher must have populated the INS's IP
+        while True:
+            if ( self._domid in ins_map and
+                 ins_map[ self._domid ].ip ):
+                print( "INS {0} is ready with IP {1}".
+                       format( self._domid, ins_map[ self._domid ].ip ) )
+                break
+            time.sleep( 0.01 )
 
 
 class UDSHTTPConnection(httplib.HTTPConnection):
@@ -370,12 +464,23 @@ def test_xen_stuff():
     w = XenStoreWatch( e )
     w.start()
 
-    spawn_ins()
+    s = InsSpawner( w )
+
+    # Wait for INS IP address to appear
+    s.wait()
+
+    w.join()
 
 if __name__ == '__main__':
     print( "Running in PID {0}".format( os.getpid() ) )
-    test_redir()
-    #test_xen_stuff()
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGABRT, handler)
+    signal.signal(signal.SIGQUIT, handler)
+
+    #test_redir()
+    test_xen_stuff()
+
 
     print( "Exiting main thread" )
 
