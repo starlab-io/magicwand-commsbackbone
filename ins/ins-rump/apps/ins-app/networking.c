@@ -47,7 +47,6 @@
 #include "pollset.h"
 
 extern xenevent_globals_t g_state;
-extern uint16_t client_id;
 
 
 static int
@@ -126,7 +125,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     }
     else
     {
-        extsock = MW_SOCKET_CREATE( client_id, WorkerThread->idx );
+        extsock = MW_SOCKET_CREATE( g_state.client_id, WorkerThread->idx );
     }
 
     // Set up Response; clobbers base.sockfd
@@ -143,6 +142,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     WorkerThread->sock_domain    = native_fam;
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
+
+    ++g_state.network_stats_socket_ct;
 
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->public_fd, sockfd );
@@ -417,6 +418,8 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
 
+        ++g_state.network_stats_socket_ct;
+
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd,
@@ -464,11 +467,11 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
         do
         {
             callrc = recvfrom( WorkerThread->local_fd,
-                           (void *) Response->bytes,
-                           Request->requested,
-                           flags,
-                           ( struct sockaddr * ) &src_addr,
-                           &addrlen );
+                               (void *) Response->bytes,
+                               Request->requested,
+                               flags,
+                               ( struct sockaddr * ) &src_addr,
+                               &addrlen );
         } while( callrc < 0 && EINTR == errno );
 
         // recvfrom() returned without being interrupted
@@ -521,6 +524,8 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
     Response->addrlen  = addrlen;
+
+    g_state.network_stats_bytes_recv += Response->count;
 
     xe_net_set_base_response( ( mt_request_generic_t * ) Request,
                               MT_RESPONSE_SOCKET_RECVFROM_SIZE + Response->count,
@@ -609,6 +614,8 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     DEBUG_PRINT( "recv() got total of 0x%x bytes, status=%d\n",
                  (int)Response->count, Response->base.status );
 
+    g_state.network_stats_bytes_recv += Response->count;
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               Response->count + MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *)Response );
@@ -653,6 +660,8 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
         DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd );
+
+        --g_state.network_stats_socket_ct;
 
         rc = close( WorkerThread->local_fd );
         if ( rc )
@@ -756,6 +765,8 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         MYASSERT( sent > 0 );
         Response->count += sent;
     }
+
+    g_state.network_stats_bytes_sent += Response->count;
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_SEND_SIZE,

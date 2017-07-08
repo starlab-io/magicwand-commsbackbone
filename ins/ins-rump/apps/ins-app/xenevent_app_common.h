@@ -9,6 +9,9 @@
 
 #define ONE_REQUEST_REGION_SIZE sizeof(mt_request_generic_t)
 
+//typedef domid_t uint16_t;
+typedef uint16_t domid_t;
+
 typedef struct _xenevent_globals
 {
     // Current index into the buffer_items array. Only goes up, modulo
@@ -32,6 +35,18 @@ typedef struct _xenevent_globals
 
     int        input_fd;
     int        output_fd;
+
+    domid_t   client_id;
+    pthread_t heartbeat_thread;
+    bool continue_heartbeat;
+
+    // Network statistics put in XenStore every time the heartbeat is
+    // updated
+    int        network_stats_socket_ct;
+    uint64_t   network_stats_bytes_recv;
+    uint64_t   network_stats_bytes_sent;
+
+    struct timeval elapsed;
 
 } xenevent_globals_t;
 

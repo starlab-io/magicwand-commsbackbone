@@ -22,7 +22,7 @@ echo "IP address: $RUMP_IP"
 #        -I xen0,xenif \
 #        -W xen0,inet,static,$RUMP_IP/8,$_GW \
 #        ins-rump.run
-rumprun -T /tmp/rump.tmp -S xen -d -M 256 -N mw-ins-rump \
+rumprun -S xen -di -M 256 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/8,$_GW \
         ins-rump.run

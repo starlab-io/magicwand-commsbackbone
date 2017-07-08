@@ -89,7 +89,7 @@
 
 #include "mwerrno.h"
 
-#include "ins-ioctls.h"
+#include "ins-ioctls.h" // needs xenevent_app_common.h for domid_t
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
@@ -99,15 +99,6 @@
 
 // Global data
 xenevent_globals_t g_state;
-
-// XXXX: put this in globals and share globals; add IOCTL to driver to get domid.
-
-// What's my domid? Needed by networking.c
-domid_t   client_id;
-
-pthread_t heartbeat_thread;
-bool continue_heartbeat = true;
-struct timeval elapsed;
 
 #define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
     ( MtRequestSocketCreate == _mytype ||         \
@@ -675,7 +666,7 @@ post_process_response( mt_request_generic_t  * Request,
         {
             // A thread was available - record the assignment now
             accept_thread->public_fd =
-                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+                MW_SOCKET_CREATE( g_state.client_id, accept_thread->idx );
             accept_thread->local_fd = Response->base.status;
 
             // Mask the native FD with the exported one
@@ -1060,11 +1051,17 @@ worker_thread_func( void * Arg )
 void *
 heartbeat_thread_func( void* Args )
 {
-    while( continue_heartbeat )
+    while ( g_state.continue_heartbeat )
     {
+        char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
-        ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
-        sleep(1);
+        (void) snprintf( stats, sizeof(stats), "%lx:%llx:%llx",
+                         (unsigned long) g_state.network_stats_socket_ct,
+                         (unsigned long long) g_state.network_stats_bytes_recv,
+                         (unsigned long long) g_state.network_stats_bytes_sent );
+
+        ioctl( g_state.input_fd, INS_HEARTBEAT_IOCTL, (const char *)stats );
+        sleep( HEARTBEAT_INTERVAL_SEC );
     }
 
     pthread_exit( Args );
@@ -1077,6 +1074,8 @@ init_state( void )
     int rc = 0;
     
     bzero( &g_state, sizeof(g_state) );
+
+    g_state.continue_heartbeat = true;
 
     //
     // Init the buffer items
@@ -1134,18 +1133,15 @@ init_state( void )
         goto ErrorExit;
     }
 
-
-    client_id = 1;
-/*
     // XXXX: use IOCTL to get domid
-    rc = ioctl( g_state.input_fd, DOMIDIOCTL, &client_id );
+    rc = ioctl( g_state.input_fd, INS_DOMID_IOCTL, &g_state.client_id );
     if ( 0 != rc )
     {
        MYASSERT( !"Getting dom id from ioctl failed");
        goto ErrorExit;
     }
-*/
-    DEBUG_PRINT( "INS got domid: %u from ioctl\n", client_id );
+
+    DEBUG_PRINT( "INS got domid: %u from ioctl\n", g_state.client_id );
     
     //
     // Start up the threads
@@ -1170,7 +1166,7 @@ init_state( void )
     //
     // Start up heartbeat thread
     //
-    rc = pthread_create( &heartbeat_thread,
+    rc = pthread_create( &g_state.heartbeat_thread,
                          NULL,
                          heartbeat_thread_func,
                          NULL );
@@ -1215,8 +1211,8 @@ fini_state( void )
         sem_destroy( &curr->awaiting_work_sem );
     }
 
-    continue_heartbeat = false;
-    pthread_join( heartbeat_thread, NULL );
+    g_state.continue_heartbeat = false;
+    pthread_join( g_state.heartbeat_thread, NULL );
 
     if ( g_state.input_fd > 0 )
     {
