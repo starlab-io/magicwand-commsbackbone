@@ -82,12 +82,9 @@ macs = { '00:16:3e:28:2a:58' : { 'in_use' : False },
 
 exit_requested = False
 def handler(signum, frame):
+    global exit_requested
     print 'Signal handler called with signal', signum
     exit_requested = True
-
-
-# Set the signal handler and a 5-second alarm
-signal.signal(signal.SIGALRM, handler)
 
 
 ##import libvirt # system-installed build doesn't support new XenAPI
@@ -95,91 +92,83 @@ signal.signal(signal.SIGALRM, handler)
 # See http://libvirt.org/docs/libvirt-appdev-guide-python
 #import libvirt # This keeps us on Python 2 for now.
 
-class ConnectionRouter:
+class PortForwarder:
     """
     Class that manages iptables rules for TCP traffic forwarding to
-    support MagicWand's management of multiple INSs. Only one forwarding 
-    rule is enabled at a time.
+    support MagicWand's management of multiple INSs. Each instance of
+    this class forwards one port from the Dom0 to the same port on an
+    INS.
+
+    NOTE:
+    These rules necessitate that incoming connections originate from 
+    somewhere other than the Dom0 (or associated DomU's ???).
 
     These two rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
     1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT 
 
     2. iptables -t nat -I PREROUTING -m tcp -p tcp --dport 2200 \
         -j DNAT --to-destination 1.2.3.4
-
     """
-    def __init__( self ):
+
+    def __init__( self, in_port, dest_ip ):
         # List of tuples: (chain, rule). The first is always baseline
         # rule to accept established traffic
         self._rules = list()
+        self._port = in_port
+        self._dest = dest_ip
 
-        # See https://gist.github.com/apparentlymart/d8ebc6e96c42ce14f64b
-        # for iptable inspiration
-
-        #  iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
-        chain = iptc.Chain( iptc.Table(iptc.Table.FILTER), "INPUT" )
-
-        rule = iptc.Rule() # accept establish
-        rule.target = iptc.Target( rule, "ACCEPT" )
-
-        match = iptc.Match( rule, "state" )
-        match.state = "RELATED,ESTABLISHED"
-        rule.add_match( match )
-
-        chain.insert_rule( rule )
-        self._rules.append( (chain, rule) )
+        self._redirect_conn_to_addr()
 
     def __del__( self ):
+        print "Stop redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
         for (c,r) in self._rules:
             c.delete_rule( r )
 
-    def _insert_routing_rule( self, chain, rule ):
-        chain.insert_rule( rule )
+    def get_port( self ):
+        return self._port
 
-        # Remove the previous prerouting rule
-        if len(self._rules) > 1:
-            self._rules[1][0].delete_rule( self._rules[1][1] )
-            del self._rules[1]
-        # Track the new rule internally
+    def _enable_rule( self, chain, rule ):
+        chain.insert_rule( rule )
         self._rules.append( (chain, rule) )
 
-    def redirect_conn_to_port( self, orig_dport, new_dport ):
+    def _redirect_conn_to_addr( self ):
+        """
+        Configure an external IP address on the "outside" interface and add iptables rule:
+        """
 
-        # iptables -t nat -A PREROUTING -p tcp --dport 9000 -j REDIRECT --to-port 9001
-        rule  = iptc.Rule()
-        rule.protocol = "tcp"
-        
-        match = iptc.Match( rule, "tcp" )
-        match.dport  = "{0:d}".format( orig_dport )
+        print "Start redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
 
-        rule.target = iptc.Target( rule, "REDIRECT" )
-        rule.add_match( match )
-        rule.target.to_ports = "{0:d}".format( new_dport )
+        # Forward port 8080 to Y.Y.Y.Y:8080
+        # iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to Y.Y.Y.Y:8080
 
         chain = iptc.Chain( iptc.Table( iptc.Table.NAT ), "PREROUTING" )
 
-        self._insert_routing_rule( chain, rule )
+        rule  = iptc.Rule()
+        rule.protocol = "tcp"
 
-    def redirect_conn_to_iface( self, orig_dport, dest_iface ):
-        # iptables -t nat -A PREROUTING -p tcp --dport 9000 -j REDIRECT --to-port 9001
-        # iptables -A FORWARD -i eth0 -o eth1 -p tcp --dport 80  -j ACCEPT
+        match = iptc.Match( rule, "tcp" )
+        match.dport  = "{0:d}".format( self._port )
+
+        rule.target = iptc.Target( rule, "DNAT" )
+        rule.target.set_parameter( "to_destination",  "{0}:{1}".format( self._dest, self._port ) )
+        rule.add_match( match )
+        self._enable_rule( chain, rule )
+
+        # Accept traffic directed at the prerouting chain:
+        # iptables -A FORWARD -p tcp --dport 8080 -j ACCEPT
+
+        chain = iptc.Chain( iptc.Table( iptc.Table.FILTER ), "FORWARD" )
 
         rule  = iptc.Rule()
         rule.protocol = "tcp"
-        #rule.target = iptc.Target( rule, "REDIRECT" )
-        rule.target = iptc.Target( rule, "ACCEPT" )
-        rule.in_interface = EXT_IFACE
-        rule.out_interface = dest_iface
 
         match = iptc.Match( rule, "tcp" )
-        match.dport  = "{0:d}".format( orig_dport )
+        match.dport  = "{0:d}".format( self._port )
+
+        rule.target = iptc.Target( rule, "ACCEPT" )
         rule.add_match( match )
 
-        #chain = iptc.Chain( iptc.Table( iptc.Table.NAT ), "PREROUTING" )
-        #chain = iptc.Chain( iptc.Table( iptc.Table.FILTER ), "FORWARD" )
-        chain = iptc.Chain( iptc.Table( iptc.Table.FILTER ), "INPUT" )
-
-        self._insert_routing_rule( chain, rule )
+        self._enable_rule( chain, rule )
 
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)
@@ -234,6 +223,10 @@ class XenStoreEventHandler:
         elif 'heartbeat' in path:
             domid = int( path.split('/')[2] )
             ins_map[ domid ].last_contact = time.time()
+        elif 'listening_ports' in path:
+            ports = [ int(p, 16) for p in s_newval ]
+            # route traffic to this listener
+
         else:
             #print( "Ignoring {0} => {1}".format( path, s_newval ) )
             pass
@@ -337,7 +330,10 @@ class InsSpawner:
                 print( "INS {0} is ready with IP {1}".
                        format( self._domid, ins_map[ self._domid ].ip ) )
                 break
-            time.sleep( 0.01 )
+            time.sleep( 0.02 )
+
+    def get_domid( self ):
+        return self._domid
 
 
 class UDSHTTPConnection(httplib.HTTPConnection):
@@ -413,12 +409,11 @@ class XenIface:
         # with pyxs.Client() as c:
         #    print( "Path: {0} => {1}".format(p, c[p]) )
 
-
         p = subprocess.Popen( [ 'xl', 'network-list', "{0:d}".format( domid ) ],
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
 
         (stdout, stderr ) = p.communicate()
-        
+
         rc = p.wait()
         if rc:
             raise RuntimeError( "Call to xl failed: {0}".format( stderr ) )
@@ -449,27 +444,28 @@ def print_dict(desc, mydict):
     print( '----------' )
 
 def test_redir():
-    r = ConnectionRouter()
-    r.redirect_conn_to_iface( 2200, 'vif23.0' )
+    r = PortForwarder( 4567, '10.30.30.50' )
+    #r.dump()
 
-    r.dump()
     while True:
-        time.sleep(5)
+        if exit_requested:
+            return
+        time.sleep(0.1)
 
 def test_xen_stuff():
     x = XenIface()
-
     e = XenStoreEventHandler( x )
-
     w = XenStoreWatch( e )
     w.start()
 
     s = InsSpawner( w )
+    s.wait()     # Wait for INS IP address to appear
 
-    # Wait for INS IP address to appear
-    s.wait()
+    r = PortForwarder( 80, ins_map[ s.get_domid() ].ip )
 
-    w.join()
+    while w.is_alive():
+        w.join(0.1)
+
 
 if __name__ == '__main__':
     print( "Running in PID {0}".format( os.getpid() ) )

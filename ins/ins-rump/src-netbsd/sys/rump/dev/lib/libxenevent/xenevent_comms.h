@@ -65,4 +65,8 @@ xe_comms_get_domid( void );
 int
 xe_comms_heartbeat( const char * NetworkStats );
 
+int
+xe_comms_listeners( const char * Listeners );
+
+
 #endif //xenevent_comms_h

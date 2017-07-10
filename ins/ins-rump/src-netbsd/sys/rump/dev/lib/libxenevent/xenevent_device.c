@@ -290,6 +290,14 @@ xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
         rc = 0;
         break;
 
+    case INS_PUBLISH_LISTENERS_IOCTL:
+        rc = xe_comms_listeners( (const char *) Data );
+        if ( 0 != rc )
+        {
+            goto ErrorExit;
+        }
+        break;
+        
     default:
         rc = EINVAL;
         MYASSERT( !"Invalid IOCTL code" );

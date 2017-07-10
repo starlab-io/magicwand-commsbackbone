@@ -709,6 +709,38 @@ ErrorExit:
 
 
 int
+xe_comms_listeners( const char * Listeners )
+{
+    static bool listener_path_init = false;
+    int err = 0;
+    static char listener_path[XENEVENT_PATH_STR_LEN] = {0};
+
+    if ( !listener_path_init )
+    {
+        // Just create path the first time
+        listener_path_init = true;
+
+        bmk_snprintf( listener_path, sizeof( listener_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_LISTENER_KEY );
+    }
+
+    MYASSERT( bmk_strlen(Listeners) > 0 );
+    err = xe_comms_write_str_to_key( listener_path, Listeners );
+    if ( err )
+    {
+        DEBUG_PRINT( "Failed to write listener info to xenstore" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+
+
+int
 xe_comms_get_domid( void )
 {
     int rc = 0;

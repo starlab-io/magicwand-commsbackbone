@@ -6,6 +6,7 @@
 #include "workqueue.h"
 #include "config.h"
 #include "message_types.h"
+#include "ins-ioctls.h"
 
 #define ONE_REQUEST_REGION_SIZE sizeof(mt_request_generic_t)
 
@@ -46,6 +47,11 @@ typedef struct _xenevent_globals
     uint64_t   network_stats_bytes_recv;
     uint64_t   network_stats_bytes_sent;
 
+    bool       pending_port_change;
+
+    // Maintain list here for (1) debugging
+//    char       listening_ports[ INS_LISTENING_PORTS_MAX_LEN ];
+    
     struct timeval elapsed;
 
 } xenevent_globals_t;

@@ -572,8 +572,8 @@ release_worker_thread( thread_item_t * ThreadItem )
     ThreadItem->state_flags = 0;
     ThreadItem->sock_domain = 0;
     ThreadItem->sock_type   = 0;
-    ThreadItem->sock_protocol = 0;
-    ThreadItem->port_num    = 0;
+    ThreadItem->sock_protocol  = 0;
+    ThreadItem->bound_port_num = 0;
 
     bzero( &ThreadItem->remote_host, sizeof(ThreadItem->remote_host) );
     
@@ -631,6 +631,53 @@ send_dispatch_error_response( mt_request_generic_t * Request )
 
 
 /**
+ * @brief Computes string describing ports that are in LISTEN
+ * state. If there has been a change, then updates that string in
+ * XenStore via an IOCTL.
+ */
+static int
+update_listening_ports( void )
+{
+    int rc = 0;
+    char listening_ports[ INS_LISTENING_PORTS_MAX_LEN ];
+
+    if ( !g_state.pending_port_change ) { goto ErrorExit; }
+    
+    DEBUG_PRINT( "Scanning for change in set of listening ports\n" );
+    g_state.pending_port_change = false;
+    listening_ports[0] = '\0';
+
+    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {
+        thread_item_t * curr = &g_state.worker_threads[i];
+
+        if ( !curr->in_use ) { continue; }
+
+        // Only add the port if it is nonzero
+        if ( 0 != curr->bound_port_num )
+        {
+            char port[5];
+            snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
+            strncat( listening_ports, port, sizeof(listening_ports) );
+        }
+    }
+
+    DEBUG_PRINT( "Listening ports: %s\n", listening_ports );
+    rc = ioctl( g_state.input_fd,
+                INS_PUBLISH_LISTENERS_IOCTL,
+                (const char *)listening_ports );
+    if ( rc )
+    {
+        MYASSERT( !"ioctl" );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+
+/**
  * @brief Perform internal steps required after a buffer item has been
  * processed.
  */
@@ -674,6 +721,8 @@ post_process_response( mt_request_generic_t  * Request,
             Response->base.sockfd = accept_thread->public_fd;
         }
     }
+
+    rc = update_listening_ports();
 
     return rc;
 }

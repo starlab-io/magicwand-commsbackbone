@@ -77,9 +77,11 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #ifdef MYTRAP
 
 #  define DEBUG_BREAK()                                                 \
+    pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( "At breakpoint\n" );                          \
-    DEBUG_FLUSH_FUNCTION(stdout);                                       \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "At breakpoint\n" );       \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
+    pthread_mutex_unlock( &__debug_mutex );                             \
     _DEBUG_EMIT_BREAKPOINT()
 
 #else
@@ -95,7 +97,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     if(!(x)) {                                                          \
         pthread_mutex_lock( &__debug_mutex );                           \
         _DEBUG_EMIT_META();                                             \
-        DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "Assertion failure: %s\n", #x );          \
+        DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "Assertion failure: %s\n", #x ); \
         DEBUG_EMIT_BREAKPOINT();                                        \
         pthread_mutex_unlock( &__debug_mutex );                         \
     }
@@ -109,8 +111,8 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_PRINT(...)                                              \
     pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);                                  \
-    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                                       \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
     pthread_mutex_unlock( &__debug_mutex )
 
 

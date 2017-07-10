@@ -68,6 +68,7 @@
 // base 16. See also ins-ioctls.h.
 #define INS_NETWORK_STATS_KEY        "network_stats"
 
+#define INS_LISTENER_KEY             "listening_ports"
 
 //
 //  Grant Mapping Variables 

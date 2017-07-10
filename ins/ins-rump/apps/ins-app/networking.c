@@ -323,11 +323,15 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
         Response->base.status = XE_GET_NEG_ERRNO();
         MYASSERT ( !"bind" );
     }
+    else
+    {
+        WorkerThread->bound_port_num = ntohs( sockaddr.sin_port );
+        g_state.pending_port_change = true;
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
                               MT_RESPONSE_SOCKET_BIND_SIZE,
                               (mt_response_generic_t *) Response );
-
     return 0;
 }
 
@@ -675,7 +679,8 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
-
+    WorkerThread->bound_port_num = 0;
+    g_state.pending_port_change = true;    
     return rc;
 }
 
