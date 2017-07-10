@@ -24,19 +24,25 @@
 ##      and start/restart the service
 ##       $ service xend start
 ##
+## Other notes:
+##
+##   The XenStore event watcher can block forever if the PVM driver
+##   isn't loaded or in the right state. See
+##   https://bugs.python.org/issue8844 and the pyxs source (client.py)
+##   for details.
+##
 
 XEND_PORT = 9225 # the port configured for xend's xen-api-server value
 MW_XENSTORE_ROOT = b"/mw"
 
 INS_MEMORY_MB = 256
-#EXT_IFACE = "eth0" # external-facing network interface
-EXT_IFACE = "xenbr0" # external-facing network interface
+POLL_INTERVAL = 0.01
+DEFAULT_TIMEOUT = 2
 
-
-inst_num = 0
 
 import sys
 import os
+import random
 import signal
 import time
 import re
@@ -54,6 +60,11 @@ import xen
 import xen.xm.XenAPI as XenAPI
 
 import pyxs
+
+
+# See http://libvirt.org/docs/libvirt-appdev-guide-python
+#import libvirt # system-installed build doesn't support new XenAPI
+
 
 # Generic storage for INS
 class INS:
@@ -79,18 +90,15 @@ macs = { '00:16:3e:28:2a:58' : { 'in_use' : False },
          '00:16:3e:28:2a:5c' : { 'in_use' : False },
          '00:16:3e:28:2a:5d' : { 'in_use' : False } }
 
+inst_num = 0
+
 
 exit_requested = False
 def handler(signum, frame):
     global exit_requested
-    print 'Signal handler called with signal', signum
+    print( "Caught signal {0}".format( signum ) )
     exit_requested = True
 
-
-##import libvirt # system-installed build doesn't support new XenAPI
-
-# See http://libvirt.org/docs/libvirt-appdev-guide-python
-#import libvirt # This keeps us on Python 2 for now.
 
 class PortForwarder:
     """
@@ -120,9 +128,12 @@ class PortForwarder:
         self._redirect_conn_to_addr()
 
     def __del__( self ):
-        print "Stop redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        #print "Stop redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
         for (c,r) in self._rules:
             c.delete_rule( r )
+
+    def __str__( self ):
+        return "0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
 
     def get_port( self ):
         return self._port
@@ -136,7 +147,7 @@ class PortForwarder:
         Configure an external IP address on the "outside" interface and add iptables rule:
         """
 
-        print "Start redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        #print "Start redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
 
         # Forward port 8080 to Y.Y.Y.Y:8080
         # iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to Y.Y.Y.Y:8080
@@ -195,47 +206,54 @@ class PortForwarder:
 class XenStoreEventHandler:
     def __init__( self, conn ):
         self._conn = conn
+        #self._forwarder = forwarder
+        self._forwarders = list()
 
     def event( self, path, newval ):
-        s_newval = newval
-        if not newval:
-            s_newval = "<deleted>"
-
         # example path:
         # s.split('/')
         # ['', 'mw', '77', 'network_stats']
         #print( "Observing {0} => {1}".format( path, s_newval ) )
-        #import pdb;pdb.set_trace()
-        domid = None
+
+        if path.startswith( "/mw" ):
+            try:
+                domid = int( path.split('/')[2] )
+            except:
+                # We can't do anything without the domid
+                return
 
         if 'ins_dom_id' in path:
-            domid = int(s_newval)
+            assert domid == int(newval)
             i = INS( domid )
             ins_map[ domid ] = i
         elif 'ip_addrs' in path:
-            domid = int( path.split('/')[2] )
-            ips = filter( lambda s: '127.0.0.1' not in s, s_newval.split() )
+            ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
             ins_map[ domid ].ip = ips[0]
         elif 'network_stats' in path:
-            domid = int( path.split('/')[2] )
-            ins_map[ domid ].stats = s_newval.split(':')
+            ins_map[ domid ].stats = newval.split(':')
         elif 'heartbeat' in path:
-            domid = int( path.split('/')[2] )
             ins_map[ domid ].last_contact = time.time()
         elif 'listening_ports' in path:
-            ports = [ int(p, 16) for p in s_newval ]
-            # route traffic to this listener
+            ports = [ int(p, 16) for p in newval.split() ]
+            ip = ins_map[ domid ].ip
 
+            # Rebuild the forwarding rules: get rid of old ones and re-create
+            self._forwarders = list() # releases references to the old rules
+            print( "Redirections now:\n--------------------------" )
+            for p in ports:
+                f = PortForwarder( p, ip )
+                print( "\t{0}".format( f ) )
+                self._forwarders.append( f )
         else:
-            #print( "Ignoring {0} => {1}".format( path, s_newval ) )
+            #print( "Ignoring {0} => {1}".format( path, newval ) )
             pass
 
 
 class XenStoreWatch( threading.Thread ):
     def __init__( self, event_handler ):
         threading.Thread.__init__( self )
-        self._handler = event_handler\
+        self._handler = event_handler
 
     def handle_xs_change( self, path, newval ):
         pass
@@ -244,6 +262,7 @@ class XenStoreWatch( threading.Thread ):
         with pyxs.Client() as c:
             m = c.monitor()
             m.watch( MW_XENSTORE_ROOT, b"MW INS watcher" )
+
             events = m.wait()
             if exit_requested:
                 return
@@ -259,7 +278,8 @@ class XenStoreWatch( threading.Thread ):
 
                 self._handler.event( path, value )
 
-class InsSpawner:
+
+class Ins:
     def __init__( self, xenstore_watcher ):
         """ 
         Spawn the Rump INS domU. Normally this is done via rumprun, which
@@ -292,15 +312,23 @@ class InsSpawner:
         print("PATH: {0}".format( os.environ['PATH'] ) )
 
         # Find available MAC
-        mac = None
-        for m in macs.iterkeys():
-            if macs[m]['in_use']:
-                continue
-            macs[m]['in_use'] = True
-            mac = m
-            break
-            if not mac:
-                raise RuntimeError( "No more MACs are available" )
+        mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
+        #mac = random.sample( filter( lambda k,v: v['in_use'], macs.items() ) )
+        if not mac:
+            raise RuntimeError( "No more MACs are available" )
+        mac = mac[0]
+        macs[ mac ]['in_use'] = True
+
+        #mac = None
+        #for m in macs.iterkeys():
+        #    if macs[m]['in_use']:
+        #        continue
+        #    macs[m]['in_use'] = True
+        #    mac = m
+        #    break
+        #    if not mac:
+
+        self._mac = mac
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
@@ -313,16 +341,41 @@ class InsSpawner:
 
         p = subprocess.Popen( cmd.split(),
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+        #(stdout, stderr ) = p.communicate()
+
+        #rc = p.wait()
+        t = 0
+        while True:
+            rc = p.poll()
+            if exit_requested:
+                break
+            if rc is None:
+                time.sleep( POLL_INTERVAL )
+                t += POLL_INTERVAL
+            elif t >= DEFAULT_TIMEOUT:
+                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
+            break
+
+        if p.returncode:
+            raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
+
+        self._domid = int( p.stdout.read().split(':')[1] )
+
+    def __del__( self ):
+        """ Destroy the INS associated with this object. """
+        p = subprocess.Popen( ["xl", "destroy", "{0}".format(self._domid) ],
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
         (stdout, stderr ) = p.communicate()
         rc = p.wait()
         if rc:
             raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
 
-        self._domid = int( stdout.split(':')[1] )
+        macs[ self._mac ][ 'in_use' ] = True
 
     def wait( self ):
         """ Waits until the INS is ready to use """
-        
+
+        t = 0.0
         # The watcher must have populated the INS's IP
         while True:
             if ( self._domid in ins_map and
@@ -330,7 +383,10 @@ class InsSpawner:
                 print( "INS {0} is ready with IP {1}".
                        format( self._domid, ins_map[ self._domid ].ip ) )
                 break
-            time.sleep( 0.02 )
+            time.sleep( POLL_INTERVAL )
+            t += POLL_INTERVAL
+            if t > DEFAULT_TIMEOUT:
+                raise RuntimeError( "wait() is taking too long" )
 
     def get_domid( self ):
         return self._domid
@@ -348,123 +404,136 @@ class UDSHTTP(httplib.HTTPConnection):
 
 class UDSTransport(xmlrpclib.Transport):
     def __init__(self, use_datetime=0):
-        self._use_datetime = use_datetime
-        self._extra_headers=[]
-        self._connection = (None, None)
+         self._use_datetime = use_datetime
+         self._extra_headers=[]
+         self._connection = (None, None)
     def add_extra_header(self, key, value):
-        self._extra_headers += [ (key,value) ]
+         self._extra_headers += [ (key,value) ]
     def make_connection(self, host):
-        # Python 2.4 compatibility
-        if sys.version_info[0] <= 2 and sys.version_info[1] < 7:
-            return UDSHTTP(host)
-        else:
-            return UDSHTTPConnection(host)
+         # Python 2.4 compatibility
+         if sys.version_info[0] <= 2 and sys.version_info[1] < 7:
+             return UDSHTTP(host)
+         else:
+             return UDSHTTPConnection(host)
     def send_request(self, connection, handler, request_body):
-        connection.putrequest("POST", handler)
-        for key, value in self._extra_headers:
-            connection.putheader(key, value)
+         connection.putrequest("POST", handler)
+         for key, value in self._extra_headers:
+             connection.putheader(key, value)
 
 class XenIface:
-    def __init__( self ):
-        # Xen 4.4 style connection
-        x = XenAPI.Session( 'http://localhost:9225' )
+     def __init__( self ):
+         # Xen 4.4 style connection
+         x = XenAPI.Session( 'http://localhost:{0}'.format( XEND_PORT ) )
 
-        # 4.4, but emulate xapi_local()
-        #x = XenAPI.Session( "http://_var_run_xenstored_socket", transport=UDSTransport() )
-    
-        # More recent Xen connection
-        #x = XenAPI.xapi_local() # method does not exist
+         # 4.4, but emulate xapi_local()
+         #x = XenAPI.Session( "http://_var_run_xenstored_socket", transport=UDSTransport() )
 
-        x.xenapi.login_with_password("root", "")
+         # More recent Xen connection
+         #x = XenAPI.xapi_local() # method does not exist
 
-        self._conn = x
+         x.xenapi.login_with_password("root", "")
 
-    def __del__( self ):
-        self._conn.logout()
+         self._conn = x
 
-    def get_conn( self ):
-        return self._conn
+     def __del__( self ):
+         self._conn.logout()
 
-    def get_all_vms( self ):
-        return self._conn.xenapi.VM.get_all_records()
+     def get_conn( self ):
+         return self._conn
 
-    def get_vif( self, domid ):
-        """ Returns VIF info on the given domain. """
+     def get_all_vms( self ):
+         return self._conn.xenapi.VM.get_all_records()
 
-        # These XenAPI methods are present but do not work on Ubuntu
-        # 14.04 / Xen 4.4. The info we're getting from them seems to
-        # match that under /var/lib/xend/state. Using them *is*
-        # preferred over the hackish way we do things now -- too bad
-        # they're broken.
-        #
-        # conn.xenapi.tunnel.get_all()
-        # conn.xenapi.VIF.get_all_records()
-        # conn.xenapi.network.get_all()
-        # conn.xenapi.PIF.get_all_records()
-        #
-        # This info is also available through XenStore, but pyxs is
-        # broken. This code prints "Path: /local/domain/3/device/vif/0 =>"
-        #
-        # p = b"/local/domain/0"
-        # with pyxs.Client() as c:
-        #    print( "Path: {0} => {1}".format(p, c[p]) )
+     def get_vif( self, domid ):
+         """ Returns VIF info on the given domain. """
 
-        p = subprocess.Popen( [ 'xl', 'network-list', "{0:d}".format( domid ) ],
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+         # These XenAPI methods are present but do not work on Ubuntu
+         # 14.04 / Xen 4.4. The info we're getting from them seems to
+         # match that under /var/lib/xend/state. Using them *is*
+         # preferred over the hackish way we do things now -- too bad
+         # they're broken.
+         #
+         # conn.xenapi.tunnel.get_all()
+         # conn.xenapi.VIF.get_all_records()
+         # conn.xenapi.network.get_all()
+         # conn.xenapi.PIF.get_all_records()
+         #
+         # This info is also available through XenStore, but pyxs is
+         # broken. This code prints "Path: /local/domain/3/device/vif/0 =>"
+         #
+         # p = b"/local/domain/0"
+         # with pyxs.Client() as c:
+         #    print( "Path: {0} => {1}".format(p, c[p]) )
 
-        (stdout, stderr ) = p.communicate()
+         p = subprocess.Popen( [ 'xl', 'network-list', "{0:d}".format( domid ) ],
+                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
 
-        rc = p.wait()
-        if rc:
-            raise RuntimeError( "Call to xl failed: {0}".format( stderr ) )
+         (stdout, stderr ) = p.communicate()
 
-        # Example stdout
-        # Idx BE Mac Addr.         handle state evt-ch   tx-/rx-ring-ref BE-path
-        # 0   0  00:00:00:00:00:00 0      4     -1       768/769         /local/domain/0/backend/vif/3/0
+         rc = p.wait()
+         if rc:
+             raise RuntimeError( "Call to xl failed: {0}".format( stderr ) )
 
-        # Extract the info we want, put in dict
-        lines = stdout.splitlines()
-        assert len(lines) == 2, "Unexpected line count"
+         # Example stdout
+         # Idx BE Mac Addr.         handle state evt-ch   tx-/rx-ring-ref BE-path
+         # 0   0  00:00:00:00:00:00 0      4     -1       768/769         /local/domain/0/backend/vif/3/0
 
-        info = lines[1].split()
-        bepath = info[7]   # /local/domain/0/backend/vif/3/0
-        iface = '.'.join( bepath.split('/')[-3:] ) # vif.3.0
+         # Extract the info we want, put in dict
+         lines = stdout.splitlines()
+         assert len(lines) == 2, "Unexpected line count"
 
-        return dict( idx    = info[0],
-                     mac    = info[2],
-                     state  = info[4],
-                     bepath = bepath,
-                     iface  = iface )
+         info = lines[1].split()
+         bepath = info[7]   # /local/domain/0/backend/vif/3/0
+         iface = '.'.join( bepath.split('/')[-3:] ) # vif.3.0
+
+         return dict( idx    = info[0],
+                      mac    = info[2],
+                      state  = info[4],
+                      bepath = bepath,
+                      iface  = iface )
 
 def print_dict(desc, mydict):
-    print( desc )
-    for (k,v) in mydict.iteritems():
-        print( k )
-        print( v )
-    print( '----------' )
+     print( desc )
+     for (k,v) in mydict.iteritems():
+         print( k )
+         print( v )
+     print( '----------' )
 
 def test_redir():
-    r = PortForwarder( 4567, '10.30.30.50' )
-    #r.dump()
+     r = PortForwarder( 4567, '10.30.30.50' )
+     #r.dump()
 
-    while True:
-        if exit_requested:
-            return
-        time.sleep(0.1)
+     while True:
+         if exit_requested:
+             return
+         time.sleep( POLL_INTERVAL )
 
 def test_xen_stuff():
+     x = XenIface()
+     e = XenStoreEventHandler( x )
+     w = XenStoreWatch( e )
+     w.start()
+
+     s = Ins( w )
+     s.wait()     # Wait for INS IP address to appear
+
+     while w.is_alive():
+         w.join( POLL_INTERVAL )
+
+     # XXXX: destroy the INSs ? Dev will be easier
+
+def single_ins():
     x = XenIface()
     e = XenStoreEventHandler( x )
     w = XenStoreWatch( e )
     w.start()
-
-    s = InsSpawner( w )
-    s.wait()     # Wait for INS IP address to appear
-
-    r = PortForwarder( 80, ins_map[ s.get_domid() ].ip )
+    
+    s = Ins( w )
+    s.wait() # Wait for INS IP address to appear
 
     while w.is_alive():
-        w.join(0.1)
+        w.join( POLL_INTERVAL )
+
 
 
 if __name__ == '__main__':
@@ -474,24 +543,6 @@ if __name__ == '__main__':
     signal.signal(signal.SIGABRT, handler)
     signal.signal(signal.SIGQUIT, handler)
 
-    #test_redir()
-    test_xen_stuff()
-
+    single_ins()
 
     print( "Exiting main thread" )
-
-    '''
-    while True:
-        vms = x.get_all_vms()
-    
-        for (k,v) in vms.iteritems():
-            # Skip Dom0
-            domid = int(v['domid'])
-            if domid == 0:
-                continue
-
-            net = x.get_vif( domid )
-            #print "{0:d} {1:s} {2}".format( domid, v['name_description'], net['iface'] )
-
-        time.sleep( 2 )
-    '''
