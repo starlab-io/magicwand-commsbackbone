@@ -53,14 +53,10 @@ import socket
 import thread
 import threading
 import iptc # iptables bindings
-
-# Pull in the Xen API - find a better way to do this...
-sys.path.append( '/usr/lib/xen-4.4/lib/python' )
-import xen
-import xen.xm.XenAPI as XenAPI
-
 import pyxs
 
+# Broken on Ubuntu 14.04
+# import xen.xm.XenAPI as XenAPI
 
 # See http://libvirt.org/docs/libvirt-appdev-guide-python
 #import libvirt # system-installed build doesn't support new XenAPI
@@ -240,10 +236,10 @@ class XenStoreEventHandler:
 
             # Rebuild the forwarding rules: get rid of old ones and re-create
             self._forwarders = list() # releases references to the old rules
-            print( "Redirections now:\n--------------------------" )
+            print( "Redirections:\n------------------" )
             for p in ports:
                 f = PortForwarder( p, ip )
-                print( "\t{0}".format( f ) )
+                print( "    {0}".format( f ) )
                 self._forwarders.append( f )
         else:
             #print( "Ignoring {0} => {1}".format( path, newval ) )
@@ -422,27 +418,10 @@ class UDSTransport(xmlrpclib.Transport):
 
 class XenIface:
      def __init__( self ):
-         # Xen 4.4 style connection
-         x = XenAPI.Session( 'http://localhost:{0}'.format( XEND_PORT ) )
-
-         # 4.4, but emulate xapi_local()
-         #x = XenAPI.Session( "http://_var_run_xenstored_socket", transport=UDSTransport() )
-
-         # More recent Xen connection
-         #x = XenAPI.xapi_local() # method does not exist
-
-         x.xenapi.login_with_password("root", "")
-
-         self._conn = x
-
-     def __del__( self ):
-         self._conn.logout()
-
-     def get_conn( self ):
-         return self._conn
-
-     def get_all_vms( self ):
-         return self._conn.xenapi.VM.get_all_records()
+         """
+         The Xen python bindings are very broken on Ubuntu 14.04, so we
+         just call out tothe xl program.
+         """
 
      def get_vif( self, domid ):
          """ Returns VIF info on the given domain. """
@@ -507,20 +486,6 @@ def test_redir():
          if exit_requested:
              return
          time.sleep( POLL_INTERVAL )
-
-def test_xen_stuff():
-     x = XenIface()
-     e = XenStoreEventHandler( x )
-     w = XenStoreWatch( e )
-     w.start()
-
-     s = Ins( w )
-     s.wait()     # Wait for INS IP address to appear
-
-     while w.is_alive():
-         w.join( POLL_INTERVAL )
-
-     # XXXX: destroy the INSs ? Dev will be easier
 
 def single_ins():
     x = XenIface()
