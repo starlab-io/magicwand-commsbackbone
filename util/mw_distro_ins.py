@@ -211,23 +211,24 @@ class XenStoreEventHandler:
         # ['', 'mw', '77', 'network_stats']
         #print( "Observing {0} => {1}".format( path, s_newval ) )
 
-        if path.startswith( "/mw" ):
-            try:
-                domid = int( path.split('/')[2] )
-            except:
-                # We can't do anything without the domid
-                return
+        # We should only see the MW root
+        assert path.startswith( MW_XENSTORE_ROOT ), "Unexpected path {0}".format(path)
+
+        try:
+            domid = int( path.split('/')[2] )
+        except:
+            # We can't do anything without the domid
+            return
 
         if 'ins_dom_id' in path:
             assert domid == int(newval)
-            i = INS( domid )
-            ins_map[ domid ] = i
+            ins_map[ domid ] = INS( domid )
         elif 'ip_addrs' in path:
             ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
             ins_map[ domid ].ip = ips[0]
         elif 'network_stats' in path:
-            ins_map[ domid ].stats = newval.split(':')
+            ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
         elif 'heartbeat' in path:
             ins_map[ domid ].last_contact = time.time()
         elif 'listening_ports' in path:
@@ -255,6 +256,10 @@ class XenStoreWatch( threading.Thread ):
         pass
 
     def run( self ):
+        """
+        Run the thread. Can block forever and ignore signals in some cases.
+        See Other notes at top of file.
+        """
         with pyxs.Client() as c:
             m = c.monitor()
             m.watch( MW_XENSTORE_ROOT, b"MW INS watcher" )
@@ -359,6 +364,8 @@ class Ins:
 
     def __del__( self ):
         """ Destroy the INS associated with this object. """
+
+        print( "Destroying INS {0}".format( self._domid ) )
         p = subprocess.Popen( ["xl", "destroy", "{0}".format(self._domid) ],
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
         (stdout, stderr ) = p.communicate()
