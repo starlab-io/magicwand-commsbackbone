@@ -55,9 +55,11 @@
 #include "xenevent_comms.h"
 
 #include "xenevent_minios.h"
+#include "xenevent_netbsd.h"
+
 #include "message_types.h"
 #include "xen_keystore_defs.h"
-#include "xenevent_netbsd.h"
+#include "ins-ioctls.h"
 
 // The RING macros use memset
 #define memset bmk_memset
@@ -282,8 +284,8 @@ ErrorExit:
 
 
 int
-xe_comms_read_int_from_key( IN const char *Path,
-                            OUT int * OutVal)
+xe_comms_read_int_from_key( IN const char * Path,
+                            OUT int       * OutVal )
 {
     char                *val = NULL;
     int                  res = 0;
@@ -663,6 +665,45 @@ ErrorExit:
 }
 
 int
+xe_comms_get_sock_params( OUT char * SockParams )
+{
+    int rc = 0;
+    static bool init = false;
+    static char sock_path[XENEVENT_PATH_STR_LEN] = {0};
+    char * params = NULL;
+
+    if ( !init )
+    {
+        // Just create these the first time
+        init = true;
+        bmk_snprintf( sock_path, sizeof( sock_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_SOCKET_PARAMS_KEY );
+    }
+
+    memset( SockParams, 0, INS_SOCK_PARAMS_MAX_LEN );
+
+    rc = xe_comms_read_str_from_key( sock_path, &params );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    bmk_strncpy( SockParams, params, INS_SOCK_PARAMS_MAX_LEN-1 );
+
+ErrorExit:
+    if ( params )
+    {
+        bmk_memfree( params, BMK_MEMWHO_WIREDBMK );
+    }
+    return rc;
+}
+
+
+
+int
 xe_comms_heartbeat( const char * NetworkStats )
 {
     static int heartbeat = 0;
@@ -763,7 +804,6 @@ int
 xe_comms_init( void )
 {
     int rc = 0;
-//    bmk_memset( &g_state, 0, sizeof(g_state) );
 
     rc = xenevent_semaphore_init( &g_state.messages_available );
     if ( 0 != rc )

@@ -36,6 +36,8 @@
 #include <poll.h>
 #include <fcntl.h>
 
+#include <sys/ioctl.h>
+
 #include "user_common.h"
 #include "xenevent_app_common.h"
 #include "networking.h"
@@ -43,6 +45,7 @@
 #include "threadpool.h"
 #include "translate.h"
 #include "mwerrno.h"
+#include "ins-ioctls.h"
 
 #include "pollset.h"
 
@@ -78,6 +81,57 @@ xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
 }
 
 
+static int
+xe_net_init_socket( IN int SockFd )
+{
+    int rc = 0;
+    socklen_t len = 0;
+
+    if ( g_state.so_sndbuf )
+    {
+        len = sizeof( g_state.so_sndbuf );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF, &g_state.so_sndbuf, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_rcvbuf )
+    {
+        len = sizeof( g_state.so_rcvbuf );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF, &g_state.so_rcvbuf, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_sndtimeo.tv_sec || g_state.so_sndtimeo.tv_usec )
+    {
+        len = sizeof( g_state.so_sndtimeo );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO, &g_state.so_sndtimeo, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_rcvtimeo.tv_sec || g_state.so_rcvtimeo.tv_usec )
+    {
+        len = sizeof( g_state.so_rcvtimeo );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO, &g_state.so_rcvtimeo, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+
+ErrorExit:
+    return rc;
+}
+
 
 void
 xe_net_set_base_response( IN mt_request_generic_t   * Request,
@@ -104,7 +158,9 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     int native_fam  = xe_net_get_native_protocol_family( Request->sock_fam );
     int native_type = xe_net_get_native_sock_type( Request->sock_type );
     int native_proto = Request->sock_protocol;
-    
+
+    int rc = 0;
+
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -133,9 +189,15 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                               MT_RESPONSE_SOCKET_CREATE_SIZE,
                               (mt_response_generic_t *)Response );
 
+    // Init from global config
+    rc = xe_net_init_socket( sockfd );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
     // Set up BufferItem->assigned_thread for future reference during
     // this session
-
     Response->base.sockfd        = extsock;
     WorkerThread->public_fd      = extsock;
     WorkerThread->local_fd       = sockfd;
@@ -147,7 +209,8 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->public_fd, sockfd );
-    return 0;
+ErrorExit:
+    return rc;
 }
 
 
@@ -418,7 +481,14 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                 goto ErrorExit; // internal error
             }
         }
-        
+
+        // Init from global config
+        rc = xe_net_init_socket( sockfd );
+        if ( rc )
+        {
+            goto ErrorExit;
+        }
+
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
 
@@ -824,3 +894,93 @@ ErrorExit:
     return rc;
 }
 
+
+int
+xe_net_init( void )
+{
+    int rc = 0;
+    char params[ INS_SOCK_PARAMS_MAX_LEN ] = {0};
+    int tries = 0;
+    
+    // XXXX: wait and try again, or just fail?
+    do
+    {
+        struct timespec ts = {0, 10000}; // 0 seconds, N nanoseconds
+
+        rc = ioctl( g_state.input_fd, INS_GET_SOCK_PARAMS_IOCTL, params );
+        if ( 0 == rc ) { break; }
+
+        (void) nanosleep( &ts, &ts );
+    } while ( tries++ < 3 );
+    
+    if ( 0 != rc )
+    {
+        MYASSERT( !"Failed to get socket parameters" );
+        rc = 0; // not fatal
+        goto ErrorExit;
+    }
+
+    
+    char * pparams = params;
+    char * toptok_sav = NULL;
+    while( true )
+    {
+        // Split apart by spaces
+        char * toptok = strtok_r( pparams, " ", &toptok_sav );
+        if ( NULL == toptok ) { break; }
+
+        char * name = NULL;
+        int    nameval = 0;
+        float  val     = 0;
+
+        char * lowtok = NULL;
+        // Copy of the top token that we'll destroy
+        char param[ INS_SOCK_PARAMS_MAX_LEN ];
+        char * pparam = param;
+
+        // Further calls to strtok should use NULL
+        pparams = NULL;
+
+        strncpy( param, toptok, sizeof(param) );
+        for ( int i = 0; i < 3; ++i )
+        {
+            //char * next = NULL;
+            char * lowtok = strsep( &pparam, ":" );
+            if ( NULL == lowtok ) { break; }
+
+            if      ( 0 == i ) { name = lowtok;                    }
+            else if ( 1 == i ) { nameval = strtod( lowtok, NULL ); }
+            else if ( 2 == i ) { val = strtof( lowtok, NULL );     }
+        }
+        
+        // seconds => microseconds: x1000000
+        switch( nameval )
+        {
+        case SO_SNDBUF:
+            MYASSERT( val );
+            g_state.so_sndbuf = val;
+            break;
+        case SO_RCVBUF:
+            MYASSERT( val );
+            g_state.so_rcvbuf = val;
+            break;
+        case SO_SNDTIMEO:
+            MYASSERT( val );
+            g_state.so_sndtimeo.tv_sec  = (int) val;
+            g_state.so_sndtimeo.tv_usec = (val - (int) val) * 1000000;
+            break;
+        case SO_RCVTIMEO:
+            MYASSERT( val );
+            g_state.so_rcvtimeo.tv_sec  = (int) val;
+            g_state.so_rcvtimeo.tv_usec = (val - (int) val) * 1000000;
+            break;
+        default:
+            MYASSERT( !"Invalid socket parameter" );
+            rc = EINVAL;
+            goto ErrorExit;
+        }
+    }
+
+ErrorExit:
+    return rc;
+}

@@ -1182,7 +1182,12 @@ init_state( void )
         goto ErrorExit;
     }
 
-    // XXXX: use IOCTL to get domid
+    rc = xe_net_init();
+    if ( 0 != rc )
+    {
+        goto ErrorExit;
+    }
+
     rc = ioctl( g_state.input_fd, INS_DOMID_IOCTL, &g_state.client_id );
     if ( 0 != rc )
     {
@@ -1208,10 +1213,6 @@ init_state( void )
         }
     }
 
-
-
-#define runthread    
-#ifdef runthread
     //
     // Start up heartbeat thread
     //
@@ -1224,8 +1225,6 @@ init_state( void )
         MYASSERT( !"Heartbeat thread" );
         goto ErrorExit;
     }
-
-#endif
 
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );

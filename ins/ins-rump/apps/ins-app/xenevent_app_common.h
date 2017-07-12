@@ -49,8 +49,12 @@ typedef struct _xenevent_globals
 
     bool       pending_port_change;
 
-    // Maintain list here for (1) debugging
-//    char       listening_ports[ INS_LISTENING_PORTS_MAX_LEN ];
+    // Socket parameters: applied to all new sockets. Matches list in
+    // mw_distro.py. 0 means unset.
+    int so_sndbuf;
+    int so_rcvbuf;
+    struct timeval so_sndtimeo;
+    struct timeval so_rcvtimeo;
     
     struct timeval elapsed;
 

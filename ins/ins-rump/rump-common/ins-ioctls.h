@@ -11,10 +11,15 @@
 #define INS_NETWORK_STATS_MAX_LEN 64
 #define INS_LISTENING_PORTS_MAX_LEN INS_NETWORK_STATS_MAX_LEN 
 
+#define INS_SOCK_PARAMS_MAX_LEN 128
+
+#define INS_GET_SOCK_PARAMS_IOCTL                               \
+    _IOWR( 'i', 71, const char[INS_SOCK_PARAMS_MAX_LEN] )
+
 #define INS_HEARTBEAT_IOCTL                                     \
     _IOW( 'i', 72, const char[INS_NETWORK_STATS_MAX_LEN] )
 
-#define INS_PUBLISH_LISTENERS_IOCTL                     \
+#define INS_PUBLISH_LISTENERS_IOCTL                             \
     _IOW( 'i', 73, const char[INS_NETWORK_STATS_MAX_LEN] )
 
 // User must define domid_t

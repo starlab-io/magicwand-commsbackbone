@@ -34,6 +34,7 @@
 
 #include <rump-sys/kern.h>
 #include <rump-sys/vfs.h>
+#include <sys/time.h>
 
 #include "xenevent_common.h"
 #include "xenevent_device.h"
@@ -43,11 +44,7 @@
 #include "xenevent_minios.h"
 
 #include "xen_keystore_defs.h"
-
 #include "ioconf.h"
-
-#include <sys/time.h>
-
 #include "ins-ioctls.h"
 
 
@@ -266,6 +263,15 @@ xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
 
     switch ( Cmd )
     {
+
+    case INS_GET_SOCK_PARAMS_IOCTL:
+        rc = xe_comms_get_sock_params( (char *) Data );
+        if ( 0 != rc )
+        {
+            goto ErrorExit;
+        }
+        break;
+        
     case INS_HEARTBEAT_IOCTL:
         rc = xe_comms_heartbeat( (const char *) Data );
         if ( 0 != rc )

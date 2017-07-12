@@ -64,6 +64,8 @@
 #define INS_IP_ADDR_KEY              "ip_addrs"
 #define INS_HEARTBEAT_KEY            "heartbeat"
 
+#define INS_SOCKET_PARAMS_KEY        "sockopts"
+
 // Format of value: "socket_ct:bytes_recv:bytes_sent". All numbers are
 // base 16. See also ins-ioctls.h.
 #define INS_NETWORK_STATS_KEY        "network_stats"

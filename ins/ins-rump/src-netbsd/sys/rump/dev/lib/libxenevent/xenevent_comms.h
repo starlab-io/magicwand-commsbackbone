@@ -60,6 +60,9 @@ xe_comms_write_item( void * Memory,
                      size_t * BytesRead );
 
 int
+xe_comms_get_sock_params( OUT char * SockParams );
+
+int
 xe_comms_get_domid( void );
 
 int

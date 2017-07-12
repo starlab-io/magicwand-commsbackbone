@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 
 ##
-## Front-end glue for MagicWant that spawns Rump INSs and routes
+## Front-end glue for MagicWand that spawns Rump INSs and routes
 ## incoming connections to a specific instance based on runtime
 ## variables.
 ##
@@ -31,14 +31,15 @@
 ##   https://bugs.python.org/issue8844 and the pyxs source (client.py)
 ##   for details.
 ##
+##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We 
+##   interface with Xen by calling out to xl.
+##
 
-XEND_PORT = 9225 # the port configured for xend's xen-api-server value
 MW_XENSTORE_ROOT = b"/mw"
 
 INS_MEMORY_MB = 256
 POLL_INTERVAL = 0.01
 DEFAULT_TIMEOUT = 2
-
 
 import sys
 import os
@@ -60,6 +61,61 @@ import pyxs
 
 # See http://libvirt.org/docs/libvirt-appdev-guide-python
 #import libvirt # system-installed build doesn't support new XenAPI
+
+
+##
+## Constants for RUMP/NetBSD socket and TCP options that we may need
+## 
+
+
+"""
+include/sys/socket.h
+
+/*
+ * Additional options, not kept in so_options.
+ */
+#define SO_SNDBUF	0x1001		/* send buffer size */
+#define SO_RCVBUF	0x1002		/* receive buffer size */
+#define SO_SNDLOWAT	0x1003		/* send low-water mark */
+#define SO_RCVLOWAT	0x1004		/* receive low-water mark */
+/* SO_OSNDTIMEO		0x1005 */
+/* SO_ORCVTIMEO		0x1006 */
+#define	SO_ERROR	0x1007		/* get error status and clear */
+#define	SO_TYPE		0x1008		/* get socket type */
+#define	SO_OVERFLOWED	0x1009		/* datagrams: return packets dropped */
+
+#define	SO_NOHEADER	0x100a		/* user supplies no header to kernel;
+					 * kernel removes header and supplies
+					 * payload
+					 */
+#define SO_SNDTIMEO	0x100b		/* send timeout */
+#define SO_RCVTIMEO	0x100c		/* receive timeout */
+
+"""
+
+# Tuple: ( ASCII name, numeric value, type, valid range )
+# type: boolean or integer
+
+sock_opts = [
+    ( "SO_SNDBUF", 0x1001, int, (0x50, 0x4000) ),
+    ( "SO_RCVBUF", 0x1002, int, (0x50, 0x4000) ),
+
+    ( "SO_SNDTIMEO", 0x100b, float, (1, 5) ),
+    ( "SO_RCVTIMEO", 0x100b, float, (1, 5)  ),
+]
+
+
+def generate_net_opts():
+    """ Randomly picks network options, returns them in string. """
+    params = list()
+    for (name, numname, t, r ) in sock_opts:
+        if int == t:
+            val = random.randint( r[0], r[1] )
+            params.append( "{0}:{1}:{2}".format( name, numname, val ) )
+        elif float == t:
+            val = random.uniform( r[0], r[1] )
+            params.append( "{0}:{1}:{2:0.03f}".format( name, numname, val ) )
+    return " ".join( params )
 
 
 # Generic storage for INS
@@ -200,12 +256,11 @@ class PortForwarder:
 
 
 class XenStoreEventHandler:
-    def __init__( self, conn ):
-        self._conn = conn
-        #self._forwarder = forwarder
+    def __init__( self, xiface):
+        self._xiface = xiface
         self._forwarders = list()
 
-    def event( self, path, newval ):
+    def event( self, client, path, newval ):
         # example path:
         # s.split('/')
         # ['', 'mw', '77', 'network_stats']
@@ -227,6 +282,7 @@ class XenStoreEventHandler:
             ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
             ins_map[ domid ].ip = ips[0]
+            client[ b"/mw/{0}/sockopts".format(domid) ] = generate_net_opts()
         elif 'network_stats' in path:
             ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
         elif 'heartbeat' in path:
@@ -277,7 +333,7 @@ class XenStoreWatch( threading.Thread ):
                 if c.exists( path ):
                     value = c[path]
 
-                self._handler.event( path, value )
+                self._handler.event( c, path, value )
 
 
 class Ins:
@@ -333,7 +389,7 @@ class Ins:
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
-        cmd += '-N mw-ins-rump-{0:x} '.format( inst_num )
+        cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
         cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
 
         inst_num += 1
@@ -510,10 +566,10 @@ def single_ins():
 
 if __name__ == '__main__':
     print( "Running in PID {0}".format( os.getpid() ) )
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGTERM, handler)
-    signal.signal(signal.SIGABRT, handler)
-    signal.signal(signal.SIGQUIT, handler)
+    signal.signal( signal.SIGINT,  handler )
+    signal.signal( signal.SIGTERM, handler )
+    signal.signal( signal.SIGABRT, handler )
+    signal.signal( signal.SIGQUIT, handler )
 
     single_ins()
 
