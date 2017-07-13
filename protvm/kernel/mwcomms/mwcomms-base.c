@@ -5,7 +5,7 @@
 ***************************************************************************/
 
 /**
- * @file    mwcomms-xen-init.c
+ * @file    mwcomms-base.c
  * @author  Mark Mason, Matt Leinhos
  * @date    2 March 2017
  * @version 0.2
@@ -189,7 +189,8 @@
  * Globals scoped to this C module - put in struct for flexibility
  *****************************************************************************/
 
-typedef struct _mwcomms_base_globals {
+typedef struct _mwcomms_base_globals
+{
     int             dev_major_num;
     struct class  * dev_class;
     struct device * dev_device;

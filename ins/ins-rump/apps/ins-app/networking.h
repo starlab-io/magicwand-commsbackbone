@@ -76,4 +76,8 @@ xe_net_get_name( IN mt_request_socket_getname_t  * Request,
                  IN thread_item_t                * WorkerThread );
 
 
+int
+xe_net_init( void );
+
+
 #endif // xenevent_app_networking_h

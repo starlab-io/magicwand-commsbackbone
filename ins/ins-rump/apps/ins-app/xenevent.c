@@ -89,7 +89,7 @@
 
 #include "mwerrno.h"
 
-#include "ins-ioctls.h"
+#include "ins-ioctls.h" // needs xenevent_app_common.h for domid_t
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
@@ -99,15 +99,6 @@
 
 // Global data
 xenevent_globals_t g_state;
-
-// XXXX: put this in globals and share globals; add IOCTL to driver to get domid.
-
-// What's my domid? Needed by networking.c
-domid_t   client_id;
-
-pthread_t heartbeat_thread;
-bool continue_heartbeat = true;
-struct timeval elapsed;
 
 #define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
     ( MtRequestSocketCreate == _mytype ||         \
@@ -581,8 +572,8 @@ release_worker_thread( thread_item_t * ThreadItem )
     ThreadItem->state_flags = 0;
     ThreadItem->sock_domain = 0;
     ThreadItem->sock_type   = 0;
-    ThreadItem->sock_protocol = 0;
-    ThreadItem->port_num    = 0;
+    ThreadItem->sock_protocol  = 0;
+    ThreadItem->bound_port_num = 0;
 
     bzero( &ThreadItem->remote_host, sizeof(ThreadItem->remote_host) );
     
@@ -640,6 +631,53 @@ send_dispatch_error_response( mt_request_generic_t * Request )
 
 
 /**
+ * @brief Computes string describing ports that are in LISTEN
+ * state. If there has been a change, then updates that string in
+ * XenStore via an IOCTL.
+ */
+static int
+update_listening_ports( void )
+{
+    int rc = 0;
+    char listening_ports[ INS_LISTENING_PORTS_MAX_LEN ];
+
+    if ( !g_state.pending_port_change ) { goto ErrorExit; }
+    
+    DEBUG_PRINT( "Scanning for change in set of listening ports\n" );
+    g_state.pending_port_change = false;
+    listening_ports[0] = '\0';
+
+    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {
+        thread_item_t * curr = &g_state.worker_threads[i];
+
+        if ( !curr->in_use ) { continue; }
+
+        // Only add the port if it is nonzero
+        if ( 0 != curr->bound_port_num )
+        {
+            char port[5];
+            snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
+            strncat( listening_ports, port, sizeof(listening_ports) );
+        }
+    }
+
+    DEBUG_PRINT( "Listening ports: %s\n", listening_ports );
+    rc = ioctl( g_state.input_fd,
+                INS_PUBLISH_LISTENERS_IOCTL,
+                (const char *)listening_ports );
+    if ( rc )
+    {
+        MYASSERT( !"ioctl" );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+
+/**
  * @brief Perform internal steps required after a buffer item has been
  * processed.
  */
@@ -675,7 +713,7 @@ post_process_response( mt_request_generic_t  * Request,
         {
             // A thread was available - record the assignment now
             accept_thread->public_fd =
-                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+                MW_SOCKET_CREATE( g_state.client_id, accept_thread->idx );
             accept_thread->local_fd = Response->base.status;
 
             // Mask the native FD with the exported one
@@ -683,6 +721,8 @@ post_process_response( mt_request_generic_t  * Request,
             Response->base.sockfd = accept_thread->public_fd;
         }
     }
+
+    rc = update_listening_ports();
 
     return rc;
 }
@@ -1060,11 +1100,17 @@ worker_thread_func( void * Arg )
 void *
 heartbeat_thread_func( void* Args )
 {
-    while( continue_heartbeat )
+    while ( g_state.continue_heartbeat )
     {
+        char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
-        ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
-        sleep(1);
+        (void) snprintf( stats, sizeof(stats), "%lx:%llx:%llx",
+                         (unsigned long) g_state.network_stats_socket_ct,
+                         (unsigned long long) g_state.network_stats_bytes_recv,
+                         (unsigned long long) g_state.network_stats_bytes_sent );
+
+        ioctl( g_state.input_fd, INS_HEARTBEAT_IOCTL, (const char *)stats );
+        sleep( HEARTBEAT_INTERVAL_SEC );
     }
 
     pthread_exit( Args );
@@ -1077,6 +1123,8 @@ init_state( void )
     int rc = 0;
     
     bzero( &g_state, sizeof(g_state) );
+
+    g_state.continue_heartbeat = true;
 
     //
     // Init the buffer items
@@ -1134,18 +1182,20 @@ init_state( void )
         goto ErrorExit;
     }
 
+    rc = xe_net_init();
+    if ( 0 != rc )
+    {
+        goto ErrorExit;
+    }
 
-    client_id = 1;
-/*
-    // XXXX: use IOCTL to get domid
-    rc = ioctl( g_state.input_fd, DOMIDIOCTL, &client_id );
+    rc = ioctl( g_state.input_fd, INS_DOMID_IOCTL, &g_state.client_id );
     if ( 0 != rc )
     {
        MYASSERT( !"Getting dom id from ioctl failed");
        goto ErrorExit;
     }
-*/
-    DEBUG_PRINT( "INS got domid: %u from ioctl\n", client_id );
+
+    DEBUG_PRINT( "INS got domid: %u from ioctl\n", g_state.client_id );
     
     //
     // Start up the threads
@@ -1163,14 +1213,10 @@ init_state( void )
         }
     }
 
-
-
-#define runthread    
-#ifdef runthread
     //
     // Start up heartbeat thread
     //
-    rc = pthread_create( &heartbeat_thread,
+    rc = pthread_create( &g_state.heartbeat_thread,
                          NULL,
                          heartbeat_thread_func,
                          NULL );
@@ -1179,8 +1225,6 @@ init_state( void )
         MYASSERT( !"Heartbeat thread" );
         goto ErrorExit;
     }
-
-#endif
 
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
@@ -1215,8 +1259,8 @@ fini_state( void )
         sem_destroy( &curr->awaiting_work_sem );
     }
 
-    continue_heartbeat = false;
-    pthread_join( heartbeat_thread, NULL );
+    g_state.continue_heartbeat = false;
+    pthread_join( g_state.heartbeat_thread, NULL );
 
     if ( g_state.input_fd > 0 )
     {

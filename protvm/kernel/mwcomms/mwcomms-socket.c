@@ -319,7 +319,7 @@ typedef struct _mwsocket_instance
     struct list_head    list_all;
 
     // Latest ID of request that blocks this socket from closing
-    atomic64_t            close_blockid; // holds mt_id_t
+    atomic64_t          close_blockid; // holds mt_id_t
 
 } mwsocket_instance_t;
 
@@ -366,7 +366,9 @@ typedef struct _mwsocket_active_request
 } mwsocket_active_request_t;
 
 
-typedef struct _mwsocket_globals {
+typedef struct _mwsocket_globals
+{
+/*
     // Used to signal socket subsystem threads
     struct completion ring_ready;
     bool              is_ring_ready;
@@ -375,7 +377,7 @@ typedef struct _mwsocket_globals {
     mw_region_t       ring;
     struct mwevent_sring * sring;
     struct mwevent_front_ring front_ring;
-    
+ */   
     // Lock on ring access
     struct mutex request_lock;
 
@@ -524,6 +526,7 @@ mwsocket_wait( long TimeoutJiffies )
     set_current_state( TASK_INTERRUPTIBLE );
     schedule_timeout( TimeoutJiffies );
 }
+
 
 /******************************************************************************
  * Support for the MW socket pseudo "filesystem", needed for file

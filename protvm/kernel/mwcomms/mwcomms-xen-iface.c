@@ -13,7 +13,7 @@
  * The XenStore keys that are managed are defined in xen_keystore_defs.h. They are
  *
  * SERVER_ID_KEY
- * CLIENT_ID_KEY
+ * INS_ID_KEY
  * GNT_REF_KEY
  * VM_EVT_CHN_PORT_KEY
  * VM_EVT_CHN_BOUND_KEY
@@ -21,10 +21,10 @@
  * The sequence of events is:
  *
  * 1. Write the current domU's domid to SERVER_ID_KEY
- * 2. Wait for the client domU's domid to appear in CLIENT_ID_KEY
+ * 2. Wait for the client domU's domid to appear in INS_ID_KEY
  * 3. Create an unbound event channel and write its port to VM_EVT_CHN_PORT_KEY
  * 4. Allocate memory and offer the client grants to it (1/page)
- * 5. Reset the value in CLIENT_ID_KEY
+ * 5. Reset the value in INS_ID_KEY
  * 6. Watch for VM_EVT_CHN_BOUND_KEY to be populated by the client
  * 7. Write the grant refs to GNT_REF_KEY
  * 8. Invoke the callback given in mw_xen_init.
@@ -61,7 +61,17 @@
 #include "mwcomms-xen-iface.h"
 #include <xen_keystore_defs.h>
 
-typedef struct _mwcomms_xen_globals {
+
+// Per-INS data
+typedef struct _mwcomms_xen_ins
+{
+
+} mwcomms_xen_ins_t;
+
+
+
+typedef struct _mwcomms_xen_globals
+{
     domid_t  my_domid;
     domid_t  remote_domid;
 
@@ -357,7 +367,7 @@ mw_xen_send_event( void )
 }
 
 
-static int 
+static bool
 mw_xen_is_evt_chn_closed( void )
 {
    struct evtchn_status status;
@@ -366,14 +376,18 @@ mw_xen_is_evt_chn_closed( void )
    status.dom = DOMID_SELF;
    status.port = g_mwxen_state.common_evtchn;
 
-   rc = HYPERVISOR_event_channel_op(EVTCHNOP_status, &status); 
-   if (rc < 0)
-     return 1;
+   rc = HYPERVISOR_event_channel_op( EVTCHNOP_status, &status );
+   if ( rc < 0 )
+   {
+       return true;
+   }
 
-   if (status.status != EVTCHNSTAT_closed)
-      return 0;
+   if ( status.status != EVTCHNSTAT_closed )
+   {
+      return false;
+   }
 
-   return 1;
+   return true;
 }
 
 
@@ -550,17 +564,14 @@ mw_ins_dom_id_found( const char *Path )
 
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn();
-    if ( err ) goto ErrorExit;
+    if ( err ) { goto ErrorExit; }
    
     // Offer Grant to Client
     mw_xen_offer_grant( g_mwxen_state.remote_domid );
 
     // Write Grant Ref to key 
     err = mw_xen_write_grant_refs_to_key();
-    if ( err )
-    {
-        goto ErrorExit;
-    }
+    if ( err ) { goto ErrorExit; }
 
     //
     // Complete: the handshake is done
@@ -584,7 +595,7 @@ mw_xenstore_state_changed( struct xenbus_watch *W,
 {
     pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
-    if ( strstr( V[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
+    if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
     {
         mw_ins_dom_id_found( V[ XS_WATCH_PATH ] );
         goto ErrorExit;
@@ -659,8 +670,8 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-
-    //Create keystore path for pvm
+   
+    // Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
     if ( rc )
     {
