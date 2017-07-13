@@ -6,7 +6,8 @@
 ## variables.
 ##
 ## Package requirements:
-##   python-iptables (pip3 install --upgrade python-iptables)
+##   python-iptables: pip install --upgrade python-iptables
+##   pysx           : pip install --upgrade pyxs
 ##
 ## Environmental requirements:
 ##

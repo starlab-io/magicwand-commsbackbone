@@ -536,7 +536,7 @@ receive_grant_references( domid_t RemoteId )
                   GNT_REF_KEY ); 
               
     xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
-    while ( (err = xenbus_read(XBT_NIL, path, &msg)) != NULL
+    while ( (err = xenbus_read( XBT_NIL, path, &msg ) ) != NULL
             ||  msg[0] == '0')
     {
         bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
