@@ -929,11 +929,10 @@ xe_net_init( void )
         char * toptok = strtok_r( pparams, " ", &toptok_sav );
         if ( NULL == toptok ) { break; }
 
-        char * name = NULL;
+        //char * name = NULL;
         int    nameval = 0;
         float  val     = 0;
 
-        char * lowtok = NULL;
         // Copy of the top token that we'll destroy
         char param[ INS_SOCK_PARAMS_MAX_LEN ];
         char * pparam = param;
@@ -944,16 +943,15 @@ xe_net_init( void )
         strncpy( param, toptok, sizeof(param) );
         for ( int i = 0; i < 3; ++i )
         {
-            //char * next = NULL;
             char * lowtok = strsep( &pparam, ":" );
             if ( NULL == lowtok ) { break; }
 
-            if      ( 0 == i ) { name = lowtok;                    }
+            //if      ( 0 == i ) { name = lowtok;                    }
             else if ( 1 == i ) { nameval = strtod( lowtok, NULL ); }
             else if ( 2 == i ) { val = strtof( lowtok, NULL );     }
         }
         
-        // seconds => microseconds: x1000000
+        // seconds ==> microseconds: x1000000
         switch( nameval )
         {
         case SO_SNDBUF:
