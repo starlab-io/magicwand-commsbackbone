@@ -368,7 +368,6 @@ typedef struct _mwsocket_active_request
 
 typedef struct _mwsocket_globals
 {
-/*
     // Used to signal socket subsystem threads
     struct completion ring_ready;
     bool              is_ring_ready;
@@ -377,7 +376,7 @@ typedef struct _mwsocket_globals
     mw_region_t       ring;
     struct mwevent_sring * sring;
     struct mwevent_front_ring front_ring;
- */   
+
     // Lock on ring access
     struct mutex request_lock;
 

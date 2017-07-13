@@ -464,7 +464,8 @@ mw_xen_write_grant_refs_to_key( void )
     int rc = 0;
 
     // Must be large enough for one grant ref, in hex, plus '\0'
-    char one_ref[5];
+    // Make space for 12345678\0
+    char one_ref[ 8 + 1 ];
     
     // XXXX: If we make the shared memory region "really big", we may
     // have to get this memory via kmalloc()

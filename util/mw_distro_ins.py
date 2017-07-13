@@ -108,13 +108,20 @@ sock_opts = [
 
 def generate_net_opts():
     """ Randomly picks network options, returns them in string. """
+
+    ##
+    ## XXXX: Disabled for now. Values must be chosen carefully or they
+    ## break the connection, in particular from apache.
+    ##
     params = list()
     for (name, numname, t, r ) in sock_opts:
         if int == t:
-            val = random.randint( r[0], r[1] )
+            val = 0
+            #val = random.randint( r[0], r[1] )
             params.append( "{0}:{1}:{2}".format( name, numname, val ) )
         elif float == t:
-            val = random.uniform( r[0], r[1] )
+            val = 0
+            #val = random.uniform( r[0], r[1] )
             params.append( "{0}:{1}:{2:0.03f}".format( name, numname, val ) )
     return " ".join( params )
 
