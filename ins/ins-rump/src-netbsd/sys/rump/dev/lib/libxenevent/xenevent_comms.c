@@ -66,6 +66,8 @@
 
 #define INS_XENSTORE_DIR_FMT "%s/%d"
 
+#define INS_EVENT_CHANNEL_MEM_ORDER 0
+
 // Defines:
 // mwevent_sring_t
 // mwevent_front_ring_t
@@ -608,7 +610,7 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
     // Don't use minios_evtchn_bind_interdomain; spurious events are
     // delivered to us when we do.
     
-    g_state.event_channel_mem = bmk_pgalloc_one();
+    g_state.event_channel_mem = bmk_pgalloc( INS_EVENT_CHANNEL_MEM_ORDER );
     if (NULL == g_state.event_channel_mem)
     {
         MYASSERT( !"Failed to alloc Event Channel page" );
@@ -940,9 +942,9 @@ xe_comms_fini( void )
 
     xenevent_semaphore_destroy( &g_state.messages_available );
 
-    if (g_state.event_channel_mem)
+    if ( g_state.event_channel_mem )
     {
-        bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
+        bmk_pgfree( g_state.event_channel_mem, INS_EVENT_CHANNEL_MEM_ORDER );
     }
 
     gntmap_fini( &g_state.gntmap_map );
