@@ -107,7 +107,14 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 
+// MYDEBUG might not be defined, so don't rely on __debug_mutex
+#define FORCE_PRINT(...)                                                \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );
+
+
 #ifdef MYDEBUG
+
 #  define DEBUG_PRINT(...)                                              \
     pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
@@ -115,6 +122,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
     pthread_mutex_unlock( &__debug_mutex )
 
+//#  define DEBUG_PRINT FORCE_PRINT
 
 #else
 #  define DEBUG_PRINT(...) ((void)0)

@@ -628,7 +628,7 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
                                           xe_comms_event_callback,
                                           g_state.event_channel_mem,
                                           &g_state.local_event_port );
-    if (err)
+    if ( err )
     {
         MYASSERT(!"Could not bind to event channel\n");
         goto ErrorExit;

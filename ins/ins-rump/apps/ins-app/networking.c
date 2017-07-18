@@ -30,8 +30,10 @@
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
-//#include <sys/tcp.h>
 #include <netinet/tcp.h>
+
+#include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include <poll.h>
 #include <fcntl.h>
@@ -49,8 +51,41 @@
 
 #include "pollset.h"
 
+#define XE_NET_NETWORK_PARAM_WIDTH 30
+
 extern xenevent_globals_t g_state;
 
+
+#if MODIFY_NETWORK_PARAMETERS
+//
+// Describe the network configuration parameters that are accepted
+// over XenStore via an ioctl()
+//
+typedef struct _xe_net_param
+{
+    char * key;
+    char * path;
+    // Base of the value: 16 for hex value, 0 for string
+    int    base;
+} xe_net_param_t;
+
+static xe_net_param_t g_net_params[] =
+{
+    // See src-netbsd/sys/netinet/tcp_usrreq.c for some of the options
+    { "sendbuf_auto",   "net.inet.tcp.sendbuf_auto",    16 },
+    { "sendspace",      "net.inet.tcp.sendspace",       16 },
+    { "sendbuf_inc",    "net.inet.tcp.sendbuf_inc",     16 },
+    { "sendbuf_max",    "net.inet.tcp.sendbuf_max",     16 },
+    { "recvbuf_auto",   "net.inet.tcp.recvbuf_auto",    16 },
+    { "recvspace",      "net.inet.tcp.recvspace",       16 },
+    { "recvbuf_inc",    "net.inet.tcp.recvbuf_inc",     16 },
+    { "recvbuf_max",    "net.inet.tcp.recvbuf_max",     16 },
+    { "init_win",       "net.inet.tcp.init_win",        16 },
+    { "init_win_local", "net.inet.tcp.init_win_local",  16 },
+    { "delack_ticks",   "net.inet.tcp.delack_ticks",    16 },
+    { "congctl",        "net.inet.tcp.congctl.selected", 0 }, // str val
+};
+#endif // MODIFY_NETWORK_PARAMETERS
 
 static int
 xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
@@ -895,23 +930,131 @@ ErrorExit:
 }
 
 
+#if MODIFY_NETWORK_PARAMETERS
+static int
+xe_net_set_net_param_int( const char * Name,
+                          int          NewVal,
+                          bool         Set   )
+{
+    int rc = 0;
+    int oldval = 0;
+    size_t oldlen = sizeof(oldval);
+    size_t newlen = sizeof(NewVal);
+
+    if ( !Set )
+    {
+        NewVal = 0;
+        newlen = 0;
+    }
+
+    rc = sysctlbyname( Name, &oldval, &oldlen, &NewVal, newlen );
+    if ( rc )
+    {
+        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        MYASSERT( !"sysctlbyname" );
+        goto ErrorExit;
+    }
+
+    if ( Set )
+    {
+        FORCE_PRINT( "%*s: curr val 0x%x, prev val 0x%x\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
+    }
+    else
+    {
+        FORCE_PRINT( "%*s: curr val 0x%x\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+static int
+xe_net_set_net_param_str( const char * Name,
+                          const char * NewVal,
+                          bool         Set   )
+{
+    int rc = 0;
+    char oldval[64] = {0};
+    size_t oldlen = sizeof( oldval );
+    size_t newlen = 0;
+
+    if ( !Set )
+    {
+        NewVal = NULL;
+        newlen = 0;
+    }
+    else if ( NewVal )
+    {
+        newlen = strlen( NewVal ) + 1;
+    }
+
+    rc = sysctlbyname( Name, oldval, &oldlen, NewVal, newlen );
+    if ( rc )
+    {
+        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        MYASSERT( !"sysctlbyname" );
+        goto ErrorExit;
+    }
+
+    if ( Set )
+    {
+        FORCE_PRINT( "%*s: curr val %s, prev val %s\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
+    }
+    else
+    {
+        FORCE_PRINT( "%*s: curr val %s\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+static void
+xe_net_get_options( void )
+{
+    for ( int i = 0; i < NUMBER_OF( g_net_params ); ++i )
+    {
+        if ( g_net_params[i].base )
+        {
+            (void) xe_net_set_net_param_int( g_net_params[i].path, 0, false );
+        }
+        else
+        {
+            (void) xe_net_set_net_param_str( g_net_params[i].path, NULL, false );
+        }
+    }
+}
+#endif // MODIFY_NETWORK_PARAMETERS
+
+
 int
 xe_net_init( void )
 {
     int rc = 0;
+
+#if MODIFY_NETWORK_PARAMETERS
     char params[ INS_SOCK_PARAMS_MAX_LEN ] = {0};
     int tries = 0;
-    
+
+    xe_net_get_options();
+
     // XXXX: wait and try again, or just fail?
+    //DEBUG_BREAK();
     do
     {
-        struct timespec ts = {0, 10000}; // 0 seconds, N nanoseconds
+        struct timespec ts = {0, 500}; // 0 seconds, N nanoseconds
 
         rc = ioctl( g_state.input_fd, INS_GET_SOCK_PARAMS_IOCTL, params );
         if ( 0 == rc ) { break; }
 
         (void) nanosleep( &ts, &ts );
-    } while ( tries++ < 3 );
+    } while ( tries++ < 10 );
     
     if ( 0 != rc )
     {
@@ -920,7 +1063,6 @@ xe_net_init( void )
         goto ErrorExit;
     }
 
-    
     char * pparams = params;
     char * toptok_sav = NULL;
     while( true )
@@ -928,10 +1070,6 @@ xe_net_init( void )
         // Split apart by spaces
         char * toptok = strtok_r( pparams, " ", &toptok_sav );
         if ( NULL == toptok ) { break; }
-
-        //char * name = NULL;
-        int    nameval = 0;
-        float  val     = 0;
 
         // Copy of the top token that we'll destroy
         char param[ INS_SOCK_PARAMS_MAX_LEN ];
@@ -941,44 +1079,36 @@ xe_net_init( void )
         pparams = NULL;
 
         strncpy( param, toptok, sizeof(param) );
-        for ( int i = 0; i < 3; ++i )
-        {
-            char * lowtok = strsep( &pparam, ":" );
-            if ( NULL == lowtok ) { break; }
+        char * name = strsep( &pparam, ":" );
+        char * strval = strsep( &pparam, ":" );
 
-            //if      ( 0 == i ) { name = lowtok;                    }
-            else if ( 1 == i ) { nameval = strtod( lowtok, NULL ); }
-            else if ( 2 == i ) { val = strtof( lowtok, NULL );     }
-        }
-        
-        // seconds ==> microseconds: x1000000
-        switch( nameval )
+        bool found = false;
+        for ( int i = 0; i < NUMBER_OF( g_net_params ); ++i )
         {
-        case SO_SNDBUF:
-            MYASSERT( val );
-            g_state.so_sndbuf = val;
-            break;
-        case SO_RCVBUF:
-            MYASSERT( val );
-            g_state.so_rcvbuf = val;
-            break;
-        case SO_SNDTIMEO:
-            MYASSERT( val );
-            g_state.so_sndtimeo.tv_sec  = (int) val;
-            g_state.so_sndtimeo.tv_usec = (val - (int) val) * 1000000;
-            break;
-        case SO_RCVTIMEO:
-            MYASSERT( val );
-            g_state.so_rcvtimeo.tv_sec  = (int) val;
-            g_state.so_rcvtimeo.tv_usec = (val - (int) val) * 1000000;
-            break;
-        default:
-            MYASSERT( !"Invalid socket parameter" );
-            rc = EINVAL;
+            if ( 0 != strcmp( g_net_params[i].key, name ) ) { continue; }
+
+            found = true;
+            if ( g_net_params[i].base )
+            {
+                int val = strtol( strval, NULL, g_net_params[i].base );
+                rc = xe_net_set_net_param_int( g_net_params[i].path, val, true );
+            }
+            else
+            {
+                rc = xe_net_set_net_param_str( g_net_params[i].path, strval, true );
+            }
+        }
+
+        if ( !found )
+        {
+            rc = ENOENT;
+            MYASSERT( !"Network parameter not found" );
             goto ErrorExit;
         }
     }
 
 ErrorExit:
+#endif
+    MYASSERT( 0 == rc );
     return rc;
 }

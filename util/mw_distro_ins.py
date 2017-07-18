@@ -65,12 +65,15 @@ import pyxs
 
 
 ##
-## Constants for RUMP/NetBSD socket and TCP options that we may need
+## Constants for RUMP/NetBSD socket and TCP options that we may need.
 ## 
 
 
+# Per-socket options: use these for mitigation
+
 """
 include/sys/socket.h
+
 
 /*
  * Additional options, not kept in so_options.
@@ -92,38 +95,65 @@ include/sys/socket.h
 #define SO_SNDTIMEO	0x100b		/* send timeout */
 #define SO_RCVTIMEO	0x100c		/* receive timeout */
 
+
+TCP system-wide options: use these for diversification
+-----------------------
+net.inet.tcp.recvbuf_auto: 1
+net.inet.tcp.recvspace:    32768
+net.inet.tcp.recvbuf_inc:  16384
+net.inet.tcp.recvbuf_max:  262144
+net.inet.tcp.sendbuf_auto: 1
+net.inet.tcp.sendspace:    32768
+net.inet.tcp.sendbuf_inc:  8192
+net.inet.tcp.sendbuf_max:  262144
+net.inet.tcp.init_win:     4
+net.inet.tcp.init_win_local: 4
+net.inet.ip.ifq.maxlen:      256
+net.inet.tcp.delack_ticks:   20
+net.inet.tcp.congctl.selected:  newreno
+net.inet.tcp.congctl.available: reno newreno cubic
+
 """
 
-# Tuple: ( ASCII name, numeric value, type, valid range )
-# type: boolean or integer
-
-sock_opts = [
-    ( "SO_SNDBUF", 0x1001, int, (0x50, 0x4000) ),
-    ( "SO_RCVBUF", 0x1002, int, (0x50, 0x4000) ),
-
-    ( "SO_SNDTIMEO", 0x100b, float, (1, 5) ),
-    ( "SO_RCVTIMEO", 0x100b, float, (1, 5)  ),
-]
-
-
-def generate_net_opts():
-    """ Randomly picks network options, returns them in string. """
-
-    ##
-    ## XXXX: Disabled for now. Values must be chosen carefully or they
-    ## break the connection, in particular from apache.
-    ##
+def generate_sys_net_opts():
+    """ Randomly, but smartly generate INS network configuration """
     params = list()
-    for (name, numname, t, r ) in sock_opts:
-        if int == t:
-            val = 0
-            #val = random.randint( r[0], r[1] )
-            params.append( "{0}:{1}:{2}".format( name, numname, val ) )
-        elif float == t:
-            val = 0
-            #val = random.uniform( r[0], r[1] )
-            params.append( "{0}:{1}:{2:0.03f}".format( name, numname, val ) )
-    return " ".join( params )
+
+    # Calc send, recv settings
+    for prefix in ("send", "recv"):
+        bufauto = random.randint( 0, 1)
+        params.append( "{0}buf_auto:{1}".format( prefix, bufauto ) )
+
+        #if bufauto:
+        #    continue
+
+        # initial buffer size
+        #bufspace = random.randrange( 0x1000, 0x40001, 0x1000 )
+        bufspace = random.choice( xrange( 0x1000, 0x40001, 0x1000 ) )
+        params.append( "{0}space:{1:x}".format( prefix, bufspace ) )
+
+        # buffer increment size
+        #bufinc = random.randrange( bufspace / 4, bufspace / 2, 0x800 )
+        bufinc = random.choice( xrange( bufspace/4, bufspace/2, 0x800 ) )
+        params.append( "{0}buf_inc:{1:x}".format( prefix, bufinc ) )
+
+        # max buffer size
+        #bufmax = random.randrange( bufspace, bufspace * 4, 0x1000 )
+        bufmax = random.choice( xrange( bufspace, bufspace * 4, 0x1000 ) )
+        params.append( "{0}buf_max:{1:x}".format( prefix, bufmax ) )
+
+        assert bufmax >= bufspace, "nonsensical space vs max values"
+
+    # Calc other settings
+    params.append( "init_win:{0:x}".format( random.randint( 2, 6 ) ) )
+    params.append( "init_win_local:{0:x}".format( random.randint( 2, 6) ) )
+    params.append( "delack_ticks:{0:x}".format( random.randint( 10, 40) ) )
+    params.append( "congctl:{0}".format( random.choice( ["reno", "newreno", "cubic"] ) ) )
+
+    print "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) )
+    opts = " ".join( params )
+    print "TCP/IP parameter value: {0}".format( opts )
+    return opts
 
 
 # Generic storage for INS
@@ -290,7 +320,7 @@ class XenStoreEventHandler:
             ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
             ins_map[ domid ].ip = ips[0]
-            client[ b"/mw/{0}/sockopts".format(domid) ] = generate_net_opts()
+            client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
         elif 'network_stats' in path:
             ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
         elif 'heartbeat' in path:
@@ -378,21 +408,10 @@ class Ins:
 
         # Find available MAC
         mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
-        #mac = random.sample( filter( lambda k,v: v['in_use'], macs.items() ) )
         if not mac:
             raise RuntimeError( "No more MACs are available" )
         mac = mac[0]
         macs[ mac ]['in_use'] = True
-
-        #mac = None
-        #for m in macs.iterkeys():
-        #    if macs[m]['in_use']:
-        #        continue
-        #    macs[m]['in_use'] = True
-        #    mac = m
-        #    break
-        #    if not mac:
-
         self._mac = mac
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
@@ -414,12 +433,13 @@ class Ins:
             rc = p.poll()
             if exit_requested:
                 break
-            if rc is None:
+            if rc is not None:
+                break
+            if t >= DEFAULT_TIMEOUT:
+                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
+            else:
                 time.sleep( POLL_INTERVAL )
                 t += POLL_INTERVAL
-            elif t >= DEFAULT_TIMEOUT:
-                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
-            break
 
         if p.returncode:
             raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
