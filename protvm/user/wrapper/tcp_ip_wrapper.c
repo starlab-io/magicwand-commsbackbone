@@ -1640,6 +1640,7 @@ init_wrapper( void )
     g_log_file = fopen( shim_log, "w" );
     if ( NULL == g_log_file )
     {
+        fprintf( stderr, "Failed to open log file %s\n", shim_log );
         perror( "fopen" );
         exit(1);
     }
