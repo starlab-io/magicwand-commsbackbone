@@ -30,7 +30,6 @@
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp.h>
 
 #include <sys/param.h>
 #include <sys/sysctl.h>
