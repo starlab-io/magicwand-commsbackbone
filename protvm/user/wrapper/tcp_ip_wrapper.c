@@ -59,7 +59,8 @@
 
 
 //
-// Which send() implementation should we use?
+// Which send() implementation should we use? This choice has big
+// implications for performance.
 //
 
 //#define SEND_ALLSYNC
@@ -209,8 +210,8 @@ ErrorExit:
 
 
 static int
-mwcomms_write_request( IN  int         MwFd,
-                       IN  bool        ReadResponse,
+mwcomms_write_request( IN  int                     MwFd,
+                       IN  bool                    ReadResponse,
                        IN  mt_request_generic_t  * Request,
                        OUT mt_response_generic_t * Response )
 {
@@ -461,7 +462,7 @@ close( int Fd )
 int
 bind( int                     SockFd,
       const struct sockaddr * SockAddr, 
-      socklen_t                AddrLen )
+      socklen_t               AddrLen )
 {
     mt_request_generic_t   request;
     mt_response_generic_t  response = {0};
@@ -543,9 +544,9 @@ ErrorExit:
 
 
 int
-accept( int SockFd, 
+accept( int               SockFd,
         struct sockaddr * SockAddr, 
-        socklen_t * SockLen)
+        socklen_t       * SockLen)
 {
     mt_request_generic_t  request;
     mt_response_generic_t response = {0};
@@ -599,10 +600,10 @@ accept4( int               SockFd,
 
 
 ssize_t
-recvfrom( int    SockFd,
-          void * Buf,
-          size_t Len,
-          int    Flags,
+recvfrom( int               SockFd,
+          void            * Buf,
+          size_t            Len,
+          int               Flags,
           struct sockaddr * SrcAddr,
           socklen_t       * AddrLen )
 {
@@ -787,9 +788,9 @@ ErrorExit:
 
 
 int 
-connect( int SockFd, 
+connect( int                     SockFd, 
          const struct sockaddr * Addr,
-         socklen_t AddrLen )
+         socklen_t               AddrLen )
 {
    mt_request_generic_t request;
    mt_response_generic_t response = {0};
@@ -1309,11 +1310,11 @@ mwcomms_set_sockattr( IN int Level,
 
 
 int
-getsockopt( int Fd,
-            int Level,
-            int OptName,
-            void * OptVal,
-            socklen_t  *OptLen )
+getsockopt( int         Fd,
+            int         Level,
+            int         OptName,
+            void      * OptVal,
+            socklen_t * OptLen )
 {
     int rc = 0;
     int err = 0;
@@ -1358,11 +1359,11 @@ ErrorExit:
 
 
 int
-setsockopt( int Fd,
-            int Level,
-            int OptName,
+setsockopt( int          Fd,
+            int          Level,
+            int          OptName,
             const void * OptVal,
-            socklen_t OptLen )
+            socklen_t    OptLen )
 {
     int rc = 0;
     mwsocket_attrib_t attrib = {0};
@@ -1405,7 +1406,7 @@ ErrorExit:
 
 
 int
-getsockname(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
+getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
 {
     int rc = 0;
     mt_request_generic_t request = {0};
@@ -1585,12 +1586,12 @@ ErrorExit:
 // Set up function aliases here for reason stated in the Makefile. The
 // signature doesn't matter; we're instructing the loader to redirect
 // one function call to another. Since only socket-related calls are
-// intercepted, only a few functions are aliased.
+// intercepted, just a few functions are aliased.
 //
 
-void __read_chk(void) __attribute__((weak, alias ("read")));
-void __recv_chk(void) __attribute__((weak, alias ("recv")));
-void __recvfrom_chk(void) __attribute__((weak, alias ("recvfrom")));
+void __read_chk(void)     __attribute__((weak, alias ("read")     ));
+void __recv_chk(void)     __attribute__((weak, alias ("recv")     ));
+void __recvfrom_chk(void) __attribute__((weak, alias ("recvfrom") ));
 
 #endif // WRAP_CHECK_FUNCTIONS
 
@@ -1622,46 +1623,52 @@ dl_callback(struct dl_phdr_info * Info,
 }
 #endif // DEBUG
 
+
 void __attribute__((constructor))
 init_wrapper( void )
 {
-
     //
-    //Prepare the log file for writing
+    // Prepare the log file for writing
     // 
     char shim_log[32] = {0};
 
-    snprintf( shim_log,
-              32,
-              "%s/ins_%d.log",
-              SHIM_LOG_PATH,
-              getpid() );
-    
+    snprintf( shim_log, sizeof(shim_log),
+              "%s/ins_%d.log", SHIM_LOG_PATH, getpid() );
+
     g_log_file = fopen( shim_log, "w" );
     if ( NULL == g_log_file )
     {
-        fprintf( stderr, "Failed to open log file %s\n", shim_log );
-        perror( "fopen" );
+        fprintf( stderr, "Failed to open log file %s: %s\n",
+                 shim_log, strerror( errno ) );
         exit(1);
     }
-    
-    DEBUG_PRINT("Intercept module loaded\n");
 
+    DEBUG_PRINT( "Intercept module loaded\n" );
+
+    //
+    // Open the kernel module's device (mwcomms)
+    //
 #if (!USE_MWCOMMS)
     devfd = -1;
 #else
-    devfd = open( DEV_FILE, O_RDWR);
+    devfd = open( DEV_FILE, O_RDWR );
     if (devfd < 0)
     {
-        perror("Failed to open the device...");
+        fprintf( stderr, "Failed to open device %s: %s\n",
+                 DEV_FILE, strerror( errno ) );
         exit(1);
     }
 #endif
 
+    //
+    // Find the TCP/IP functions in libc and save their
+    // locations. This module hooks them and forwards their uses in
+    // some cases.
+    //
     g_dlh_libc = dlopen( "libc.so.6", RTLD_NOW );
     if ( NULL == g_dlh_libc )
     {
-        DEBUG_PRINT("Failure: %s\n", dlerror() );
+        DEBUG_PRINT( "Failure: %s\n", dlerror() );
         exit(1);
     }
 
@@ -1716,10 +1723,10 @@ fini_wrapper( void )
         libc_close( devfd );
     }
 
-    if( NULL != g_log_file )
+    if ( NULL != g_log_file )
     {
         fclose( g_log_file );
     }
 
-    DEBUG_PRINT("Intercept module unloaded\n");
+    DEBUG_PRINT( "Intercept module unloaded\n" );
 }
