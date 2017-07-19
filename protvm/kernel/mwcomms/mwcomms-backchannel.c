@@ -488,11 +488,10 @@ mw_backchannel_init_listen_port( void )
         goto ErrorExit;
     }
 
-    pr_info( "Listening on %pI4:%hu (%hu)",
-             &extaddr.sin_addr, ntohs( addr.sin_port ), port );
-
     (void) snprintf( listenstr, sizeof(listenstr),
                      "%pI4:%hu", &extaddr.sin_addr, port );
+
+    pr_info( "Netflow channel listening on %s\n", listenstr );
 
     // Make this a non-blocking socket
     //mw_backchannel_nonblock( g_mwbc_state.listen_sock );
