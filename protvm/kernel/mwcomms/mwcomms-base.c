@@ -287,7 +287,7 @@ mwbase_dev_init( void )
              DRIVER_NAME, mod->core_layout.base );
              //DRIVER_NAME, mod->module_core );
 
-#ifdef DEBUG_BACKCHANNEL
+#ifdef MYTRAP
     // gdb> add-symbol-file mwcomms.ko $eax/$rax
 
     asm( "int $3" // module base in *ax
