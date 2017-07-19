@@ -457,6 +457,7 @@ mw_backchannel_init_listen_port( void )
 
     if ( sk->sk_prot->get_port( sk, 0 ) )
     {
+        MYASSERT( !"get_port" );
         release_sock( sk );
         rc = -EAGAIN;
         goto ErrorExit;
