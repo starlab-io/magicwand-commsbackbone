@@ -5,6 +5,9 @@
 #include <net/sock.h>
 #include <net/inet_sock.h>
 
+#include <linux/netdevice.h>
+#include <linux/inetdevice.h>
+
 #include <linux/socket.h>
 #include <linux/in.h>
 #include <linux/list.h>
@@ -372,13 +375,64 @@ ErrorExit:
 
 
 static int
+mw_backchannel_find_extern_ip( OUT struct sockaddr_in * Addr )
+{
+    int rc = -ENOENT;
+    bool found = false;
+    MYASSERT( Addr );
+
+    Addr->sin_addr.s_addr = 0;
+
+    read_lock(&dev_base_lock);
+
+    struct net_device *dev = first_net_device( &init_net );
+    while( NULL != dev )
+    {
+        if ( 0 != strcmp( dev->name, EXT_IFACE ) )
+        {
+            dev = next_net_device( dev );
+            continue;
+        }
+
+        struct in_device * indev = dev->ip_ptr;
+        struct in_ifaddr * ifa = NULL;
+        for ( ifa = indev->ifa_list; NULL != ifa; ifa = ifa->ifa_next )
+        {
+            pr_info( "Found address %pI4 on interface %s\n",
+                     &ifa->ifa_address, dev->name);
+            if ( found )
+            {
+                MYASSERT( !"External interface has multiple addresses" );
+                rc = -EADDRINUSE;
+                goto ErrorExit;
+            }
+
+            found = true;
+            rc = 0;
+            Addr->sin_addr.s_addr = ifa->ifa_address;
+        }
+        dev = next_net_device( dev );
+    } // while
+
+    read_unlock(&dev_base_lock);
+
+ErrorExit:
+    return rc;
+}
+
+
+static int
 mw_backchannel_init_listen_port( void )
 {
     int rc = 0;
     uint16_t port = 0;
-    char portstr[6] = {0};
-    struct sockaddr_in addr;
+    char listenstr[32] = {0};
+    struct sockaddr_in addr = {0};
+    struct sockaddr_in extaddr = {0};
     int addrlen = sizeof(struct sockaddr_in);
+
+    rc = mw_backchannel_find_extern_ip( &extaddr );
+    if ( rc ) { goto ErrorExit; }
 
     rc = sock_create( AF_INET,
                       SOCK_STREAM,
@@ -392,7 +446,9 @@ mw_backchannel_init_listen_port( void )
 
     // This effectively completes a bind() operation on 0.0.0.0 on a
     // kernel-chosen port. Compare to kernel's inet_autobind(). As
-    // such, we do not call the socket's bind() operation.
+    // such, we do not call the socket's bind() operation. Note that
+    // we bind on 0.0.0.0 but we advertise only the external address
+    // in XenStore.
 
     struct sock      * sk   = g_mwbc_state.listen_sock->sk;
     struct inet_sock * inet = inet_sk( sk );
@@ -432,9 +488,10 @@ mw_backchannel_init_listen_port( void )
     }
 
     pr_info( "Listening on %pI4:%hu (%hu)",
-             &addr.sin_addr, ntohs( addr.sin_port ), port );
+             &extaddr.sin_addr, ntohs( addr.sin_port ), port );
 
-    (void) snprintf( portstr, sizeof(portstr), "%hu", port );
+    (void) snprintf( listenstr, sizeof(listenstr),
+                     "%pI4:%hu", &extaddr.sin_addr, port );
 
     // Make this a non-blocking socket
     //mw_backchannel_nonblock( g_mwbc_state.listen_sock );
@@ -444,10 +501,10 @@ mw_backchannel_init_listen_port( void )
         rc = -ENOMEM;
         goto ErrorExit;
     }
-    DEBUG_BREAK();
+
     rc = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM,
                               SERVER_BACKCHANNEL_PORT_KEY,
-                              portstr );
+                              listenstr );
     if ( rc )
     {
         goto ErrorExit;

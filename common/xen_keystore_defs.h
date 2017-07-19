@@ -50,7 +50,7 @@
 #define SERVER_ID_KEY               "id"
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
-#define SERVER_BACKCHANNEL_PORT_KEY  "backchannel_port"
+#define SERVER_BACKCHANNEL_PORT_KEY  "netflow"
 #define SERVER_BACKCHANNEL_PORT_PATH XENEVENT_XENSTORE_PVM "/" SERVER_BACKCHANNEL_PORT_KEY
 
 // INS constants
