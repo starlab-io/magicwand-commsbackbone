@@ -4,7 +4,8 @@
 ## Loads the mwcomms driver. Its device will be useable by all.
 ##
 
-driver="mwcomms"
+driver=mwcomms
+modpath=/sys/module/$driver
 
 sudo rmmod $driver > /dev/null 2>&1
 
@@ -12,3 +13,11 @@ sudo rmmod $driver > /dev/null 2>&1
 sudo sh -c 'echo "MODE = \"0666\"" > /etc/udev/rules.d/010_$driver.rules'
 
 sudo insmod $driver.ko
+
+for s in ".text" ".bss"
+do
+    echo -n "section $s.... "
+    sudo cat $modpath/sections/$s # need root access for this...
+done
+
+tail -f /var/log/kern.log

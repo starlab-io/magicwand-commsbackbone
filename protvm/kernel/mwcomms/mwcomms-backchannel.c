@@ -18,17 +18,11 @@
 #include <xen_keystore_defs.h>
 #include "mwcomms-xen-iface.h"
 
-
 // In rundown, how long to wait for listener thread to die?
 #define LISTENER_KILL_TIMEOUT (HZ * 2) // X seconds
 
 // Sampling rate of listening thread. Must be less than kill timeout above.
 #define LISTENER_MONITOR_INTERVAL (HZ * 1)
-
-// XXXX: When this is 1, we hit a deadlock upon receiving incoming
-// data and later unloading
-#define HANDLE_INCOMING_DATA 1
-
 
 typedef int
 pfn_import_single_range_t(int rw, void __user *buf, size_t len,
@@ -38,21 +32,22 @@ typedef struct _mwcomms_backchannel_info
 {
     struct list_head list;
     bool             active;
-    // XXXX: how to detect remote close?
+    char             peer[64]; // helpful for debugging
+
     struct socket  * conn;
 } mwcomms_backchannel_info_t;
 
 
 typedef struct _mwcomms_backchannel_state
 {
-
     pfn_import_single_range_t * p_import_single_range;
 
     bool                      initialized;
-    struct list_head          connection_list;
-    struct rw_semaphore       connection_list_lock;
-    atomic_t                  connection_ct;
-
+    struct list_head          conn_list;
+    struct rw_semaphore       conn_list_lock;
+    atomic_t                  active_conns; // active connections
+    atomic_t                  conn_ct;      // count; monotonically increases
+    
     uint16_t                  listen_port;
     struct socket *           listen_sock;
     struct poll_table_struct  poll_tbl;
@@ -66,35 +61,31 @@ static mwcomms_backchannel_state_t g_mwbc_state = {0};
 
 #ifdef DEBUG
 static void
-print_backchannel_state(void)
+print_backchannel_state( void )
 {
-
-        mwcomms_backchannel_info_t * curr = NULL;
-        int i = 0;
-        struct sockaddr_in addr;
-        int addrlen = sizeof(struct sockaddr_in);
-
+    mwcomms_backchannel_info_t * curr = NULL;
+    int i = 0;
+    struct sockaddr_in addr;
+    int addrlen = sizeof(struct sockaddr_in);
         
-        pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
-        pr_debug("connection count:    %d\n", g_mwbc_state.connection_ct.counter );
-        pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
+    pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
+    pr_debug("connection count:    %d\n", g_mwbc_state.active_conns.counter );
+    pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
 
-        pr_debug("\nsocket list: \n");
-        list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
-        {
+    pr_debug("\nsocket list: \n");
+    list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
+    {
+        curr->conn->ops->getname( curr->conn,
+                                  (struct sockaddr *) &addr,
+                                  &addrlen,
+                                  1 ); // get peer name
+        pr_debug( "Connection %d connection from %pI4:%hu\n", i,
+                  &addr.sin_addr, ntohs( addr.sin_port ) );
 
-                 curr->conn->ops->getname( curr->conn,
-                                     (struct sockaddr *) &addr,
-                                     &addrlen,
-                                     1 ); // get peer name
-             pr_debug( "Connection %d connection from %pI4:%hu\n", i,
-             &addr.sin_addr, ntohs( addr.sin_port ) );
-
-             i++;
-        }
+        i++;
+    }
 }
 #endif
-
 
 
 #if 0
@@ -107,7 +98,6 @@ mw_backchannel_nonblock( struct socket * Sock )
     if ( NULL == Sock ||
          NULL == Sock->file )
     {
-        DEBUG_BREAK();
         return;
     }
     spin_lock( &Sock->file->f_lock );
@@ -117,13 +107,12 @@ mw_backchannel_nonblock( struct socket * Sock )
 #endif
 
 
-
 // @brief Read data off the given buffer. Won't block.
 static int
 MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
-                     OUT   void   * Message,
-                     INOUT size_t * Len )
+                     OUT   void                       * Message,
+                     INOUT size_t                     * Len )
 {
     int rc = 0;
     struct msghdr hdr = {0};
@@ -131,7 +120,6 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
 
     MYASSERT( Len );
     MYASSERT( *Len > 0 );
-
 
     // See sendto syscall def in net/socket.c
     rc = g_mwbc_state.p_import_single_range( READ,
@@ -155,12 +143,12 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
     rc = sock_recvmsg( Channel->conn, &hdr, *Len, 0 );
     //rc = sock_recvmsg( Channel->conn, &hdr, 0 );
 
-    pr_debug("Read %d bytes from socket", rc);
-    // Returns number of bytes returned (>=0) or error (<0)
+    pr_debug( "Read %d bytes from socket", rc );
+    // Returns number of bytes (>=0) or error (<0)
     if ( 0 == rc )
     {
         // POLLIN event indicated but no data
-        //Channel->active = false;
+        Channel->active = false;
         goto ErrorExit;
     }
     else if ( -EAGAIN == rc )
@@ -195,79 +183,83 @@ mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
 
     while ( true )
     {
-            
         size_t size = sizeof(buf);
         memset( &buf, 0, sizeof(buf) );
 
         rc = mw_backchannel_read( Channel, buf, &size );
-        
-        if ( ! rc )
+        if ( 0 == rc || 0 == size )
         {
             break;
         }
-        if ( 0 == size )
-        {
-            break;
-        }
-
     }
 
-    //ErrorExit:
+//ErrorExit:
     return rc;
 }
 
-int
-MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_write( void * Message, size_t Len )
+
+static int
+mw_backchannel_write_one( IN mwcomms_backchannel_info_t * Channel,
+                          IN void                       * Message,
+                          IN size_t                       Len )
 {
     int rc = 0;
     struct msghdr hdr = {0};
-    struct iovec iov;
-    mwcomms_backchannel_info_t * curr = NULL;
+    struct iovec iov = {0};
 
-    
     // See sendto syscall def in net/socket.c
     rc = g_mwbc_state.p_import_single_range( WRITE,
                                              Message,
                                              Len,
                                              &iov,
                                              &hdr.msg_iter );
-    
-
     if ( rc )
     {
         MYASSERT( !"import of message failed" );
         goto ErrorExit;
     }
 
-    down_read( &g_mwbc_state.connection_list_lock );
-
-    list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
+    // N.B. sock_sendmsg modifies hdr
+    rc = sock_sendmsg( Channel->conn, &hdr );
+    if ( rc == Len ) 
     {
-
-
-        rc = sock_sendmsg( curr->conn, &hdr );
-        // continue upon failure
-
-        if ( rc != Len )
-        {
-            pr_err( "Failed to write all %d bytes in message: %d\n",
-                    (int) Len, rc );
-            MYASSERT( !"sendmsg() didn't send whole message" );
-            if ( rc > 0 )
-            {
-                rc = -ENOSPC;
-            }
-        }
-        else
-        {
-            rc = 0;
-        }
+        rc = 0; // success
+        goto ErrorExit;
     }
 
-    up_read( &g_mwbc_state.connection_list_lock );
+    // Failure...
+    pr_err( "Failed to write all %d bytes in message: %d\n", (int) Len, rc );
+    if ( rc > 0 ) // incomplete write
+    {
+        rc = -EAGAIN;
+    }
+    else if ( rc <= 0 ) // failed write
+    {
+        Channel->active = false;
+    }
 
 ErrorExit:
+    return rc;
+}
+
+
+int
+MWSOCKET_DEBUG_ATTRIB
+mw_backchannel_write( void * Message, size_t Len )
+{
+    int rc = 0;
+
+    down_read( &g_mwbc_state.conn_list_lock );
+
+    mwcomms_backchannel_info_t * curr = NULL;
+    list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
+    {
+        rc = mw_backchannel_write_one( curr, Message, Len );
+        // continue upon failure
+    }
+
+//ErrorExit:
+    up_read( &g_mwbc_state.conn_list_lock );
     return rc;
 } // mw_backchannel_write()
 
@@ -299,7 +291,7 @@ ErrorExit:
 bool
 mw_backchannel_consumer_exists( void )
 {
-    return ( atomic_read( &g_mwbc_state.connection_ct ) > 0 );
+    return ( atomic_read( &g_mwbc_state.active_conns ) > 0 );
 }
 
 
@@ -334,7 +326,8 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
     }
 
     backinfo->conn = AcceptedSock;
-    atomic_inc( &g_mwbc_state.connection_ct );
+    atomic_inc( &g_mwbc_state.active_conns );
+    atomic_inc( &g_mwbc_state.conn_ct );
     backinfo->active = true;
 
     rc = AcceptedSock->ops->getname( AcceptedSock,
@@ -347,27 +340,28 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
         goto ErrorExit;
     }
 
+    snprintf( backinfo->peer, sizeof(backinfo->peer),
+              "%pI4:%hu\n", &addr.sin_addr, ntohs( addr.sin_port ) );
     
-    pr_info( "Accepted connection from %pI4:%hu\n",
-             &addr.sin_addr, ntohs( addr.sin_port ) );
+    pr_info( "Accepted connection from %s\n", backinfo->peer );
 
     snprintf( msg, sizeof(msg),
-              "Hello, you are connection #%d. You are %pI4:%hu\n",
-              atomic_read( &g_mwbc_state.connection_ct ),
-              &addr.sin_addr, ntohs( addr.sin_port ) );
+              "Hello, you are connection #%d, from %s\n",
+              atomic_read( &g_mwbc_state.conn_ct ),
+              backinfo->peer );
 
+    rc = mw_backchannel_write_one( backinfo, (void *) msg, strlen(msg) + 1 );
     if ( rc )
     {
         goto ErrorExit;
     }
 
     // Nothing has failed: add to the global list
-    down_write( &g_mwbc_state.connection_list_lock );
+    down_write( &g_mwbc_state.conn_list_lock );
     list_add( &backinfo->list,
-              &g_mwbc_state.connection_list );
-    up_write( &g_mwbc_state.connection_list_lock );
-    
-    rc = mw_backchannel_write( (void *) msg, strlen(msg) + 1 );
+              &g_mwbc_state.conn_list );
+    up_write( &g_mwbc_state.conn_list_lock );
+
 
 ErrorExit:
     return rc;
@@ -399,7 +393,7 @@ mw_backchannel_find_extern_ip( OUT struct sockaddr_in * Addr )
         for ( ifa = indev->ifa_list; NULL != ifa; ifa = ifa->ifa_next )
         {
             pr_info( "Found address %pI4 on interface %s\n",
-                     &ifa->ifa_address, dev->name);
+                     &ifa->ifa_address, dev->name );
             if ( found )
             {
                 MYASSERT( !"External interface has multiple addresses" );
@@ -470,7 +464,7 @@ mw_backchannel_init_listen_port( void )
 
     g_mwbc_state.listen_port = port;
 
-    rc = kernel_listen( g_mwbc_state.listen_sock, 2 );
+    rc = kernel_listen( g_mwbc_state.listen_sock, 5 );
     if ( rc )
     {
         MYASSERT( !"Failed to listen on backchannel socket" );
@@ -487,11 +481,9 @@ mw_backchannel_init_listen_port( void )
         goto ErrorExit;
     }
 
-    pr_info( "Listening on %pI4:%hu (%hu)",
-             &extaddr.sin_addr, ntohs( addr.sin_port ), port );
-
     (void) snprintf( listenstr, sizeof(listenstr),
                      "%pI4:%hu", &extaddr.sin_addr, port );
+    pr_info( "Listening on %s\n", listenstr );
 
     // Make this a non-blocking socket
     //mw_backchannel_nonblock( g_mwbc_state.listen_sock );
@@ -539,7 +531,6 @@ mw_backchannel_monitor( void * Arg )
         rc = kernel_accept( g_mwbc_state.listen_sock, &newsock, O_NONBLOCK );
         if ( 0 == rc )
         {
-            DEBUG_BREAK();
             // Success
             rc = mw_backchannel_add_conn( newsock );
             if ( rc )
@@ -557,11 +548,11 @@ mw_backchannel_monitor( void * Arg )
         }
 
         // Now, poll the existing connections. Check for pending read and close.
-        down_write( &g_mwbc_state.connection_list_lock );
+        down_write( &g_mwbc_state.conn_list_lock );
         mwcomms_backchannel_info_t * curr = NULL;
         mwcomms_backchannel_info_t * next = NULL;
 
-        list_for_each_entry_safe( curr, next, &g_mwbc_state.connection_list, list )
+        list_for_each_entry_safe( curr, next, &g_mwbc_state.conn_list, list )
         {
             unsigned int events = mw_backchannel_poll_socket( curr->conn );
 	    
@@ -575,29 +566,23 @@ mw_backchannel_monitor( void * Arg )
                 // receive a mitigation messages from the analytics
                 // system. For now, read the data and throw it away to
                 // clear the POLLIN event.
-#if HANDLE_INCOMING_DATA
-
                 (void) mw_backchannel_readall_drop( curr );
-#else
-                pr_info( "Ignoring incoming data on socket\n" );
-#endif
             }
 
             if ( !curr->active )
             {
-                pr_debug("Killing socket\n");
+                pr_debug( "Killing socket\n" );
 
-                //Killing connection to $IP port $PORT
-
+                // Killing connection to $IP port $PORT
                 kernel_sock_shutdown( curr->conn, SHUT_RDWR );
                 sock_release( curr->conn );
-                atomic_dec( &g_mwbc_state.connection_ct );
+                atomic_dec( &g_mwbc_state.active_conns );
                 list_del( &curr->list );
                 kfree( curr );
             }
         }
 
-        up_write( &g_mwbc_state.connection_list_lock );
+        up_write( &g_mwbc_state.conn_list_lock );
 
         // Sleep
         set_current_state( TASK_INTERRUPTIBLE );
@@ -631,8 +616,8 @@ mw_backchannel_fini( void )
                                      LISTENER_KILL_TIMEOUT );
     }
 
-    down_write( &g_mwbc_state.connection_list_lock );
-    list_for_each_entry_safe( curr, prev, &g_mwbc_state.connection_list, list )
+    down_write( &g_mwbc_state.conn_list_lock );
+    list_for_each_entry_safe( curr, prev, &g_mwbc_state.conn_list, list )
     {
         if ( curr->active )
         {
@@ -641,7 +626,7 @@ mw_backchannel_fini( void )
         list_del( &curr->list );
         kfree( curr );
     }
-    up_write( &g_mwbc_state.connection_list_lock );
+    up_write( &g_mwbc_state.conn_list_lock );
 
     if ( g_mwbc_state.listen_port )
     {
@@ -662,12 +647,10 @@ mw_backchannel_init( void )
     bzero( &g_mwbc_state, sizeof(g_mwbc_state) );
 
     g_mwbc_state.initialized = true;
-
-
     
-    INIT_LIST_HEAD( &g_mwbc_state.connection_list );
+    INIT_LIST_HEAD( &g_mwbc_state.conn_list );
     init_completion( &g_mwbc_state.listen_thread_done );
-    init_rwsem( &g_mwbc_state.connection_list_lock );
+    init_rwsem( &g_mwbc_state.conn_list_lock );
 
     init_poll_funcptr( &g_mwbc_state.poll_tbl, NULL );
 
