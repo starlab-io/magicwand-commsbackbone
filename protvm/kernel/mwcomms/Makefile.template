@@ -20,6 +20,8 @@ ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
 # Include support for the backchannel?
 ccflags-y += -DBACKCHANNEL # support the netflow backchannel
 
+# Name of external-facing network interface
+ccflags-y += -DEXT_IFACE=\"eth0\"
 
 # For debugging
 ccflags-y += -ggdb

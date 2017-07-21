@@ -32,8 +32,9 @@ typedef struct _mwcomms_backchannel_info
 {
     struct list_head list;
     bool             active;
-    char             peer[64]; // helpful for debugging
+    char             peer[64]; // IP:port of peer, helpful for debugging
 
+    int              id;
     struct socket  * conn;
 } mwcomms_backchannel_info_t;
 
@@ -59,33 +60,36 @@ typedef struct _mwcomms_backchannel_state
 
 static mwcomms_backchannel_state_t g_mwbc_state = {0};
 
-#ifdef DEBUG
 static void
-print_backchannel_state( void )
+mw_backchannel_dump( void )
 {
-    mwcomms_backchannel_info_t * curr = NULL;
-    int i = 0;
-    struct sockaddr_in addr;
-    int addrlen = sizeof(struct sockaddr_in);
-        
-    pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
-    pr_debug("connection count:    %d\n", g_mwbc_state.active_conns.counter );
-    pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
+#ifdef DEBUG
+    pr_debug( "Backchannel state\n" );
 
+    printk( KERN_DEBUG "initialized:      %d\n", g_mwbc_state.initialized );
+    printk( KERN_DEBUG "connection count: %d\n",
+            atomic_read( &g_mwbc_state.active_conns ));
+    printk( KERN_DEBUG "listen port:      %d\n", g_mwbc_state.listen_port );
+    printk( KERN_DEBUG "\nsocket list: \n");
+
+# if 0
+    pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
+    pr_debug("connection count:    %d\n", atomic_read( &g_mwbc_state.active_conns ));
+    pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
     pr_debug("\nsocket list: \n");
+#endif
+    down_read( &g_mwbc_state.conn_list_lock );
+
+    mwcomms_backchannel_info_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
-        curr->conn->ops->getname( curr->conn,
-                                  (struct sockaddr *) &addr,
-                                  &addrlen,
-                                  1 ); // get peer name
-        pr_debug( "Connection %d connection from %pI4:%hu\n", i,
-                  &addr.sin_addr, ntohs( addr.sin_port ) );
-
-        i++;
+        printk( KERN_DEBUG  "Connection %d from %s\n",
+                curr->id, curr->peer );
     }
-}
+    up_read( &g_mwbc_state.conn_list_lock );
 #endif
+}
+
 
 
 #if 0
@@ -328,7 +332,9 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
     backinfo->conn = AcceptedSock;
     atomic_inc( &g_mwbc_state.active_conns );
     atomic_inc( &g_mwbc_state.conn_ct );
+
     backinfo->active = true;
+    backinfo->id     = atomic_read( &g_mwbc_state.conn_ct );
 
     rc = AcceptedSock->ops->getname( AcceptedSock,
                                      (struct sockaddr *) &addr,
@@ -341,14 +347,13 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
     }
 
     snprintf( backinfo->peer, sizeof(backinfo->peer),
-              "%pI4:%hu\n", &addr.sin_addr, ntohs( addr.sin_port ) );
-    
+              "%pI4:%hu", &addr.sin_addr, ntohs( addr.sin_port ) );
+
     pr_info( "Accepted connection from %s\n", backinfo->peer );
 
     snprintf( msg, sizeof(msg),
               "Hello, you are connection #%d, from %s\n",
-              atomic_read( &g_mwbc_state.conn_ct ),
-              backinfo->peer );
+              backinfo->id, backinfo->peer );
 
     rc = mw_backchannel_write_one( backinfo, (void *) msg, strlen(msg) + 1 );
     if ( rc )
@@ -362,6 +367,7 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
               &g_mwbc_state.conn_list );
     up_write( &g_mwbc_state.conn_list_lock );
 
+    mw_backchannel_dump();
 
 ErrorExit:
     return rc;
@@ -672,7 +678,7 @@ mw_backchannel_init( void )
     g_mwbc_state.listen_thread =
         kthread_run( &mw_backchannel_monitor,
                      NULL,
-                     "MwNetflowHandler" );
+                     "magicwand_netflow_thread" );
 
     if ( NULL == g_mwbc_state.listen_thread )
     {
