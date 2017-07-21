@@ -444,7 +444,7 @@ mw_backchannel_init_listen_port( void )
         rc = -ENOMEM;
         goto ErrorExit;
     }
-    DEBUG_BREAK();
+
     rc = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM,
                               SERVER_BACKCHANNEL_PORT_KEY,
                               portstr );

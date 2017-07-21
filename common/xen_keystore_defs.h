@@ -66,6 +66,12 @@
 
 #define HEARTBEAT_KEY               "heartbeat"
 
+//This defines the index of the domid string once
+//a xenstore path has been returned and split with
+//token  ex /mw/5/vm_evt_chn_is_bound -> 5 is the
+//domid at index 2
+#define XEN_DOMID_INDEX             2
+
 //
 //  Grant Mapping Variables 
 //

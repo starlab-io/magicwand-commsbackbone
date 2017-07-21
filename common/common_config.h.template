@@ -30,7 +30,16 @@
 // boot parameter - specifically look at gnttab_max_frames. N.B. we
 // must create one grant reference per shared page.
 //
-#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+#define XENEVENT_GRANT_REF_ORDER  5 // (2^order == page count)
+
+
+
+// Maximum number of ins clients allowed the shared memory will
+// need to be broken upand distributed evenly among this number
+// number of clients
+// for initial development, this number will be 4 because 2^5 = 32
+// meaning each INS will get 32 pages of sharedmem
+#define MAX_INS_COUNT 2
 
 //
 // The items we're sharing on the ring buffer are big and we want to
@@ -109,7 +118,5 @@
 // response arrival?
 //
 #define PVM_USES_EVENT_CHANNEL 1
-
-#define MAX_INS_COUNT 10
 
 #endif //common_config_h

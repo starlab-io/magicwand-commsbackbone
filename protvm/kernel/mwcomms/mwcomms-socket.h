@@ -59,4 +59,5 @@ mw_xen_event_handler_cb_t mwsocket_event_cb;
 bool
 mwsocket_verify( const struct file * File );
 
+
 #endif // mwcomms_socket_h

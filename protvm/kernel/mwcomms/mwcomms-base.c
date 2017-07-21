@@ -189,13 +189,14 @@
  * Globals scoped to this C module - put in struct for flexibility
  *****************************************************************************/
 
+
 typedef struct _mwcomms_base_globals
 {
     int             dev_major_num;
     struct class  * dev_class;
     struct device * dev_device;
 
-    // Shared memory
+    // Pointer to entire shared memory block
     mw_region_t     xen_shmem;
     // Indicates that the memory has been shared
     struct completion ring_shared;
@@ -336,17 +337,6 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
-   // Get shared memory in an entire, zeroed block.
-   // XXXX: break apart shmem later for multiple clients
-   g_mwcomms_state.xen_shmem.ptr = (void *)
-       __get_free_pages( GFP_KERNEL | __GFP_ZERO,
-                         XENEVENT_GRANT_REF_ORDER );
-   if ( NULL == g_mwcomms_state.xen_shmem.ptr )
-   {
-       pr_err( "Failed to allocate 0x%x pages\n", XENEVENT_GRANT_REF_COUNT );
-       rc = -ENOMEM;
-       goto ErrorExit;
-   }
 
    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
@@ -362,9 +352,7 @@ mwbase_dev_init( void )
    // handshake is complete.
 
    init_completion( &g_mwcomms_state.ring_shared );
-   rc = mw_xen_init( &g_mwcomms_state.xen_shmem,
-                     mwbase_client_ready_cb,
-                     mwsocket_event_cb );
+   rc = mw_xen_init( mwbase_client_ready_cb );
    if ( rc )
    {
        goto ErrorExit;
@@ -456,6 +444,7 @@ mwbase_dev_release(struct inode *Inode,
  * checking.
  */
 static long
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_ioctl( struct file  * File,
                   unsigned int   Cmd,
                   unsigned long  Arg )
