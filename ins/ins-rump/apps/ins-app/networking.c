@@ -30,11 +30,15 @@
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
-//#include <sys/tcp.h>
 #include <netinet/tcp.h>
+
+#include <sys/param.h>
+#include <sys/sysctl.h>
 
 #include <poll.h>
 #include <fcntl.h>
+
+#include <sys/ioctl.h>
 
 #include "user_common.h"
 #include "xenevent_app_common.h"
@@ -43,12 +47,45 @@
 #include "threadpool.h"
 #include "translate.h"
 #include "mwerrno.h"
+#include "ins-ioctls.h"
 
 #include "pollset.h"
 
-extern xenevent_globals_t g_state;
-extern uint16_t client_id;
+#define XE_NET_NETWORK_PARAM_WIDTH 30
 
+extern xenevent_globals_t g_state;
+
+
+#if MODIFY_NETWORK_PARAMETERS
+//
+// Describe the network configuration parameters that are accepted
+// over XenStore via an ioctl()
+//
+typedef struct _xe_net_param
+{
+    char * key;
+    char * path;
+    // Base of the value: 16 for hex value, 0 for string
+    int    base;
+} xe_net_param_t;
+
+static xe_net_param_t g_net_params[] =
+{
+    // See src-netbsd/sys/netinet/tcp_usrreq.c for some of the options
+    { "sendbuf_auto",   "net.inet.tcp.sendbuf_auto",    16 },
+    { "sendspace",      "net.inet.tcp.sendspace",       16 },
+    { "sendbuf_inc",    "net.inet.tcp.sendbuf_inc",     16 },
+    { "sendbuf_max",    "net.inet.tcp.sendbuf_max",     16 },
+    { "recvbuf_auto",   "net.inet.tcp.recvbuf_auto",    16 },
+    { "recvspace",      "net.inet.tcp.recvspace",       16 },
+    { "recvbuf_inc",    "net.inet.tcp.recvbuf_inc",     16 },
+    { "recvbuf_max",    "net.inet.tcp.recvbuf_max",     16 },
+    { "init_win",       "net.inet.tcp.init_win",        16 },
+    { "init_win_local", "net.inet.tcp.init_win_local",  16 },
+    { "delack_ticks",   "net.inet.tcp.delack_ticks",    16 },
+    { "congctl",        "net.inet.tcp.congctl.selected", 0 }, // str val
+};
+#endif // MODIFY_NETWORK_PARAMETERS
 
 static int
 xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
@@ -79,6 +116,57 @@ xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
 }
 
 
+static int
+xe_net_init_socket( IN int SockFd )
+{
+    int rc = 0;
+    socklen_t len = 0;
+
+    if ( g_state.so_sndbuf )
+    {
+        len = sizeof( g_state.so_sndbuf );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF, &g_state.so_sndbuf, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_rcvbuf )
+    {
+        len = sizeof( g_state.so_rcvbuf );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF, &g_state.so_rcvbuf, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_sndtimeo.tv_sec || g_state.so_sndtimeo.tv_usec )
+    {
+        len = sizeof( g_state.so_sndtimeo );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO, &g_state.so_sndtimeo, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+    if ( g_state.so_rcvtimeo.tv_sec || g_state.so_rcvtimeo.tv_usec )
+    {
+        len = sizeof( g_state.so_rcvtimeo );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO, &g_state.so_rcvtimeo, len );
+        if ( rc )
+        {
+            MYASSERT( !"setsockopt" );
+            goto ErrorExit;
+        }
+    }
+
+ErrorExit:
+    return rc;
+}
+
 
 void
 xe_net_set_base_response( IN mt_request_generic_t   * Request,
@@ -105,7 +193,9 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     int native_fam  = xe_net_get_native_protocol_family( Request->sock_fam );
     int native_type = xe_net_get_native_sock_type( Request->sock_type );
     int native_proto = Request->sock_protocol;
-    
+
+    int rc = 0;
+
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
@@ -126,7 +216,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     }
     else
     {
-        extsock = MW_SOCKET_CREATE( client_id, WorkerThread->idx );
+        extsock = MW_SOCKET_CREATE( g_state.client_id, WorkerThread->idx );
     }
 
     // Set up Response; clobbers base.sockfd
@@ -134,9 +224,15 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
                               MT_RESPONSE_SOCKET_CREATE_SIZE,
                               (mt_response_generic_t *)Response );
 
+    // Init from global config
+    rc = xe_net_init_socket( sockfd );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
     // Set up BufferItem->assigned_thread for future reference during
     // this session
-
     Response->base.sockfd        = extsock;
     WorkerThread->public_fd      = extsock;
     WorkerThread->local_fd       = sockfd;
@@ -144,9 +240,12 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     WorkerThread->sock_type      = native_type;
     WorkerThread->sock_protocol  = Request->sock_protocol;
 
+    ++g_state.network_stats_socket_ct;
+
     DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
                   WorkerThread->idx, WorkerThread->public_fd, sockfd );
-    return 0;
+ErrorExit:
+    return rc;
 }
 
 
@@ -322,11 +421,15 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
         Response->base.status = XE_GET_NEG_ERRNO();
         MYASSERT ( !"bind" );
     }
+    else
+    {
+        WorkerThread->bound_port_num = ntohs( sockaddr.sin_port );
+        g_state.pending_port_change = true;
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
                               MT_RESPONSE_SOCKET_BIND_SIZE,
                               (mt_response_generic_t *) Response );
-
     return 0;
 }
 
@@ -413,9 +516,18 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                 goto ErrorExit; // internal error
             }
         }
-        
+
+        // Init from global config
+        rc = xe_net_init_socket( sockfd );
+        if ( rc )
+        {
+            goto ErrorExit;
+        }
+
         // Caller must fix up the socket assignments
         Response->base.status = sockfd;
+
+        ++g_state.network_stats_socket_ct;
 
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
@@ -464,11 +576,11 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
         do
         {
             callrc = recvfrom( WorkerThread->local_fd,
-                           (void *) Response->bytes,
-                           Request->requested,
-                           flags,
-                           ( struct sockaddr * ) &src_addr,
-                           &addrlen );
+                               (void *) Response->bytes,
+                               Request->requested,
+                               flags,
+                               ( struct sockaddr * ) &src_addr,
+                               &addrlen );
         } while( callrc < 0 && EINTR == errno );
 
         // recvfrom() returned without being interrupted
@@ -521,6 +633,8 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
     Response->addrlen  = addrlen;
+
+    g_state.network_stats_bytes_recv += Response->count;
 
     xe_net_set_base_response( ( mt_request_generic_t * ) Request,
                               MT_RESPONSE_SOCKET_RECVFROM_SIZE + Response->count,
@@ -609,6 +723,8 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
     DEBUG_PRINT( "recv() got total of 0x%x bytes, status=%d\n",
                  (int)Response->count, Response->base.status );
 
+    g_state.network_stats_bytes_recv += Response->count;
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               Response->count + MT_RESPONSE_SOCKET_RECV_SIZE,
                               (mt_response_generic_t *)Response );
@@ -654,6 +770,8 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd );
 
+        --g_state.network_stats_socket_ct;
+
         rc = close( WorkerThread->local_fd );
         if ( rc )
         {
@@ -666,7 +784,11 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
-
+    if ( 0 != WorkerThread->bound_port_num )
+    {
+        WorkerThread->bound_port_num = 0;
+        g_state.pending_port_change = true;
+    }
     return rc;
 }
 
@@ -757,6 +879,8 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         Response->count += sent;
     }
 
+    g_state.network_stats_bytes_sent += Response->count;
+
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_SEND_SIZE,
                               (mt_response_generic_t *)Response );
@@ -805,3 +929,186 @@ ErrorExit:
     return rc;
 }
 
+
+#if MODIFY_NETWORK_PARAMETERS
+static int
+xe_net_set_net_param_int( const char * Name,
+                          int          NewVal,
+                          bool         Set   )
+{
+    int rc = 0;
+    int oldval = 0;
+    size_t oldlen = sizeof(oldval);
+    size_t newlen = sizeof(NewVal);
+
+    if ( !Set )
+    {
+        NewVal = 0;
+        newlen = 0;
+    }
+
+    rc = sysctlbyname( Name, &oldval, &oldlen, &NewVal, newlen );
+    if ( rc )
+    {
+        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        MYASSERT( !"sysctlbyname" );
+        goto ErrorExit;
+    }
+
+    if ( Set )
+    {
+        FORCE_PRINT( "%*s: curr val 0x%x, prev val 0x%x\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
+    }
+    else
+    {
+        FORCE_PRINT( "%*s: curr val 0x%x\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+static int
+xe_net_set_net_param_str( const char * Name,
+                          const char * NewVal,
+                          bool         Set   )
+{
+    int rc = 0;
+    char oldval[64] = {0};
+    size_t oldlen = sizeof( oldval );
+    size_t newlen = 0;
+
+    if ( !Set )
+    {
+        NewVal = NULL;
+        newlen = 0;
+    }
+    else if ( NewVal )
+    {
+        newlen = strlen( NewVal ) + 1;
+    }
+
+    rc = sysctlbyname( Name, oldval, &oldlen, NewVal, newlen );
+    if ( rc )
+    {
+        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        MYASSERT( !"sysctlbyname" );
+        goto ErrorExit;
+    }
+
+    if ( Set )
+    {
+        FORCE_PRINT( "%*s: curr val %s, prev val %s\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
+    }
+    else
+    {
+        FORCE_PRINT( "%*s: curr val %s\n",
+                     XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+static void
+xe_net_get_options( void )
+{
+    for ( int i = 0; i < NUMBER_OF( g_net_params ); ++i )
+    {
+        if ( g_net_params[i].base )
+        {
+            (void) xe_net_set_net_param_int( g_net_params[i].path, 0, false );
+        }
+        else
+        {
+            (void) xe_net_set_net_param_str( g_net_params[i].path, NULL, false );
+        }
+    }
+}
+#endif // MODIFY_NETWORK_PARAMETERS
+
+
+int
+xe_net_init( void )
+{
+    int rc = 0;
+
+#if MODIFY_NETWORK_PARAMETERS
+    char params[ INS_SOCK_PARAMS_MAX_LEN ] = {0};
+    int tries = 0;
+
+    xe_net_get_options();
+
+    // XXXX: wait and try again, or just fail?
+    //DEBUG_BREAK();
+    do
+    {
+        struct timespec ts = {0, 500}; // 0 seconds, N nanoseconds
+
+        rc = ioctl( g_state.input_fd, INS_GET_SOCK_PARAMS_IOCTL, params );
+        if ( 0 == rc ) { break; }
+
+        (void) nanosleep( &ts, &ts );
+    } while ( tries++ < 10 );
+    
+    if ( 0 != rc )
+    {
+        MYASSERT( !"Failed to get socket parameters" );
+        rc = 0; // not fatal
+        goto ErrorExit;
+    }
+
+    char * pparams = params;
+    char * toptok_sav = NULL;
+    while( true )
+    {
+        // Split apart by spaces
+        char * toptok = strtok_r( pparams, " ", &toptok_sav );
+        if ( NULL == toptok ) { break; }
+
+        // Copy of the top token that we'll destroy
+        char param[ INS_SOCK_PARAMS_MAX_LEN ];
+        char * pparam = param;
+
+        // Further calls to strtok should use NULL
+        pparams = NULL;
+
+        strncpy( param, toptok, sizeof(param) );
+        char * name = strsep( &pparam, ":" );
+        char * strval = strsep( &pparam, ":" );
+
+        bool found = false;
+        for ( int i = 0; i < NUMBER_OF( g_net_params ); ++i )
+        {
+            if ( 0 != strcmp( g_net_params[i].key, name ) ) { continue; }
+
+            found = true;
+            if ( g_net_params[i].base )
+            {
+                int val = strtol( strval, NULL, g_net_params[i].base );
+                rc = xe_net_set_net_param_int( g_net_params[i].path, val, true );
+            }
+            else
+            {
+                rc = xe_net_set_net_param_str( g_net_params[i].path, strval, true );
+            }
+        }
+
+        if ( !found )
+        {
+            rc = ENOENT;
+            MYASSERT( !"Network parameter not found" );
+            goto ErrorExit;
+        }
+    }
+
+ErrorExit:
+#endif
+    MYASSERT( 0 == rc );
+    return rc;
+}

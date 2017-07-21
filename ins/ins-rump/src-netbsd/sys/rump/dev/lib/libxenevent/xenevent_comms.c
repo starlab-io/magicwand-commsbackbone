@@ -55,12 +55,18 @@
 #include "xenevent_comms.h"
 
 #include "xenevent_minios.h"
+#include "xenevent_netbsd.h"
+
 #include "message_types.h"
 #include "xen_keystore_defs.h"
-#include "xenevent_netbsd.h"
+#include "ins-ioctls.h"
 
 // The RING macros use memset
 #define memset bmk_memset
+
+#define INS_XENSTORE_DIR_FMT "%s/%d"
+
+#define INS_EVENT_CHANNEL_MEM_ORDER 0
 
 // Defines:
 // mwevent_sring_t
@@ -74,7 +80,7 @@ typedef struct _xen_comm_state
 {
     bool comms_established;
 
-    domid_t         localId;
+    domid_t         local_id;
 
     // Grant map 
     struct gntmap gntmap_map;
@@ -108,26 +114,17 @@ static xen_comm_state_t g_state;
  * Basic utility functions
  ***************************************************************************/
 
-static int
-xe_comms_write_int_to_key( const char * Path,
-                           const int Value );
-
-
-static int
-xe_comms_write_int_to_key( const char * Path,
-                           const int Value )
+int
+xe_comms_write_str_to_key( const char * Path,
+                           const char * Value )
 {
     xenbus_transaction_t    txn;
     int                   retry;
     char                   *err;
     int                     res = 0;
-    char buf[MAX_KEY_VAL_WIDTH];
     bool             started = false;
 
-    bmk_memset( buf, 0, sizeof(buf) );
-    bmk_snprintf( buf, sizeof(buf), "%u", Value );
-
-    DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, buf );
+    DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
     
     err = xenbus_transaction_start(&txn);
     if (err)
@@ -138,7 +135,7 @@ xe_comms_write_int_to_key( const char * Path,
 
     started = true;
     
-    err = xenbus_write(txn, Path, buf);
+    err = xenbus_write(txn, Path, Value);
     if (err)
     {
         MYASSERT( !"xenbus_transaction_start" );
@@ -160,6 +157,43 @@ ErrorExit:
     
     return res;
 }
+
+
+
+static int
+xe_comms_write_int_to_key( const char * Path,
+                           const int Value )
+{
+    int rc = 0;
+    char buf[MAX_KEY_VAL_WIDTH];
+
+    bmk_memset( buf, 0, sizeof(buf) );
+    bmk_snprintf( buf, sizeof(buf), "%u", Value );
+
+    rc = xe_comms_write_str_to_key( Path, buf );
+
+    return rc;
+}
+
+
+int
+xe_comms_publish_ip_addr( const char * Ip )
+{
+    int rc = 0;
+    char path[ XENEVENT_PATH_STR_LEN ] = {0};
+
+    bmk_snprintf( path, sizeof( path ),
+                  INS_XENSTORE_DIR_FMT "/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  INS_IP_ADDR_KEY );
+
+    rc = xe_comms_write_str_to_key( path, Ip );
+
+    return rc;
+}
+
+
 
 static int
 xe_comms_read_str_from_key( IN const char *Path,
@@ -251,9 +285,9 @@ ErrorExit:
 }
 
 
-static int
-xe_comms_read_int_from_key( IN const char *Path,
-                            OUT int * OutVal)
+int
+xe_comms_read_int_from_key( IN const char * Path,
+                            OUT int       * OutVal )
 {
     char                *val = NULL;
     int                  res = 0;
@@ -497,15 +531,16 @@ receive_grant_references( domid_t RemoteId )
     xenbus_event_queue_init(&events);
 
     bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              GNT_REF_KEY ); 
+                  sizeof( path ),
+                  INS_XENSTORE_DIR_FMT "/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  GNT_REF_KEY ); 
               
     xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
-    while ( (err = xenbus_read(XBT_NIL, path, &msg)) != NULL
-            ||  msg[0] == '0') {
+    while ( (err = xenbus_read( XBT_NIL, path, &msg ) ) != NULL
+            ||  msg[0] == '0')
+    {
         bmk_memfree(msg, BMK_MEMWHO_WIREDBMK);
         bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
         xenbus_wait_for_watch(&events);
@@ -575,7 +610,7 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
     // Don't use minios_evtchn_bind_interdomain; spurious events are
     // delivered to us when we do.
     
-    g_state.event_channel_mem = bmk_pgalloc_one();
+    g_state.event_channel_mem = bmk_pgalloc( INS_EVENT_CHANNEL_MEM_ORDER );
     if (NULL == g_state.event_channel_mem)
     {
         MYASSERT( !"Failed to alloc Event Channel page" );
@@ -593,7 +628,7 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
                                           xe_comms_event_callback,
                                           g_state.event_channel_mem,
                                           &g_state.local_event_port );
-    if (err)
+    if ( err )
     {
         MYASSERT(!"Could not bind to event channel\n");
         goto ErrorExit;
@@ -605,12 +640,11 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
 #endif
 
     // Indicate that the VM's event channel is bound
-    bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              VM_EVT_CHN_BOUND_KEY );
+    bmk_snprintf( path, sizeof( path ),
+                  INS_XENSTORE_DIR_FMT "/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  VM_EVT_CHN_BOUND_KEY );
 
     err = xe_comms_write_int_to_key( path, 1 );
     if ( err )
@@ -627,71 +661,179 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
 
     send_event( g_state.local_event_port );
     */
-    
+
 ErrorExit:
     return err;
 }
 
 int
-xe_comms_heartbeat()
+xe_comms_get_sock_params( OUT char * SockParams )
 {
-    int heartbeat = 0;
-    int err = 0;
-    char path[XENEVENT_PATH_STR_LEN] = {0};
+    int rc = 0;
+    static bool init = false;
+    static char sock_path[XENEVENT_PATH_STR_LEN] = {0};
+    char * params = NULL;
 
-    bmk_snprintf( path, 
-             sizeof( path ),
-             "%s/%d/%s",
-             XENEVENT_XENSTORE_ROOT,
-             g_state.localId,
-             HEARTBEAT_KEY );
-
-    err = xe_comms_read_int_from_key( path, &heartbeat );
-    if( 0 != err )
+    if ( !init )
     {
-        DEBUG_PRINT( "Failed to read heartbeat from xenstore" );
+        // Just create these the first time
+        init = true;
+        bmk_snprintf( sock_path, sizeof( sock_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_SOCKET_PARAMS_KEY );
+    }
+
+    memset( SockParams, 0, INS_SOCK_PARAMS_MAX_LEN );
+
+    rc = xe_comms_read_str_from_key( sock_path, &params );
+    if ( rc )
+    {
         goto ErrorExit;
     }
 
-    heartbeat++;
+    bmk_strncpy( SockParams, params, INS_SOCK_PARAMS_MAX_LEN-1 );
 
-    err = xe_comms_write_int_to_key( path, heartbeat );
-    if( 0 != err )
+ErrorExit:
+    if ( params )
+    {
+        bmk_memfree( params, BMK_MEMWHO_WIREDBMK );
+    }
+    return rc;
+}
+
+
+
+int
+xe_comms_heartbeat( const char * NetworkStats )
+{
+    static int heartbeat = 0;
+    int err = 0;
+    static char heartbeat_path[XENEVENT_PATH_STR_LEN] = {0};
+    static char stats_path[XENEVENT_PATH_STR_LEN] = {0};
+
+    if ( 0 == heartbeat )
+    {
+        // Just create these the first time
+        bmk_snprintf( heartbeat_path, sizeof( heartbeat_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_HEARTBEAT_KEY );
+
+        bmk_snprintf( stats_path, sizeof( stats_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_NETWORK_STATS_KEY );
+    }
+
+    err = xe_comms_write_int_to_key( heartbeat_path, heartbeat );
+    if ( 0 != err )
     {
         DEBUG_PRINT( "Failed to write updated heartbeat to xenstore" );
         goto ErrorExit;
     }
 
+    ++heartbeat;
+
+    MYASSERT( bmk_strlen(NetworkStats) > 0 );
+    err = xe_comms_write_str_to_key( stats_path, NetworkStats );
+    if ( err )
+    {
+        DEBUG_PRINT( "Failed to write network stats to xenstore" );
+        goto ErrorExit;
+    }
+
 ErrorExit:
     return err;
 }
 
 
 int
-xe_comms_get_domid()
+xe_comms_listeners( const char * Listeners )
+{
+    static bool listener_path_init = false;
+    int err = 0;
+    static char listener_path[XENEVENT_PATH_STR_LEN] = {0};
+
+    if ( !listener_path_init )
+    {
+        // Just create path the first time
+        listener_path_init = true;
+
+        bmk_snprintf( listener_path, sizeof( listener_path ),
+                      INS_XENSTORE_DIR_FMT "/%s",
+                      XENEVENT_XENSTORE_ROOT,
+                      g_state.local_id,
+                      INS_LISTENER_KEY );
+    }
+
+    MYASSERT( bmk_strlen(Listeners) > 0 );
+    err = xe_comms_write_str_to_key( listener_path, Listeners );
+    if ( err )
+    {
+        DEBUG_PRINT( "Failed to write listener info to xenstore" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+
+
+int
+xe_comms_get_domid( void )
 {
     int rc = 0;
     int ret = 0;
 
     rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, &ret );
-    if( rc )
+    if ( rc )
     {
-        //if rc is anything but 0, return the value
         ret = rc;
     }
 
     return ret;
 }
 
-////////////////////////////////////////////////////
-//
-// xe_comms_init
-//
-// Initializes the channel to Xen. This means we wait on the remote
-// (the "server") ID and grant reference to appear.
-//
+
+/**
+ * @brief Initializes the comms subsystem upon driver load
+ */
 int
-xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
+xe_comms_init( void )
+{
+    int rc = 0;
+
+    rc = xenevent_semaphore_init( &g_state.messages_available );
+    if ( 0 != rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Read our own dom ID
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &g_state.local_id );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+/**
+ * @brief Registers this INS instance with the PVM driver.
+ *
+ * This must not be invoked until the user-mode component has loaded.
+ * Initializes the channel to Xen. This means we wait on the remote
+ * (the "server") ID and grant reference to appear.
+ */
+int
+xe_comms_register( void )
 {
     int             rc = 0;
     domid_t         remoteId = 0;
@@ -699,33 +841,20 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
-    bmk_memset( &g_state, 0, sizeof(g_state) );
-
-    rc = xenevent_semaphore_init( &g_state.messages_available );
-    if ( 0 != rc )
-    {
-        goto ErrorExit;
-    }
-    
     //
     // Begin init protocol
     //
 
-    // Read our own dom ID
-    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, (int *) &g_state.localId );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
+    MYASSERT( g_state.local_id > 0 );
 
     // Write our dom ID to agreed-upon path
     bmk_snprintf( path, 
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              CLIENT_ID_KEY );
-    rc = xe_comms_write_int_to_key( path, g_state.localId );
+                  sizeof( path ),
+                  INS_XENSTORE_DIR_FMT "/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  INS_ID_KEY );
+    rc = xe_comms_write_int_to_key( path, g_state.local_id );
     if ( rc )
     {
         goto ErrorExit;
@@ -753,11 +882,11 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     // Get the event port and bind to it
     bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              VM_EVT_CHN_PORT_KEY );
+                  sizeof( path ),
+                  INS_XENSTORE_DIR_FMT "/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  VM_EVT_CHN_PORT_KEY );
               
     rc = xe_comms_wait_and_read_int_from_key( path,
                                               &vm_evt_chn_prt_nmbr );
@@ -771,21 +900,21 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
     {
         goto ErrorExit;
     }
-
-    //Initialize heartbeat
+/*
+    // Initialize heartbeat
     bmk_snprintf( path,
-              sizeof( path ),
-              "%s/%d/%s",
-              XENEVENT_XENSTORE_ROOT,
-              g_state.localId,
-              HEARTBEAT_KEY );
+                  sizeof( path ),
+                  "%s/%d/%s",
+                  XENEVENT_XENSTORE_ROOT,
+                  g_state.local_id,
+                  INS_HEARTBEAT_KEY );
 
     rc = xe_comms_write_int_to_key( path, 0 );
     if( 0 != rc )
     {
         goto ErrorExit;
     }
-
+*/
     // The grant has been accepted. We can use shared memory for the
     // ring buffer now. We're the back end, so we only perform the back init.
     BACK_RING_INIT( &g_state.back_ring,
@@ -813,19 +942,19 @@ xe_comms_fini( void )
 
     xenevent_semaphore_destroy( &g_state.messages_available );
 
-    if (g_state.event_channel_mem)
+    if ( g_state.event_channel_mem )
     {
-        bmk_memfree(g_state.event_channel_mem, BMK_MEMWHO_WIREDBMK);
+        bmk_pgfree( g_state.event_channel_mem, INS_EVENT_CHANNEL_MEM_ORDER );
     }
 
     gntmap_fini( &g_state.gntmap_map );
 
-    //Cleanup entries in xenstore
+    // Cleanup entries in xenstore
     bmk_snprintf( path,
                   sizeof( path ),
-                  "%s/%d",
+                  INS_XENSTORE_DIR_FMT,
                   XENEVENT_XENSTORE_ROOT,
-                  g_state.localId );
+                  g_state.local_id );
     xe_comms_remove_directory( path );
 
     DEBUG_PRINT( "Cleaning up xenstore path: %s\n", path );

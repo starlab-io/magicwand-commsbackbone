@@ -13,6 +13,11 @@
  *          network calls.
  */
 
+#define _GNU_SOURCE // dladdr()
+#include <dlfcn.h>
+#include <elf.h>
+#include <link.h> // ^^^ for introspection
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -29,7 +34,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-#include <dlfcn.h>
+
 #include <pthread.h>
 #include <signal.h>
 
@@ -54,7 +59,8 @@
 
 
 //
-// Which send() implementation should we use?
+// Which send() implementation should we use? This choice has big
+// implications for performance.
 //
 
 //#define SEND_ALLSYNC
@@ -167,6 +173,8 @@ get_libc_symbol( void ** Addr, const char * Symbol )
         DEBUG_PRINT( "Failure: %s\n", dlerror() );
     }
 
+    DEBUG_PRINT( "libc: %s ==> %p\n", Symbol, *Addr );
+
     return *Addr;
 }
 
@@ -202,8 +210,8 @@ ErrorExit:
 
 
 static int
-mwcomms_write_request( IN  int         MwFd,
-                       IN  bool        ReadResponse,
+mwcomms_write_request( IN  int                     MwFd,
+                       IN  bool                    ReadResponse,
                        IN  mt_request_generic_t  * Request,
                        OUT mt_response_generic_t * Response )
 {
@@ -454,7 +462,7 @@ close( int Fd )
 int
 bind( int                     SockFd,
       const struct sockaddr * SockAddr, 
-      socklen_t                AddrLen )
+      socklen_t               AddrLen )
 {
     mt_request_generic_t   request;
     mt_response_generic_t  response = {0};
@@ -536,9 +544,9 @@ ErrorExit:
 
 
 int
-accept( int SockFd, 
+accept( int               SockFd,
         struct sockaddr * SockAddr, 
-        socklen_t * SockLen)
+        socklen_t       * SockLen)
 {
     mt_request_generic_t  request;
     mt_response_generic_t response = {0};
@@ -592,10 +600,10 @@ accept4( int               SockFd,
 
 
 ssize_t
-recvfrom( int    SockFd,
-          void * Buf,
-          size_t Len,
-          int    Flags,
+recvfrom( int               SockFd,
+          void            * Buf,
+          size_t            Len,
+          int               Flags,
           struct sockaddr * SrcAddr,
           socklen_t       * AddrLen )
 {
@@ -617,6 +625,7 @@ recvfrom( int    SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "recvfrom(%d, buf, %d, %d, ... )\n", SockFd, (int)Len, Flags );
     mwcomms_init_request( &request,
                           MtRequestSocketRecv,
                           MT_REQUEST_SOCKET_RECV_SIZE,
@@ -633,8 +642,8 @@ recvfrom( int    SockFd,
         received = &response.socket_recvfrom.count;
     }
 
-    //DEBUG_PRINT( "Receiving %d bytes\n",
-    //request.socket_recv.requested );
+    DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
+
     rc = (ssize_t)mwcomms_write_request( SockFd, true, &request, &response );
     err = errno;
     if ( rc )
@@ -779,9 +788,9 @@ ErrorExit:
 
 
 int 
-connect( int SockFd, 
+connect( int                     SockFd, 
          const struct sockaddr * Addr,
-         socklen_t AddrLen )
+         socklen_t               AddrLen )
 {
    mt_request_generic_t request;
    mt_response_generic_t response = {0};
@@ -1096,6 +1105,8 @@ send( int          SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "send( %d, buf, %d, %x )\n", SockFd, (int)Len, Flags );
+
     mwcomms_init_request( &request,
                           MtRequestSocketSend,
                           MT_REQUEST_SOCKET_SEND_SIZE,
@@ -1216,6 +1227,8 @@ shutdown( int SockFd, int How )
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "shutdown( %d, %d )\n", SockFd, How );
+
     mwcomms_init_request( &request,
                           MtRequestSocketShutdown,
                           MT_REQUEST_SOCKET_SHUTDOWN_SIZE,
@@ -1297,11 +1310,11 @@ mwcomms_set_sockattr( IN int Level,
 
 
 int
-getsockopt( int Fd,
-            int Level,
-            int OptName,
-            void * OptVal,
-            socklen_t  *OptLen )
+getsockopt( int         Fd,
+            int         Level,
+            int         OptName,
+            void      * OptVal,
+            socklen_t * OptLen )
 {
     int rc = 0;
     int err = 0;
@@ -1346,11 +1359,11 @@ ErrorExit:
 
 
 int
-setsockopt( int Fd,
-            int Level,
-            int OptName,
+setsockopt( int          Fd,
+            int          Level,
+            int          OptName,
             const void * OptVal,
-            socklen_t OptLen )
+            socklen_t    OptLen )
 {
     int rc = 0;
     mwsocket_attrib_t attrib = {0};
@@ -1393,7 +1406,7 @@ ErrorExit:
 
 
 int
-getsockname(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
+getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
 {
     int rc = 0;
     mt_request_generic_t request = {0};
@@ -1566,45 +1579,96 @@ ErrorExit:
     return rc;
 }
 
+
+#ifdef WRAP_CHECK_FUNCTIONS
+
+//
+// Set up function aliases here for reason stated in the Makefile. The
+// signature doesn't matter; we're instructing the loader to redirect
+// one function call to another. Since only socket-related calls are
+// intercepted, just a few functions are aliased.
+//
+
+void __read_chk(void)     __attribute__((weak, alias ("read")     ));
+void __recv_chk(void)     __attribute__((weak, alias ("recv")     ));
+void __recvfrom_chk(void) __attribute__((weak, alias ("recvfrom") ));
+
+#endif // WRAP_CHECK_FUNCTIONS
+
+
+#ifdef DEBUG
+static int
+dl_callback(struct dl_phdr_info * Info,
+            size_t                Size,
+            void                * Data)
+{
+    char buf[64];
+
+    snprintf( buf, sizeof(buf), "%s => %p\n",
+              Info->dlpi_name,
+              (void *) Info->dlpi_addr );
+
+    (void) fwrite( buf, strlen(buf), 1, stdout );
+
+    for (int j = 0; j < Info->dlpi_phnum; j++)
+    {
+        printf( "\t header %2d: address=%16p size=%6lx fl=%lx\n",
+                j,
+                (void *) (Info->dlpi_addr + Info->dlpi_phdr[j].p_vaddr),
+                (unsigned long) Info->dlpi_phdr[j].p_memsz,
+                (unsigned long) Info->dlpi_phdr[j].p_flags );
+    }
+
+    return 0;
+}
+#endif // DEBUG
+
+
 void __attribute__((constructor))
 init_wrapper( void )
 {
-
     //
-    //Prepare the log file for writing
+    // Prepare the log file for writing
     // 
     char shim_log[32] = {0};
 
-    snprintf( shim_log,
-              32,
-              "%s/ins_%d.log",
-              SHIM_LOG_PATH,
-              getpid() );
-    
+    snprintf( shim_log, sizeof(shim_log),
+              "%s/ins_%d.log", SHIM_LOG_PATH, getpid() );
+
     g_log_file = fopen( shim_log, "w" );
     if ( NULL == g_log_file )
     {
-        perror( "fopen" );
+        fprintf( stderr, "Failed to open log file %s: %s\n",
+                 shim_log, strerror( errno ) );
         exit(1);
     }
-    
-    DEBUG_PRINT("Intercept module loaded\n");
 
+    DEBUG_PRINT( "Intercept module loaded\n" );
+
+    //
+    // Open the kernel module's device (mwcomms)
+    //
 #if (!USE_MWCOMMS)
     devfd = -1;
 #else
-    devfd = open( DEV_FILE, O_RDWR);
+    devfd = open( DEV_FILE, O_RDWR );
     if (devfd < 0)
     {
-        perror("Failed to open the device...");
+        fprintf( stderr, "Failed to open device %s: %s\n",
+                 DEV_FILE, strerror( errno ) );
         exit(1);
     }
 #endif
 
+    //
+    // Find the TCP/IP functions in libc and save their
+    // locations. This module hooks them and forwards their uses in
+    // some cases.
+    //
     g_dlh_libc = dlopen( "libc.so.6", RTLD_NOW );
     if ( NULL == g_dlh_libc )
     {
-        DEBUG_PRINT("Failure: %s\n", dlerror() );
+        DEBUG_PRINT( "Failure: %s\n", dlerror() );
         exit(1);
     }
 
@@ -1633,6 +1697,14 @@ init_wrapper( void )
     get_libc_symbol( (void **) &libc_getpeername, "getpeername" );
 
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
+
+#ifdef DEBUG
+    //
+    // XXXX: Linux-only function
+    //
+    dl_iterate_phdr(dl_callback, NULL);
+#endif // DEBUG
+
 }
 
 
@@ -1651,10 +1723,10 @@ fini_wrapper( void )
         libc_close( devfd );
     }
 
-    if( NULL != g_log_file )
+    if ( NULL != g_log_file )
     {
         fclose( g_log_file );
     }
 
-    DEBUG_PRINT("Intercept module unloaded\n");
+    DEBUG_PRINT( "Intercept module unloaded\n" );
 }

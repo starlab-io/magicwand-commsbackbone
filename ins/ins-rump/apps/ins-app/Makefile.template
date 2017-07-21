@@ -25,6 +25,9 @@ CFLAGS += -I../../rump-common
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
 
+# Experimental feature: breaks protected app
+CFLAGS += -DMODIFY_NETWORK_PARAMETERS=0
+
 BAKE=rumprun-bake
 BAKE_FLAGS=-c ../xenevents.conf xen_events
 

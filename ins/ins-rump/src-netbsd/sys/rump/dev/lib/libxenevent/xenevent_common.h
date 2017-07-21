@@ -27,6 +27,7 @@
 // #define BMK_ETIMEDOUT           60
 // #define BMK_ENOSYS              78
 
+typedef uint16_t domid_t;
 typedef uint32_t status_t;
 
 // These need to be defined for the below macros to work

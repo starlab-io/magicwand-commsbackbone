@@ -13,7 +13,7 @@
  * The XenStore keys that are managed are defined in xen_keystore_defs.h. They are
  *
  * SERVER_ID_KEY
- * CLIENT_ID_KEY
+ * INS_ID_KEY
  * GNT_REF_KEY
  * VM_EVT_CHN_PORT_KEY
  * VM_EVT_CHN_BOUND_KEY
@@ -21,10 +21,10 @@
  * The sequence of events is:
  *
  * 1. Write the current domU's domid to SERVER_ID_KEY
- * 2. Wait for the client domU's domid to appear in CLIENT_ID_KEY
+ * 2. Wait for the client domU's domid to appear in INS_ID_KEY
  * 3. Create an unbound event channel and write its port to VM_EVT_CHN_PORT_KEY
  * 4. Allocate memory and offer the client grants to it (1/page)
- * 5. Reset the value in CLIENT_ID_KEY
+ * 5. Reset the value in INS_ID_KEY
  * 6. Watch for VM_EVT_CHN_BOUND_KEY to be populated by the client
  * 7. Write the grant refs to GNT_REF_KEY
  * 8. Invoke the callback given in mw_xen_init.
@@ -464,7 +464,8 @@ mw_xen_write_grant_refs_to_key( mwcomms_ins_data_t *Ins )
     int rc = 0;
 
     // Must be large enough for one grant ref, in hex, plus '\0'
-    char one_ref[5];
+    // Make space for 12345678\0
+    char one_ref[ 8 + 1 ];
     
     // XXXX: If we make the shared memory region "really big", we may
     // have to get this memory via kmalloc()
@@ -916,7 +917,7 @@ mw_xenstore_state_changed( struct xenbus_watch *W,
 {
     pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
-    if ( strstr( V[ XS_WATCH_PATH ], CLIENT_ID_KEY ) )
+    if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
     {
         mw_xen_ins_found( V[ XS_WATCH_PATH ] );
         goto ErrorExit;

@@ -90,7 +90,10 @@ typedef struct _thread_item
     int            sock_type;
     int            sock_protocol;
 
-    mt_port_t      port_num;
+    //
+    // The port the socket is bound to; only populated by bind()
+    //
+    mt_port_t      bound_port_num;
 
     uint8_t        remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
 

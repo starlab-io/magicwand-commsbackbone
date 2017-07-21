@@ -56,15 +56,21 @@
 // INS constants
 #define XENEVENT_PATH_STR_LEN       32
 
-#define CLIENT_ID_KEY               "ins_dom_id" 
-
 #define GNT_REF_KEY                 "gnt_ref" 
-
 #define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
-
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
 
-#define HEARTBEAT_KEY               "heartbeat"
+#define INS_ID_KEY                   "ins_dom_id"
+#define INS_IP_ADDR_KEY              "ip_addrs"
+#define INS_HEARTBEAT_KEY            "heartbeat"
+
+#define INS_SOCKET_PARAMS_KEY        "sockopts"
+
+// Format of value: "socket_ct:bytes_recv:bytes_sent". All numbers are
+// base 16. See also ins-ioctls.h.
+#define INS_NETWORK_STATS_KEY        "network_stats"
+
+#define INS_LISTENER_KEY             "listening_ports"
 
 //This defines the index of the domid string once
 //a xenstore path has been returned and split with
