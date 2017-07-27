@@ -396,7 +396,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
-    mt_flags_t        flags; // flags from request
+    mt_flags_t         flags; // flags from request
     mt_sockaddr_in_t   sockaddr;
 } mt_response_socket_accept_t;
 

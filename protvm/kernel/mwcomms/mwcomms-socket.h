@@ -25,6 +25,8 @@
 
 #include <linux/list.h>
 
+#include <linux/netdevice.h>
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -33,23 +35,28 @@
 #include <xen/interface/io/ring.h>
 
 #include <mwcomms-ioctls.h>
+#include "mwcomms-common.h"
 #include "mwcomms-xen-iface.h"
 
+
 int
-mwsocket_init( mw_region_t * SharedMem );
+mwsocket_init( mw_region_t * SharedMem,
+               IN struct sockaddr * LocalIp );
+
 
 void
 mwsocket_notify_ring_ready( void );
+
 
 void
 mwsocket_fini( void );
 
 
 int
-mwsocket_create( OUT mwsocket_t  * SockFd,
-                  IN  int          Domain,
-                  IN  int          Type,
-                  IN  int          Protocol );
+mwsocket_create( OUT mwsocket_t * SockFd,
+                 IN  int          Domain,
+                 IN  int          Type,
+                 IN  int          Protocol );
 
 
 mw_xen_event_handler_cb_t mwsocket_event_cb;

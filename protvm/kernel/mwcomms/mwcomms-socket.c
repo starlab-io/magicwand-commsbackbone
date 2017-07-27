@@ -139,6 +139,7 @@
 #include <asm/cmpxchg.h>
 
 #include <message_types.h>
+#include <translate.h>
 #include <xen_keystore_defs.h>
 
 #include "mwcomms-backchannel.h"
@@ -271,8 +272,15 @@ typedef struct _mwsocket_instance
     int                  local_fd; 
     mw_socket_fd_t       remote_fd;
 
+    // Who is on the other end of the INS?
+    struct sockaddr      peer;
+
+    // Is this socket listening?
+    uint16_t             listen_port;
+    struct sockaddr      local_bind;
+
     // poll() support: the latest events on this socket
-    unsigned long       poll_events;
+    unsigned long        poll_events;
 
     // Our latest known value for the file->f_flags, used to track
     // changes. We don't monitor all the ways it could be changed.
@@ -408,7 +416,9 @@ typedef struct _mwsocket_globals
     struct completion    poll_monitor_done;
 
     // Support for poll(): to inform waiters of data
-    wait_queue_head_t   waitq;
+    wait_queue_head_t    waitq;
+
+    struct sockaddr    * local_ip;
     
     bool   pending_exit;
 } mwsocket_globals_t;
@@ -743,9 +753,12 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     *SockInst = sockinst;
     sockinst->local_fd = -1;
     sockinst->remote_fd = MT_INVALID_SOCKET_FD;
+    // For pretty printing prior to binding, etc, esp in netflow
+    sockinst->local_bind.sa_family = AF_INET;
+    sockinst->peer.sa_family       = AF_INET;
 
     init_rwsem( &sockinst->close_lock );
-    
+
     sockinst->proc = current;
     // refct starts at 1; an extra put() is done upon close()
     atomic_set( &sockinst->refct, 1 );
@@ -1180,6 +1193,15 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
                         ActiveRequest->sockinst->proc->pid );
         }
         break;
+    case MtRequestSocketBind:
+        // Assume IPv4
+        ActiveRequest->sockinst->local_bind.sa_family = AF_INET;
+        struct sockaddr_in * sa4 =
+            (struct sockaddr_in *)(&ActiveRequest->sockinst->local_bind);
+        //sa4->sin_addr = request->socket_bind.sockaddr.sin_addr;
+        sa4->sin_addr = ((struct sockaddr_in *) &g_mwsocket_state.local_ip)->sin_addr;
+        sa4->sin_port = request->socket_bind.sockaddr.sin_port;
+        break;
     default:
         break;
     }
@@ -1197,66 +1219,80 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     MYASSERT( ActiveRequest->sockinst );
     MYASSERT( Response );
 
+    char msg[128] = {0};
+    char detail[16] = {0};
+    struct timespec ts = {0};
+    bool drop = false;
+
     if ( !mw_backchannel_consumer_exists() )
     {
         goto ErrorExit;
     }
 
+    // Format the commmon info: timestamp and channel metadata
+    getnstimeofday( &ts );
+    snprintf( msg, sizeof(msg), // %pISc:%hu
+              "%lx.%lx %pISpc %pISpc %lx ",
+              ts.tv_sec, ts.tv_nsec,
+              &ActiveRequest->sockinst->local_bind,
+              &ActiveRequest->sockinst->peer,
+              (unsigned long)Response->base.sockfd );
+
     switch( Response->base.type )
     {
     case MtResponseSocketCreate:
-        mw_backchannel_write_msg( "%lx: created\n",
-                                  Response->base.sockfd );
+        strncat( msg, "created", sizeof(msg) );
         break;
     case MtResponseSocketShutdown:
     case MtResponseSocketClose:
-        mw_backchannel_write_msg( "%lx: shutdown/closed\n",
-                                  Response->base.sockfd );
+        strncat( msg, "shutdown/close", sizeof(msg) );
         break;
     case MtResponseSocketConnect:
-        mw_backchannel_write_msg( "%lx: connected\n",
-                                  Response->base.sockfd );
+        strncat( msg, "connnect", sizeof(msg) );
         break;
     case MtResponseSocketBind:
-        mw_backchannel_write_msg( "%lx: bound\n",
-                                  Response->base.sockfd );
-        break;
-    case MtResponseSocketAccept:
-        mw_backchannel_write_msg( "%lx: accepted from %pI4:%hu\n",
-                                  Response->base.sockfd,
-                                  &Response->socket_accept.sockaddr.sin_addr.s_addr,
-                                  Response->socket_accept.sockaddr.sin_port );
-        break;
-    case MtResponseSocketSend:
-        mw_backchannel_write_msg( "%lx: wrote %d bytes\n",
-                                  Response->base.sockfd,
-                                  Response->socket_send.count );
-        break;
-    case MtResponseSocketRecv:
-        mw_backchannel_write_msg( "%lx: received %d bytes\n",
-                                  Response->base.sockfd,
-                                  Response->socket_recv.count );
-        break;
-    case MtResponseSocketRecvFrom:
-        mw_backchannel_write_msg( "%lx: received %d bytes from %pI4:%hu\n",
-                                  Response->base.sockfd,
-                                  Response->socket_recvfrom.count,
-                                  Response->socket_recvfrom.src_addr.sin_addr.s_addr,
-                                  Response->socket_recvfrom.src_addr.sin_port );
+        strncat( msg, "bind", sizeof(msg) );
         break;
     case MtResponseSocketListen:
-        mw_backchannel_write_msg( "%lx: listening\n",
-                                  Response->base.sockfd );
+        strncat( msg, "listen", sizeof(msg) );
+        break;
+    case MtResponseSocketAccept:
+        strncat( msg, "accept", sizeof(msg) );
+        break;
+    case MtResponseSocketSend:
+        snprintf( detail, sizeof(detail),
+                  "send %d bytes",
+                  Response->socket_send.count );
+        strncat( msg, detail, sizeof(msg) );
+        break;
+    case MtResponseSocketRecv:
+        snprintf( detail, sizeof(detail),
+                  "recv %d bytes",
+                  Response->socket_recv.count );
+        strncat( msg, detail, sizeof(msg) );
+        break;
+    case MtResponseSocketRecvFrom:
+        snprintf( detail, sizeof(detail),
+                  "recvfrom %d bytes",
+                  Response->socket_recvfrom.count );
+        strncat( msg, detail, sizeof(msg) );
         break;
     case MtResponseSocketGetName:
     case MtResponseSocketGetPeer:
     case MtResponseSocketAttrib:
     case MtResponsePollsetQuery:
         // Ignored cases
+        drop = true;
         break;
     default:
+        drop = true;
         MYASSERT( !"Unhandled response" );
         break;
+    }
+
+    if ( !drop )
+    {
+        mw_backchannel_write_msg( msg );
     }
 
 ErrorExit:
@@ -1357,6 +1393,14 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                   Response->base.sockfd );
         ActiveRequest->sockinst->remote_fd = Response->base.sockfd;
         break;
+    case MtResponseSocketAccept:
+        ActiveRequest->sockinst->peer.sa_family =
+            xe_net_get_native_protocol_family( Response->socket_accept.sockaddr.sin_family );
+        struct sockaddr_in * sa4 =
+            (struct sockaddr_in *)(&ActiveRequest->sockinst->peer);
+        sa4->sin_addr = *(struct in_addr *) &Response->socket_accept.sockaddr.sin_addr;
+        sa4->sin_port = Response->socket_accept.sockaddr.sin_port;
+        break;
     default:
         break;
     }
@@ -1389,8 +1433,9 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         goto ErrorExit;
     }
 
-    // Populate the new sockinst's flags from the original request,
-    // which the INS carried over for us
+    // accept() has suuccessfully returned. Populate the new
+    // sockinst's flags from the original request, which the INS
+    // carried over for us
     rc = mwsocket_create_sockinst( &acceptinst,
                                    Response->socket_accept.flags,
                                    true );
@@ -1405,11 +1450,12 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         goto ErrorExit;
     }
 
+    // Copy the local bind info, so we know the bind point of this
+    // accepted socket
+    acceptinst->local_bind = ActiveRequest->sockinst->local_bind;
 
-    // The local creation succeeded. Update Response to reflect the
-    // local socket.
+    // Update Response to reflect the local socket.
     acceptinst->remote_fd = Response->base.sockfd;
-
     Response->base.sockfd
         = Response->base.status
         = acceptinst->local_fd;
@@ -2350,12 +2396,15 @@ ErrorExit:
  * Module-level init and fini function
  ******************************************************************************/
 int
-mwsocket_init( mw_region_t * SharedMem )
+mwsocket_init( mw_region_t * SharedMem,
+               IN struct sockaddr * LocalIp )
 {
     // Do everything we can, then wait for the ring to be ready
     int rc = 0;
 
     bzero( &g_mwsocket_state, sizeof(g_mwsocket_state) );
+
+    g_mwsocket_state.local_ip = LocalIp;
 
     mutex_init( &g_mwsocket_state.request_lock );
     mutex_init( &g_mwsocket_state.active_request_lock );
@@ -2369,7 +2418,7 @@ mwsocket_init( mw_region_t * SharedMem )
     INIT_LIST_HEAD( &g_mwsocket_state.active_request_list );
     INIT_LIST_HEAD( &g_mwsocket_state.sockinst_list );
     init_waitqueue_head( &g_mwsocket_state.waitq );
-    
+
     gfn_new_inode_pseudo = (pfn_new_inode_pseudo_t *)
         kallsyms_lookup_name( "new_inode_pseudo" );
     gfn_dynamic_dname = (pfn_dynamic_dname_t *)
@@ -2382,7 +2431,7 @@ mwsocket_init( mw_region_t * SharedMem )
         rc = -ENXIO;
         goto ErrorExit;
     }
-    
+
     rc = mwsocket_fs_init();
     if ( rc ) goto ErrorExit;
 
@@ -2414,7 +2463,7 @@ mwsocket_init( mw_region_t * SharedMem )
     g_mwsocket_state.response_reader_thread =
         kthread_run( &mwsocket_response_consumer,
                      NULL,
-                     "MwMsgConsumer" );
+                     "mw_msg_consumer" );
     if ( NULL == g_mwsocket_state.response_reader_thread )
     {
         MYASSERT( !"kthread_run() failed\n" );
@@ -2426,7 +2475,7 @@ mwsocket_init( mw_region_t * SharedMem )
     g_mwsocket_state.poll_monitor_thread =
         kthread_run( &mwsocket_poll_monitor,
                      NULL,
-                     "MwPollMonitor" );
+                     "mw_poll_monitor" );
     if ( NULL == g_mwsocket_state.poll_monitor_thread )
     {
         MYASSERT( !"kthread_run() failed\n" );

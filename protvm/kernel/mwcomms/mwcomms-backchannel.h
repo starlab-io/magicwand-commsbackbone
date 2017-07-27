@@ -12,9 +12,10 @@
 #ifndef mwcomms_backchannel_h
 #define mwcomms_backchannel_h
 
+#include <linux/in.h>
 
 int
-mw_backchannel_init( void );
+mw_backchannel_init( IN struct sockaddr * LocalIp );
 
 
 void

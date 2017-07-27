@@ -5,9 +5,6 @@
 #include <net/sock.h>
 #include <net/inet_sock.h>
 
-#include <linux/netdevice.h>
-#include <linux/inetdevice.h>
-
 #include <linux/socket.h>
 #include <linux/in.h>
 #include <linux/list.h>
@@ -48,7 +45,8 @@ typedef struct _mwcomms_backchannel_state
     struct rw_semaphore       conn_list_lock;
     atomic_t                  active_conns; // active connections
     atomic_t                  conn_ct;      // count; monotonically increases
-    
+
+    struct sockaddr         * local_ip;
     uint16_t                  listen_port;
     struct socket *           listen_sock;
     struct poll_table_struct  poll_tbl;
@@ -375,64 +373,13 @@ ErrorExit:
 
 
 static int
-mw_backchannel_find_extern_ip( OUT struct sockaddr_in * Addr )
-{
-    int rc = -ENOENT;
-    bool found = false;
-    MYASSERT( Addr );
-
-    Addr->sin_addr.s_addr = 0;
-
-    read_lock(&dev_base_lock);
-
-    struct net_device *dev = first_net_device( &init_net );
-    while( NULL != dev )
-    {
-        if ( 0 != strcmp( dev->name, EXT_IFACE ) )
-        {
-            dev = next_net_device( dev );
-            continue;
-        }
-
-        struct in_device * indev = dev->ip_ptr;
-        struct in_ifaddr * ifa = NULL;
-        for ( ifa = indev->ifa_list; NULL != ifa; ifa = ifa->ifa_next )
-        {
-            pr_info( "Found address %pI4 on interface %s\n",
-                     &ifa->ifa_address, dev->name );
-            if ( found )
-            {
-                MYASSERT( !"External interface has multiple addresses" );
-                rc = -EADDRINUSE;
-                goto ErrorExit;
-            }
-
-            found = true;
-            rc = 0;
-            Addr->sin_addr.s_addr = ifa->ifa_address;
-        }
-        dev = next_net_device( dev );
-    } // while
-
-    read_unlock(&dev_base_lock);
-
-ErrorExit:
-    return rc;
-}
-
-
-static int
 mw_backchannel_init_listen_port( void )
 {
     int rc = 0;
     uint16_t port = 0;
     char listenstr[32] = {0};
     struct sockaddr_in addr = {0};
-    struct sockaddr_in extaddr = {0};
     int addrlen = sizeof(struct sockaddr_in);
-
-    rc = mw_backchannel_find_extern_ip( &extaddr );
-    if ( rc ) { goto ErrorExit; }
 
     rc = sock_create( AF_INET,
                       SOCK_STREAM,
@@ -487,8 +434,23 @@ mw_backchannel_init_listen_port( void )
         goto ErrorExit;
     }
 
-    (void) snprintf( listenstr, sizeof(listenstr),
-                     "%pI4:%hu", &extaddr.sin_addr, port );
+    //
+    // Policy: if we couldn't discover our (singular) IP address, we
+    // succeed in loading the driver but put an error string in
+    // XenStore
+    //
+    if ( g_mwbc_state.local_ip->sa_family != AF_INET &&
+         g_mwbc_state.local_ip->sa_family != AF_INET6 )
+    {
+        MYASSERT( !"No local IP address was found" );
+        (void) snprintf( listenstr, sizeof(listenstr),
+                         "PVM's IP not found!" );
+    }
+    else
+    {
+        (void) snprintf( listenstr, sizeof(listenstr),
+                         "%pISc:%hu", g_mwbc_state.local_ip, port );
+    }
     pr_info( "Listening on %s\n", listenstr );
 
     // Make this a non-blocking socket
@@ -646,14 +608,15 @@ ErrorExit:
 
 
 int
-mw_backchannel_init( void )
+mw_backchannel_init( struct sockaddr * LocalIp )
 {
     int rc = 0;
 
     bzero( &g_mwbc_state, sizeof(g_mwbc_state) );
 
     g_mwbc_state.initialized = true;
-    
+    g_mwbc_state.local_ip = LocalIp;
+
     INIT_LIST_HEAD( &g_mwbc_state.conn_list );
     init_completion( &g_mwbc_state.listen_thread_done );
     init_rwsem( &g_mwbc_state.conn_list_lock );

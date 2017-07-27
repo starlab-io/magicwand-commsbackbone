@@ -64,5 +64,4 @@ char *
 mw_xen_read_from_key( const char * Dir, const char * Node );
 
 
-
 #endif // mwcomms_xen_iface_h
