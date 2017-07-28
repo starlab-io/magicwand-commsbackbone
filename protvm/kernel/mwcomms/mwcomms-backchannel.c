@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #include "mwcomms-common.h"
 
 #include "mwcomms-backchannel.h"
@@ -14,6 +20,8 @@
 
 #include <xen_keystore_defs.h>
 #include "mwcomms-xen-iface.h"
+
+#include <mw_netflow_iface.h>
 
 // In rundown, how long to wait for listener thread to die?
 #define LISTENER_KILL_TIMEOUT (HZ * 2) // X seconds
