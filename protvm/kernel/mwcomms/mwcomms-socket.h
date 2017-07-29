@@ -62,8 +62,33 @@ mwsocket_create( OUT mwsocket_t * SockFd,
 mw_xen_event_handler_cb_t mwsocket_event_cb;
 
 
-// @brief Returns whether the given file descriptor is backed by an MW socket.
+/**
+ * @brief Returns whether the given file descriptor is backed by an MW socket.
+ */
 bool
 mwsocket_verify( const struct file * File );
+
+
+/**
+ * @brief Closes socket by remote file descriptor.
+ *
+ * Does not close local descriptor. The using process will incur an
+ * error and/or SIGPIPE upon the next usage. The local resources won't
+ * be released until the local FD is closed locally, either by the
+ * process or the kernel.
+ */
+int
+mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd );
+
+
+/**
+ * @brief Sends given signal to owner of given remote file descriptor.
+ *
+ * Finds owner of RemoteFd and signals it with SignalNum.
+ */
+int
+mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
+                                    IN int            SignalNum );
+
 
 #endif // mwcomms_socket_h

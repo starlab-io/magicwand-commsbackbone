@@ -579,13 +579,21 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 //
 typedef enum
 {
-    MtSockAttribNone,
+    MtSockAttribNone = 0,
     MtSockAttribNonblock,
     MtSockAttribReuseaddr,
     MtSockAttribReuseport,
     MtSockAttribKeepalive,
     MtSockAttribDeferAccept,
     MtSockAttribNodelay,
+    // XXXX: implement the following
+    MtSockAttribSendBuf,
+    MtSockAttribRecvBuf,
+    MtSockAttribSendTimo,
+    MtSockAttribRecvTimo,
+    // INS-wide settings
+    MtSockAttribGlobalCongctl,
+    MtSockAttribGlobalDelackTicks,
 } mt_socket_attrib_t;
 
 

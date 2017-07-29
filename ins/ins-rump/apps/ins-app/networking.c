@@ -47,8 +47,8 @@
 #include "translate.h"
 #include "mwerrno.h"
 #include "ins-ioctls.h"
-
 #include "pollset.h"
+#include <mw_netflow_iface.h>
 
 #define XE_NET_NETWORK_PARAM_WIDTH 30
 

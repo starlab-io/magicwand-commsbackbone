@@ -18,6 +18,7 @@ CFLAGS += -ggdb
 
 CFLAGS += -I..
 CFLAGS += -I../../../../common
+CFLAGS += -I../../../../exports/imports
 CFLAGS += -I../platform/xen/xen/include 
 CFLAGS += -I../../rump-common
 

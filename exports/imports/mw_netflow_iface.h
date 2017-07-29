@@ -1,10 +1,10 @@
-/*************************************************************************
-* STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
-* Unauthorized copying of this file, via any medium is strictly prohibited.
-***************************************************************************/
+/**************************************************************************
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2016, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ *************************************************************************/
 
-/******************************************************************************
+/**************************************************************************
  * This file describes data that traverses the netflow channel. It
  * defines the message types that can be used on that channel and
  * constitutes an agreement between the MagicWand PVM/INS and the
@@ -33,12 +33,11 @@
  *    socket, and the PVM issues a response back. For instance, the
  *    engine requests a socket's receive buffer size, the PVM finds
  *    that info and responds with it to the engine.
- *****************************************************************************/
+ ************************************************************************/
 
 /**
  * Base info for netflow interface. The signature determines the type
- * of message. General classes of messages are:
- *
+ * of message (described above).
  */
 typedef uint16_t mw_netflow_sig_t;
 typedef uint32_t mw_message_id_t;
@@ -66,6 +65,8 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 // #define INET6_ADDRSTRLEN	(48)
 //
 // So an IPv6:port pair is '[' + 48 bytes + ']:' + 5 bytes = 56 bytes
+//
+// XXXX: How much of this should be binary vs ASCII?
 
 #define NETFLOW_INFO_MSG_LEN ( 2 * 56 + 30 )
 
@@ -90,7 +91,6 @@ typedef struct _mw_netflow_base
     mw_netflow_sig_t sig;
     mw_message_id_t  id;
 } mw_base_t;
-
 
 
 /**

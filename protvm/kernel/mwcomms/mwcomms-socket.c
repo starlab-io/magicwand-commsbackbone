@@ -871,7 +871,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     if ( SockInst->remote_close_requested )
     {
         pr_info( "Socket %x/%d was already closed on the INS. "
-                  "Not requesting a remote close.\n",
+                  "Not requesting another remote close.\n",
                   SockInst->remote_fd, SockInst->local_fd );
         goto ErrorExit;
     }
@@ -2353,8 +2353,8 @@ mwsocket_poll( struct file * File,
 
 
 static int
-mwsocket_release( struct inode *Inode,
-                  struct file * File )
+mwsocket_release( struct inode * Inode,
+                  struct file  * File )
 {
     int rc = 0;
     mwsocket_instance_t * sockinst = NULL;
