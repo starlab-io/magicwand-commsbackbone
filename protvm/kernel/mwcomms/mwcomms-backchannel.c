@@ -412,6 +412,7 @@ mw_backchannel_init_listen_port( void )
 
     if ( sk->sk_prot->get_port( sk, 0 ) )
     {
+        MYASSERT( !"get_port" );
         release_sock( sk );
         rc = -EAGAIN;
         goto ErrorExit;
@@ -460,6 +461,8 @@ mw_backchannel_init_listen_port( void )
                          "%pISc:%hu", g_mwbc_state.local_ip, port );
     }
     pr_info( "Listening on %s\n", listenstr );
+
+    pr_info( "Netflow channel listening on %s\n", listenstr );
 
     // Make this a non-blocking socket
     //mw_backchannel_nonblock( g_mwbc_state.listen_sock );

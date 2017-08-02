@@ -8,16 +8,18 @@
 ## located).
 ##
 
+script_dir=$(readlink -f "${BASH_SOURCE[0]}")
+rump_dir=$(dirname "$actual_path")
 
 # Are we in the right directory?
+echo "Assuming that Rump is in $rump_dir"
 
-RUMP_DIR=$PWD
-
-TEST_DIR=$RUMP_DIR/buildrump.sh
-if ! [ -d $TEST_DIR ]; then
+test_file=$rump_dir/buildrump.sh
+if ! [ -d $test_file ]; then
     echo "********************************"
-    echo "FAILURE: couldn't find $TEST_DIR!"
+    echo "FAILURE: couldn't find $test_file!"
     echo "********************************"
+    return
 fi
 
 # Remove all PATH entries that contain 'rumprun'
@@ -26,10 +28,7 @@ newpath=
 for d in `echo $PATH | sed -e "s/:/ /g"`; do
     if [ -d $bindir ]; then
         if ! echo $d | /bin/grep -q rump; then
-            #echo "$d does not contain rump"
             newpath=$d:$newpath
-        #else
-        #    echo "$d does contain rump"
         fi
     fi
 done
@@ -44,7 +43,7 @@ setgitbranch() {
         if [ ${GITBRANCH} = "master" -o ${GITBRANCH} = "HEAD" ]; then
             GITBRANCH=
         else
-            echo "Detected git branch $GITBRANCH"
+            echo "Detected git branch \"$GITBRANCH\""
             GITBRANCH=-${GITBRANCH}
         fi
     else
@@ -55,10 +54,10 @@ setgitbranch() {
 setgitbranch
 
 # Now, update the PATH to include the needed subdirectories here
-export PATH=$PWD/rumprun$GITBRANCH/bin:$PWD/obj-amd64-xen$GITBRANCH/rumptools/bin:$newpath
+export PATH=$rump_dir/rumprun$GITBRANCH/bin:$rump_dir/obj-amd64-xen$GITBRANCH/rumptools/bin:$newpath
 echo "New path: $PATH"
 
-export RUMPROOT=$PWD
+export RUMPROOT=$rump_dir
 export RUMPRUN_WARNING_STFU=please
 
 ##
@@ -66,6 +65,7 @@ export RUMPRUN_WARNING_STFU=please
 ## functions help use it the "correct" way, so far as I can tell.
 ##
 
+echo "Standard build with: build-rr.sh xen"
 dbgbuildrump() {
     echo "Building rump; build log is build.log"
     ./build-rr.sh xen -- -F DBG=-ggdb > build.log
