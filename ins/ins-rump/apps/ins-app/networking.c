@@ -205,13 +205,19 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     MYASSERT( SOCK_STREAM == native_type );
 
     Response->base.status = 0;
+
+    do
+    {
+        sockfd = socket( native_fam,
+                         native_type,
+                         native_proto );
+        // XXXX: handle occasional error from socket()
+    } while ( sockfd < 0 && ENOBUFS == errno );
     
-    sockfd = socket( native_fam,
-                     native_type,
-                     native_proto );
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"socket" );
     }
     else
     {

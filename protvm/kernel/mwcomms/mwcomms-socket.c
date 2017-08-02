@@ -189,7 +189,6 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 #define RING_FULL_TIMEOUT (HZ >> 6)
 
 // Poll-related messages are annoying, usually....
-
 #define POLL_DEBUG_MESSAGES 0
 
 #if POLL_DEBUG_MESSAGES
@@ -300,6 +299,10 @@ typedef struct _mwsocket_instance
     // Error encountered on INS that has not (yet) been delivered to
     // caller. Supports fire-and-forget model.
     int                 pending_errno;
+
+    // Session stats for netflow
+    uint64_t            tot_sent;
+    uint64_t            tot_recv;
 
     // How many active requests are using this mwsocket? N.B. due to
     // the way release() is implemented on the INS, it is not valid to
@@ -1296,6 +1299,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
 
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
                               OUT mw_endpoint_t *  Endpoint )
 {
@@ -1326,6 +1330,7 @@ mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
 
 
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
                            OUT mw_netflow_info_t        * Netflow )
 {
@@ -1337,19 +1342,22 @@ mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
     bzero( Netflow, sizeof( *Netflow ) );
 
     getnstimeofday( &ts );
+
     Netflow->sig      = __cpu_to_be16( MW_MESSAGE_SIG_NETFLOW_INFO );
     Netflow->sockfd   = __cpu_to_be32( ActiveRequest->sockinst->remote_fd );
 
     Netflow->ts_curr.sec  = __cpu_to_be64( ts.tv_sec );
     Netflow->ts_curr.ns   = __cpu_to_be64( ts.tv_nsec );
 
-    // Populate PVM IP
+    // Populate PVM IP: bugs -- IPs/ports are 0, sockfd -1
     mwsocket_populate_netflow_ip( &ActiveRequest->sockinst->local_bind,
                                   &Netflow->pvm );
     mwsocket_populate_netflow_ip( &ActiveRequest->sockinst->peer,
                                   &Netflow->remote );
 
     // XXXX: not all data populated. fix this!
+    Netflow->bytes_in  = __cpu_to_be64( ActiveRequest->sockinst->tot_recv );
+    Netflow->bytes_out = __cpu_to_be64( ActiveRequest->sockinst->tot_sent );
 }
 
 
@@ -1369,8 +1377,6 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     {
         goto ErrorExit;
     }
-
-    mwsocket_populate_netflow( ActiveRequest, &nf );
 
     switch( Response->base.type )
     {
@@ -1411,6 +1417,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
 
     if ( drop ) { goto ErrorExit; }
 
+    mwsocket_populate_netflow( ActiveRequest, &nf );
     mw_backchannel_write( &nf, sizeof(nf) );
 
 ErrorExit:
@@ -1519,6 +1526,15 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
             (struct sockaddr_in *)(&ActiveRequest->sockinst->peer);
         sa4->sin_addr = *(struct in_addr *) &Response->socket_accept.sockaddr.sin_addr;
         sa4->sin_port = Response->socket_accept.sockaddr.sin_port;
+        break;
+    case MtResponseSocketSend:
+        ActiveRequest->sockinst->tot_sent += Response->socket_send.count;
+        break;
+    case MtResponseSocketRecv:
+        ActiveRequest->sockinst->tot_recv += Response->socket_recv.count;
+        break;
+    case MtResponseSocketRecvFrom:
+        ActiveRequest->sockinst->tot_recv += Response->socket_recvfrom.count;
         break;
     default:
         break;
@@ -1851,9 +1867,9 @@ mwsocket_response_consumer( void * Arg )
         //
         // The active request has been found.
         //
-        mwsocket_postproc_emit_netflow( actreq, response );
-
         mwsocket_postproc_no_context( actreq, response );
+
+        mwsocket_postproc_emit_netflow( actreq, response );
 
         // Decide the fate of the request. It is either delivered to
         // the caller or destroyed, depending on the caller's request

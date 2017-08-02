@@ -209,6 +209,7 @@ mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mw_backchannel_write_one( IN mwcomms_backchannel_info_t * Channel,
                           IN void                       * Message,
                           IN size_t                       Len )
@@ -322,7 +323,6 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
 {
     int rc = 0;
     mwcomms_backchannel_info_t * backinfo = NULL;
-    char msg[80] = {0};
     struct sockaddr_in addr;
     int addrlen = sizeof(struct sockaddr_in);
 
@@ -356,16 +356,6 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
               "%pI4:%hu", &addr.sin_addr, ntohs( addr.sin_port ) );
 
     pr_info( "Accepted connection from %s\n", backinfo->peer );
-
-    snprintf( msg, sizeof(msg),
-              "Hello, you are connection #%d, from %s\n",
-              backinfo->id, backinfo->peer );
-
-    rc = mw_backchannel_write_one( backinfo, (void *) msg, strlen(msg) + 1 );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
 
     // Nothing has failed: add to the global list
     down_write( &g_mwbc_state.conn_list_lock );

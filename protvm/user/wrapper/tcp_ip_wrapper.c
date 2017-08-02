@@ -408,25 +408,27 @@ hex_dump( const char *desc, void *addr, int len )
 
 
 int 
-socket( int domain, 
-        int type, 
-        int protocol )
+socket( int Domain, 
+        int Type, 
+        int Protocol )
 {
     int rc = 0;
     int err = 0;
 
-    if ( AF_INET != domain || (!USE_MWCOMMS) )
+    if ( AF_INET != Domain
+         || SOCK_STREAM != Type
+         || (!USE_MWCOMMS) )
     {
-        rc = libc_socket( domain, type, protocol );
+        rc = libc_socket( Domain, Type, Protocol );
         goto ErrorExit;
     }
 
 #if USE_MWCOMMS
     mwsocket_create_args_t create;
 
-    create.domain   = xe_net_get_mt_protocol_family( domain );
+    create.domain   = xe_net_get_mt_protocol_family( Domain );
     create.type     = MT_ST_STREAM;
-    create.protocol = protocol;
+    create.protocol = Protocol;
     create.outfd = -1;
 
     rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
@@ -444,7 +446,7 @@ socket( int domain,
 ErrorExit:
     err = errno;
     DEBUG_PRINT( "socket( %d, %d, %d ) ==> %d\n",
-                 domain, type, protocol, rc );
+                 Domain, Type, Protocol, rc );
     errno = err;
 
     return rc;

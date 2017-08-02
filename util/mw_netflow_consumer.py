@@ -45,16 +45,20 @@ def monitor_netflow( sock ):
     SIG_STA_REQ = 0xd330
     SIG_STA_RES = 0xd331
 
+    sig_fmt  = "!H"
+    info_fmt = "!HQQQQi19s19sQQ"
+    addr_fmt = "!BH16s"
+
     while True:
-        sig, = struct.unpack( "!H", sock.recv( 2 ) )
+        sig, = struct.unpack( sig_fmt, sock.recv( struct.calcsize( sig_fmt ) ) )
         if SIG_NF_INFO == sig:
-            info_fmt = "!HQQQQi19s19s"
-            ( obs, 
+            vals = struct.unpack( info_fmt, 
+                                  sock.recv( struct.calcsize( info_fmt ) ) )
+            import pdb;pdb.set_trace()
+            ( obs,
               start_sec, start_ns, curr_sec, curr_ns, 
               sockfd, pvm, remote, 
-              inbytes, outbytes ) = \
-                        struct.unpack( info_fmt, 
-                                       sock.recv( struct.calcsize( info_fmt ) ) )
+              inbytes, outbytes ) = vals
             import pdb;pdb.set_trace()
         else:
             continue

@@ -82,13 +82,14 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
 typedef struct _mw_endpoint
 {
-    uint8_t addr_fam; // 4 or 6
+    uint8_t  addr_fam; // 4 or 6
+    uint16_t port;
 
     // 4: whole address converted host ==> network
     // 6: each 2-byte grouping converted host ==> network
     uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
 
-    uint16_t port;
+
 } __attribute__((packed)) mw_endpoint_t; // 1 + 16 + 2 = 19 bytes
 
 
@@ -101,7 +102,7 @@ typedef struct _mw_timestamp
 
 typedef enum _mw_observation
 {
-    MwobservationNone    = 0,
+    MwObservationNone    = 0,
     MwObservationBind    = 1,
     MwObservationAccept  = 2,
     MwObservationConnect = 3,
@@ -116,6 +117,7 @@ typedef uint64_t mw_bytecount_t;
 typedef struct _mw_netflow_info
 {
     mw_netflow_sig_t sig; // MW_MESSAGE_NETFLOW_INFO
+
     uint16_t         obs; // mw_observation_t
 
     mw_timestamp_t   ts_session_start; // beginning of session
