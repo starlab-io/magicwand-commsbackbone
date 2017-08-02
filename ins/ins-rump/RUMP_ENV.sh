@@ -9,7 +9,7 @@
 ##
 
 script_dir=$(readlink -f "${BASH_SOURCE[0]}")
-rump_dir=$(dirname "$actual_path")
+rump_dir=$(dirname "$script_dir")
 
 # Are we in the right directory?
 echo "Assuming that Rump is in $rump_dir"
