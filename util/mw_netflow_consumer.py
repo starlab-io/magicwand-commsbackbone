@@ -54,7 +54,7 @@ def connect_to_netflow( server ):
 
 class Ip:
     def __init__( self, packed ):
-        addr_fmt = "!BH16s"
+        addr_fmt = "!HH16s"
         (ver, port, ip) = struct.unpack( addr_fmt, packed )
 
         self._ver = ver
@@ -85,7 +85,7 @@ def get_obs_str( obs ):
              6 : "close" }.get( obs, "invalid" )
 
 def process_info_netflow( sock ):
-    info_fmt = "!HQQQQi19s19sQQQ"
+    info_fmt = "!HQQQQi20s20sQQQ"
     try:
         raw = recvall( sock, struct.calcsize( info_fmt ) )
         vals = struct.unpack( info_fmt, raw )

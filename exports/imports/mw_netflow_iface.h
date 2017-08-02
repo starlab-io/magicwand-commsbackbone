@@ -82,12 +82,12 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
 typedef struct _mw_endpoint
 {
-    uint8_t  addr_fam; // 4 or 6
-    uint16_t port;
+    uint16_t  addr_fam; // 4 or 6
+    uint16_t  port;
 
     // Address in network order, just as in sockaddr struct
     uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
-} __attribute__((packed)) mw_endpoint_t; // 1 + 16 + 2 = 19 bytes
+} __attribute__((packed)) mw_endpoint_t; // 16 + 2 + 2 = 20 bytes
 
 
 typedef struct _mw_timestamp

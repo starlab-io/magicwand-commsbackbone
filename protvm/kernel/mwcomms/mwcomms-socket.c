@@ -1315,12 +1315,12 @@ mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
     {
         // N.B. items in sockaddr struct are already in network byte order
     case AF_INET:
-        Endpoint->addr_fam = 4;
+        Endpoint->addr_fam = __cpu_to_be16( 4 );
         Endpoint->port = sa4->sin_port;
         memcpy( &Endpoint->addr, &sa4->sin_addr, sizeof( sa4->sin_addr ) );
         break;
     case AF_INET6:
-        Endpoint->addr_fam = 6;
+        Endpoint->addr_fam = __cpu_to_be16( 6 );
         Endpoint->port = sa6->sin6_port;
         // Addr in struct is network-ordered
         memcpy( &Endpoint->addr, &sa6->sin6_addr, sizeof( sa6->sin6_addr ) );
