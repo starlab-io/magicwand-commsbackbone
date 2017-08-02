@@ -85,11 +85,8 @@ typedef struct _mw_endpoint
     uint8_t  addr_fam; // 4 or 6
     uint16_t port;
 
-    // 4: whole address converted host ==> network
-    // 6: each 2-byte grouping converted host ==> network
+    // Address in network order, just as in sockaddr struct
     uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
-
-
 } __attribute__((packed)) mw_endpoint_t; // 1 + 16 + 2 = 19 bytes
 
 
@@ -111,23 +108,25 @@ typedef enum _mw_observation
     MwObservationClose   = 6,
 } mw_observation_t;
 
-
+typedef uint16_t mw_obs_space_t;
 typedef uint64_t mw_bytecount_t;
 
 typedef struct _mw_netflow_info
 {
     mw_netflow_sig_t sig; // MW_MESSAGE_NETFLOW_INFO
 
-    uint16_t         obs; // mw_observation_t
+    mw_obs_space_t   obs; // mw_observation_t
 
     mw_timestamp_t   ts_session_start; // beginning of session
     mw_timestamp_t   ts_curr;          // time of observation
     mw_socket_fd_t   sockfd;    // Dom-0 unique socket identifier
     mw_endpoint_t    pvm;       // local (PVM) endpoint info
-    mw_endpoint_t    remote;    // local endpoint info
+    mw_endpoint_t    remote;    // remote endpoint info
 
     mw_bytecount_t   bytes_in;  // tot bytes received by the PVM
     mw_bytecount_t   bytes_out; // tot bytes sent by the PVM
+
+    uint64_t         extra;     // extra data: new sockfd on accept msg
 } __attribute__((packed)) mw_netflow_info_t;
 
 
