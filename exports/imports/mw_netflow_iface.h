@@ -43,8 +43,15 @@ typedef uint16_t mw_netflow_sig_t;
 typedef uint32_t mw_message_id_t;
 typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
-#define MW_SIG(_x) (0xd300 | (_x))
-#define MW_MESSAGE_NETFLOW_INFO            MW_SIG( 0x10 )
+#define _MW_SIG_HI 0xd3
+
+#define MW_SIG(_x) ( (_MW_SIG_HI << 8) | (_x) )
+
+#define MW_IS_MESSAGE( _ptr )                                           \
+    ( (NULL != (_ptr) )                                                 \
+      && ( (ntohs( *(mw_netflow_sig_t *) (_ptr) ) >> 8) == _MW_SIG_HI ) )
+
+#define MW_MESSAGE_SIG_NETFLOW_INFO        MW_SIG( 0x10 )
 
 #define MW_MESSAGE_SIG_MITIGATION_REQUEST  MW_SIG( 0x20 )
 #define MW_MESSAGE_SIG_MITIGATION_RESPONSE MW_SIG( 0x21 )
@@ -53,29 +60,73 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 #define MW_MESSAGE_SIG_STATUS_RESPONSE     MW_SIG( 0x31 )
 
 /**
- * Informational message only that come from the PVM. Not for
+ * Informational message only that comes from the PVM. Not for
  * mitigation, not related to status request. Does not provide a
- * message ID since it cannot be responded to.
+ * message ID since it is not a part of a request/response pair.
  */
 
 // Should have space to hold 2 IPv6 address:port pairs plus
 // an informational message.
 //
 // Per http://elixir.free-electrons.com/linux/latest/source/include/linux/inet.h
+// #define INET_ADDRSTRLEN      (16)
 // #define INET6_ADDRSTRLEN	(48)
 //
 // So an IPv6:port pair is '[' + 48 bytes + ']:' + 5 bytes = 56 bytes
 //
 // XXXX: How much of this should be binary vs ASCII?
 
-#define NETFLOW_INFO_MSG_LEN ( 2 * 56 + 30 )
+#define NETFLOW_INFO_ADDR_LEN 16
+//#define NETFLOW_INFO_MSG_LEN ( 2 * 56 + 30 )
+//#define NETFLOW_INFO_PAYLOAD 16
+
+typedef struct _mw_endpoint
+{
+    uint8_t addr_fam; // 4 or 6
+
+    // 4: whole address converted host ==> network
+    // 6: each 2-byte grouping converted host ==> network
+    uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
+
+    uint16_t port;
+} __attribute__((packed)) mw_endpoint_t; // 1 + 16 + 2 = 19 bytes
+
+
+typedef struct _mw_timestamp
+{
+    uint64_t sec; // seconds
+    uint64_t ns;  // nanoseconds
+} __attribute__((packed)) mw_timestamp_t;
+
+
+typedef enum _mw_observation
+{
+    MwobservationNone    = 0,
+    MwObservationBind    = 1,
+    MwObservationAccept  = 2,
+    MwObservationConnect = 3,
+    MwObservationRecv    = 4,
+    MwObservationSend    = 5,
+    MwObservationClose   = 6,
+} mw_observation_t;
+
+
+typedef uint64_t mw_bytecount_t;
 
 typedef struct _mw_netflow_info
 {
     mw_netflow_sig_t sig; // MW_MESSAGE_NETFLOW_INFO
-    mw_socket_fd_t   sockfd;
-    char             msg[ NETFLOW_INFO_MSG_LEN ];
-} mw_netflow_info_t;
+    uint16_t         obs; // mw_observation_t
+
+    mw_timestamp_t   ts_session_start; // beginning of session
+    mw_timestamp_t   ts_curr;          // time of observation
+    mw_socket_fd_t   sockfd;    // Dom-0 unique socket identifier
+    mw_endpoint_t    pvm;       // local (PVM) endpoint info
+    mw_endpoint_t    remote;    // local endpoint info
+
+    mw_bytecount_t   bytes_in;  // tot bytes received by the PVM
+    mw_bytecount_t   bytes_out; // tot bytes sent by the PVM
+} __attribute__((packed)) mw_netflow_info_t;
 
 
 /**
@@ -90,7 +141,7 @@ typedef struct _mw_netflow_base
 {
     mw_netflow_sig_t sig;
     mw_message_id_t  id;
-} mw_base_t;
+} __attribute__((packed)) mw_base_t;
 
 
 /**
@@ -151,7 +202,7 @@ typedef struct _mw_mitigation_request
     mw_socket_fd_t         sockfd;
     mw_mitigation_action_t act;
     mw_mitigation_arg_t    arg;
-} mw_mitigation_request_t;
+}  __attribute__((packed))  mw_mitigation_request_t;
 
 
 /**
@@ -162,7 +213,7 @@ typedef struct _mw_mitigation_response
 {
     mw_base_t base;
     uint32_t  status;
-} mw_mitigation_response_t;
+}  __attribute__((packed)) mw_mitigation_response_t;
 
 
 /**
@@ -182,7 +233,7 @@ typedef struct _mw_status_request_msg
 {
     mw_base_t   base;
     mw_status_t req;
-} mw_status_request_msg_t;
+} __attribute__((packed)) mw_status_request_msg_t;
 
 
 /**
@@ -193,6 +244,4 @@ typedef struct _mw_status_response_msg
 {
     mw_base_t base;
     uint32_t  val;
-} mw_status_response_msg_t;
-
-
+} __attribute__((packed)) mw_status_response_msg_t;

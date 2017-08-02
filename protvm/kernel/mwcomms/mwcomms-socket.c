@@ -135,6 +135,8 @@
 
 #include <linux/kthread.h>
 
+#include <asm/byteorder.h>
+
 #include <asm/atomic.h>
 #include <asm/cmpxchg.h>
 
@@ -143,6 +145,7 @@
 #include <xen_keystore_defs.h>
 
 #include "mwcomms-backchannel.h"
+#include <mw_netflow_iface.h>
 
 // Defines:
 // union mwevent_sring_entry
@@ -457,6 +460,11 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
                        IN mt_request_generic_t * Request,
                        IN bool                   AwaitResponse );
 
+static int
+mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
+                       IN bool                  WaitForResponse );
+
+
 /******************************************************************************
  * Primitive Functions
  ******************************************************************************/
@@ -615,6 +623,9 @@ ErrorExit:
  * Support functions for interactions between file objects and Xen ring buffer.
  ******************************************************************************/
 
+/**
+ * @todo: Can we remove this and point file->private to the sockinst ?
+ */
 static int
 mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
                         IN  struct file          * File )
@@ -641,6 +652,78 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
+    return rc;
+}
+
+
+static int
+mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
+                                     IN  mw_socket_fd_t         RemoteFd )
+{
+    int rc = -ENOENT;
+
+    MYASSERT( SockInst );
+
+    *SockInst = NULL;
+
+    mutex_lock( &g_mwsocket_state.sockinst_lock );
+
+    mwsocket_instance_t * curr = NULL;
+    list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
+    {
+        if ( curr->remote_fd  == RemoteFd )
+        {
+            *SockInst = curr;
+            rc = 0;
+            break;
+        }
+    }
+
+    mutex_unlock( &g_mwsocket_state.sockinst_lock );
+
+    MYASSERT( 0 == rc );
+
+    return rc;
+}
+
+
+/**
+ * @brief Supports mitigation by forcing a remote close of the given socket.
+ */
+int
+mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
+                             IN bool           Wait )
+{
+    int rc = 0;
+    mwsocket_instance_t * sockinst = NULL;
+
+    rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, RemoteFd );
+    if ( rc ) { goto ErrorExit; }
+
+    rc = mwsocket_close_remote( sockinst, Wait );
+
+ErrorExit:
+    return rc;
+}
+
+
+/**
+ * @brief Supports mitigation by signalling the owner of the given
+ *        remote socket FD.
+ */
+int
+mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
+                                    IN int            SignalNum )
+{
+    int rc = 0;
+    mwsocket_instance_t * sockinst = NULL;
+
+    rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, RemoteFd );
+    if ( rc ) { goto ErrorExit; }
+
+    send_sig( SignalNum, sockinst->proc, 0 );
+
+ErrorExit:
     return rc;
 }
 
@@ -850,9 +933,11 @@ ErrorExit:
 }
 
 
-// @brief Close the remote socket.
-//
-// @return 0 on success, or error, which could be either local or remote
+/**
+ * @brief Close the remote socket.
+ *
+ * @return 0 on success, or error, which could be either local or remote
+ */
 static int
 mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
                        IN bool                  WaitForResponse )
@@ -1211,6 +1296,64 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
 
 static void
+mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
+                              OUT mw_endpoint_t *  Endpoint )
+{
+    MYASSERT( SockAddr );
+    MYASSERT( Endpoint );
+
+    struct sockaddr_in  * sa4 = (struct sockaddr_in *)  SockAddr;
+    struct sockaddr_in6 * sa6 = (struct sockaddr_in6 *) SockAddr;
+
+    switch( SockAddr->sa_family )
+    {
+    case AF_INET:
+        Endpoint->addr_fam = 4;
+        Endpoint->port = __cpu_to_be16( sa4->sin_port );
+        memcpy( &Endpoint->addr, &sa4->sin_addr, sizeof( sa4->sin_addr ) );
+        break;
+    case AF_INET6:
+        Endpoint->addr_fam = 6;
+        Endpoint->port = __cpu_to_be16( sa6->sin6_port );
+        // Addr in struct is network-ordered
+        memcpy( &Endpoint->addr, &sa6->sin6_addr, sizeof( sa6->sin6_addr ) );
+        break;
+    default:
+        MYASSERT( !"Invalid address family" );
+        bzero( Endpoint, sizeof( *Endpoint ) );
+    }
+}
+
+
+static void
+mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
+                           OUT mw_netflow_info_t        * Netflow )
+{
+    MYASSERT( Netflow );
+    MYASSERT( ActiveRequest );
+
+    struct timespec ts = {0};
+
+    bzero( Netflow, sizeof( *Netflow ) );
+
+    getnstimeofday( &ts );
+    Netflow->sig      = __cpu_to_be16( MW_MESSAGE_SIG_NETFLOW_INFO );
+    Netflow->sockfd   = __cpu_to_be32( ActiveRequest->sockinst->remote_fd );
+
+    Netflow->ts_curr.sec  = __cpu_to_be64( ts.tv_sec );
+    Netflow->ts_curr.ns   = __cpu_to_be64( ts.tv_nsec );
+
+    // Populate PVM IP
+    mwsocket_populate_netflow_ip( &ActiveRequest->sockinst->local_bind,
+                                  &Netflow->pvm );
+    mwsocket_populate_netflow_ip( &ActiveRequest->sockinst->peer,
+                                  &Netflow->remote );
+
+    // XXXX: not all data populated. fix this!
+}
+
+
+static void
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
                                 mt_response_generic_t     * Response )
@@ -1219,64 +1362,40 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     MYASSERT( ActiveRequest->sockinst );
     MYASSERT( Response );
 
-    char msg[128] = {0};
-    char detail[16] = {0};
-    struct timespec ts = {0};
     bool drop = false;
+    mw_netflow_info_t nf;
 
     if ( !mw_backchannel_consumer_exists() )
     {
         goto ErrorExit;
     }
 
-    // Format the commmon info: timestamp and channel metadata
-    getnstimeofday( &ts );
-    snprintf( msg, sizeof(msg), // %pISc:%hu
-              "%lx.%lx %pISpc %pISpc %lx ",
-              ts.tv_sec, ts.tv_nsec,
-              &ActiveRequest->sockinst->local_bind,
-              &ActiveRequest->sockinst->peer,
-              (unsigned long)Response->base.sockfd );
+    mwsocket_populate_netflow( ActiveRequest, &nf );
 
     switch( Response->base.type )
     {
-    case MtResponseSocketCreate:
-        strncat( msg, "created", sizeof(msg) );
-        break;
-    case MtResponseSocketShutdown:
     case MtResponseSocketClose:
-        strncat( msg, "shutdown/close", sizeof(msg) );
+        nf.obs = MwObservationClose;
         break;
     case MtResponseSocketConnect:
-        strncat( msg, "connnect", sizeof(msg) );
+        nf.obs = MwObservationConnect;
         break;
     case MtResponseSocketBind:
-        strncat( msg, "bind", sizeof(msg) );
-        break;
-    case MtResponseSocketListen:
-        strncat( msg, "listen", sizeof(msg) );
+        nf.obs = MwObservationBind;
         break;
     case MtResponseSocketAccept:
-        strncat( msg, "accept", sizeof(msg) );
+        nf.obs = MwObservationAccept;
         break;
     case MtResponseSocketSend:
-        snprintf( detail, sizeof(detail),
-                  "send %d bytes",
-                  Response->socket_send.count );
-        strncat( msg, detail, sizeof(msg) );
+        nf.obs = MwObservationSend;
         break;
     case MtResponseSocketRecv:
-        snprintf( detail, sizeof(detail),
-                  "recv %d bytes",
-                  Response->socket_recv.count );
-        strncat( msg, detail, sizeof(msg) );
-        break;
     case MtResponseSocketRecvFrom:
-        snprintf( detail, sizeof(detail),
-                  "recvfrom %d bytes",
-                  Response->socket_recvfrom.count );
-        strncat( msg, detail, sizeof(msg) );
+        nf.obs = MwObservationRecv;
         break;
+    case MtResponseSocketShutdown:
+    case MtResponseSocketCreate:
+    case MtResponseSocketListen:
     case MtResponseSocketGetName:
     case MtResponseSocketGetPeer:
     case MtResponseSocketAttrib:
@@ -1290,10 +1409,9 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
         break;
     }
 
-    if ( !drop )
-    {
-        mw_backchannel_write_msg( msg );
-    }
+    if ( drop ) { goto ErrorExit; }
+
+    mw_backchannel_write( &nf, sizeof(nf) );
 
 ErrorExit:
     return;
@@ -1396,6 +1514,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketAccept:
         ActiveRequest->sockinst->peer.sa_family =
             xe_net_get_native_protocol_family( Response->socket_accept.sockaddr.sin_family );
+        // XXXX: support IPv6
         struct sockaddr_in * sa4 =
             (struct sockaddr_in *)(&ActiveRequest->sockinst->peer);
         sa4->sin_addr = *(struct in_addr *) &Response->socket_accept.sockaddr.sin_addr;

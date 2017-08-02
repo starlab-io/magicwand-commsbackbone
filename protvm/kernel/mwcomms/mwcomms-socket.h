@@ -78,7 +78,8 @@ mwsocket_verify( const struct file * File );
  * process or the kernel.
  */
 int
-mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd );
+mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
+                             IN bool           Wait );
 
 
 /**
