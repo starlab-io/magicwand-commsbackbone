@@ -34,6 +34,7 @@ docmd make
 
 if [ ! -d /lib/modules/$(uname -r)/build ]; then
     echo "/lib/modules/$(uname -r)/build not found , please install linux headers"
+    exit 1
 fi
 
 cd $driver_dir
