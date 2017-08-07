@@ -40,8 +40,6 @@
  * of message (described above).
  */
 typedef uint16_t mw_netflow_sig_t;
-typedef uint32_t mw_message_id_t;
-typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
 #define _MW_SIG_HI 0xd3
 
@@ -53,11 +51,16 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
 #define MW_MESSAGE_SIG_NETFLOW_INFO        MW_SIG( 0x10 )
 
+#define MW_MESSAGE_SIG_FEATURE_REQUEST     MW_SIG( 0x20 )
+#define MW_MESSAGE_SIG_FEATURE_RESPONSE    MW_SIG( 0x21 )
+
+/*
 #define MW_MESSAGE_SIG_MITIGATION_REQUEST  MW_SIG( 0x20 )
 #define MW_MESSAGE_SIG_MITIGATION_RESPONSE MW_SIG( 0x21 )
 
 #define MW_MESSAGE_SIG_STATUS_REQUEST      MW_SIG( 0x30 )
 #define MW_MESSAGE_SIG_STATUS_RESPONSE     MW_SIG( 0x31 )
+*/
 
 /**
  * Informational message only that comes from the PVM. Not for
@@ -74,11 +77,12 @@ typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 //
 // So an IPv6:port pair is '[' + 48 bytes + ']:' + 5 bytes = 56 bytes
 //
-// XXXX: How much of this should be binary vs ASCII?
 
 #define NETFLOW_INFO_ADDR_LEN 16
 //#define NETFLOW_INFO_MSG_LEN ( 2 * 56 + 30 )
 //#define NETFLOW_INFO_PAYLOAD 16
+
+typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
 typedef struct _mw_endpoint
 {
@@ -87,7 +91,7 @@ typedef struct _mw_endpoint
 
     // Address in network order, just as in sockaddr struct
     uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
-} __attribute__((packed)) mw_endpoint_t; // 16 + 2 + 2 = 20 bytes
+} __attribute__((packed)) mw_endpoint_t; // 2 + 2 + 16 = 20 bytes
 
 
 typedef struct _mw_timestamp
@@ -138,11 +142,87 @@ typedef struct _mw_netflow_info
  * its associated request.
  */
 
-typedef struct _mw_netflow_base
+/**
+ * Some of the possible values for the mitigation argument.
+ */
+typedef enum
+{
+    MwCongctlReno    = 0x90, // action: congctl
+    MwCongctlNewReno = 0x91, // action: congctl
+    MwCongctlCubic   = 0x92, // action: congctl
+} mw_congctl_arg_val_t;
+
+typedef enum
+{
+    MwFeatureNone = 0x00,
+
+    // Per-socket features
+    MwFeatureOwningThreadRunning = 0x01, // arg: bool
+    MwFeatureSocketOpen          = 0x02, // arg: bool
+
+    MwFeatureSocketSendBuf       = 0x10, // arg: sz in bytes (uint32_t)
+    MwFeatureSocketRecvBuf       = 0x11, // arg: sz in bytes (uint32_t)
+    MwFeatureSocketSendLoWat     = 0x12, // arg: sz in bytes (uint32_t)
+    MwFeatureSocketRecvLoWat     = 0x13, // arg: sz in bytes (uint32_t)
+    MwFeatureSocketSendTimo      = 0x14, // arg: milliseconds (uint64_t)
+    MwFeatureSocketRecvTimo      = 0x15, // arg: milliseconds (uint64_t)
+
+    // INS-wide changes
+
+    // Change congestion control algo, arg: see vals below
+    MwFeatureSystemInsCongctl    = 0x20, // arg: mw_congctl_arg_val_t (uint32_t)
+
+    // Change of delay ACK ticks: arg is signed tick differential
+    MwFeatureSystemDelackTicks   = 0x21,  // arg: tick count (uint32_t)
+} __attribute__((packed)) mw_feature_t;
+
+
+typedef enum
+{
+    MwActionRead  = 0,
+    MwActionWrite = 1,
+} mw_action_t;
+
+typedef uint16_t mw_action_storage_t;
+typedef uint16_t mw_feature_storage_t;
+typedef uint32_t mw_status_t; // status: 0 on success, otherwise positive Linux errno
+typedef uint64_t mw_feature_arg_t;
+
+typedef uint32_t mw_message_id_t;
+
+typedef struct _mw_status_base
 {
     mw_netflow_sig_t sig;
     mw_message_id_t  id;
 } __attribute__((packed)) mw_base_t;
+
+/**
+ * A feature request. Can be used for getting information (status) or
+ * setting value (mitigation).
+ */
+typedef struct _mw_feature_request
+{
+    mw_base_t              base;
+    mw_action_storage_t    act;
+    mw_feature_storage_t   feat;
+    mw_socket_fd_t         sockfd;
+    mw_feature_arg_t       inarg; // used only if act == MwActionWrite
+}  __attribute__((packed)) mw_feature_request_t;
+
+
+/**
+ * Response to mitigation request. Its id matches that from the
+ * associated request.
+ */
+typedef struct _mw_feature_response
+{
+    mw_base_t        base;
+    mw_status_t      status;
+    mw_feature_arg_t outarg; // used only if act == MwActionRead
+}  __attribute__((packed)) mw_feature_response_t;
+
+
+#if 0
 
 
 /**
@@ -181,18 +261,6 @@ typedef enum
 typedef uint32_t mw_mitigation_action_t; // holds mw_mitigation_action_val_t
 
 
-/**
- * Some of the possible values for the mitigation argument.
- */
-typedef enum
-{
-    MwCongctlReno    = 0x90, // action: congctl
-    MwCongctlNewReno = 0x91, // action: congctl
-    MwCongctlCubic   = 0x92, // action: congctl
-} mw_congctl_arg_val_t;
-
-typedef int32_t mw_mitigation_arg_t; // holds mw_congctl_arg_val_t, among others
-
 
 /**
  * A mitigation request.
@@ -227,8 +295,8 @@ typedef enum
 
     MwInfoCongctl = 0x20,
 } mw_congctl_t;
-typedef uint32_t mw_status_t; // holds mw_congctl_t among other things
 
+typedef uint32_t mw_status_t; // holds mw_congctl_t among other things
 
 typedef struct _mw_status_request_msg
 {
@@ -246,3 +314,5 @@ typedef struct _mw_status_response_msg
     mw_base_t base;
     uint32_t  val;
 } __attribute__((packed)) mw_status_response_msg_t;
+
+#endif
