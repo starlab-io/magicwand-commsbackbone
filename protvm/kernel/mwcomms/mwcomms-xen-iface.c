@@ -75,16 +75,20 @@
 
 typedef struct _mwcomms_xen_globals
 {
-    domid_t             my_domid;
+    domid_t          my_domid;
 
-    bool                xenbus_watch_active;
-    bool                pending_exit;
+    bool             xenbus_watch_active;
+    bool             pending_exit;
+    bool             xen_iface_ready;    
 
     struct semaphore event_channel_sem;
+
+    mw_xen_init_complete_cb_t * completion_cb;
+    mw_xen_event_handler_cb_t * event_cb;
     
 } mwcomms_xen_globals_t;
 
-static mwcomms_xen_globals_t g_mwxen_state;
+static mwcomms_xen_globals_t g_mwxen_state = {0};
 
 static mwcomms_ins_data_t g_ins_data[ MAX_INS_COUNT ] = {0};
 
@@ -234,9 +238,9 @@ ErrorExit:
 char *
 mw_xen_read_from_key( const char * Dir, const char * Node )
 {
-   struct xenbus_transaction   txn;
-   char                       *str;
-   int                         err;
+    struct xenbus_transaction   txn = {0};
+    char                       *str = NULL;
+    int                         err = 0;
 
    pr_debug( "Reading value in dir:%s node:%s\n", Dir, Node );
 
@@ -342,7 +346,7 @@ ErrorExit:
 static irqreturn_t
 mw_xen_irq_event_handler( int Port, void * Data )
 {
-    up( &g_mwxen_state.event_channel_sem );
+    g_mwxen_state.event_cb();
     return IRQ_HANDLED;
 }
 
@@ -512,7 +516,7 @@ get_ins_from_xs_path( IN  const char *Path,
     int domid = 0;
     char * copy = NULL;
 
-    copy = kmalloc( sizeof(*Path), GFP_KERNEL | __GFP_ZERO );
+    copy = kmalloc( XENEVENT_PATH_STR_LEN, GFP_KERNEL | __GFP_ZERO );
     if( NULL == copy )
     {
         rc = -ENOMEM;
@@ -549,24 +553,26 @@ ErrorExit:
     
     if( NULL != copy )
     {
-        kfree(copy);
+        kfree( copy );
     }
     return rc;
 }
             
             
 
-static void
+static int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_vm_port_is_bound( const char *Path )
 {
     char * is_bound_str = NULL;
     mwcomms_ins_data_t *Ins = NULL;
+    int rc = 0;
 
     
     if( get_ins_from_xs_path( Path, &Ins ) )
     {
         pr_err( "No ins found for vm_port_is_bound\n");
+        rc = -EIO;
         goto ErrorExit;
     }
 
@@ -575,16 +581,16 @@ mw_xen_vm_port_is_bound( const char *Path )
     
     if ( !is_bound_str )
     {
+        rc = -EIO;
         goto ErrorExit;
     }
 
     if ( 0 == strcmp( is_bound_str, "0" ) )
     {
+        rc = -EIO;
         goto ErrorExit;
     }
 
-
-    
     pr_debug("The remote event channel is bound\n");
 
     Ins->irq =
@@ -600,7 +606,7 @@ ErrorExit:
     {
         kfree( is_bound_str );
     }
-    return;
+    return rc;
 }
 
 int
@@ -643,7 +649,7 @@ mw_xen_init_ring_block( mwcomms_ins_data_t * Ins )
 }
 
 
-static void
+static int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_ins_found( const char *Path )
 {
@@ -655,12 +661,14 @@ mw_xen_ins_found( const char *Path )
                                                   XENEVENT_NO_NODE );
     if ( !client_id_str )
     {
+        err = -EIO;
         pr_err("Error reading client id key!!!\n");
         goto ErrorExit;
     }
 
     if ( strcmp( client_id_str, "0" ) == 0 )
     {
+        err = -EIO;
         goto ErrorExit;
     }
 
@@ -694,6 +702,10 @@ mw_xen_ins_found( const char *Path )
     err = mw_xen_offer_grant( curr );
     if( err ) { goto ErrorExit; }
 
+    //Allocate shared mem for new INS
+    err = mw_xen_init_ring( curr );
+    if ( err ) { goto ErrorExit; }
+
     // Write Grant Ref to key 
     err = mw_xen_write_grant_refs_to_key( curr );
     if ( err ) { goto ErrorExit; }
@@ -702,17 +714,26 @@ mw_xen_ins_found( const char *Path )
     // Complete: the handshake is done
     //
 
-    //Allocate shared mem for new INS
-    err = mw_xen_init_ring( curr );
-    if ( err ) { goto ErrorExit; }
+    curr->is_ring_ready = true;
+
+    g_mwxen_state.xen_iface_ready = true;
+    g_mwxen_state.completion_cb();
 
 ErrorExit:
     if ( NULL != client_id_str )
     {
         kfree(client_id_str);
     }
-    return;
+    return err;
 }
+
+bool
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_iface_ready( void )
+{
+    return g_mwxen_state.xen_iface_ready;
+}
+
 
 static int
 mw_xen_get_next_index_round_robin( void )
@@ -732,108 +753,95 @@ bool
 mw_xen_response_available(OUT mwcomms_ins_data_t ** Ins)
 {
     bool available = false;
-    int ins_index = mw_xen_get_next_index_round_robin();
+    int ins_index = 0;
     
     for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
         ins_index = mw_xen_get_next_index_round_robin();
-        available =
-            RING_HAS_UNCONSUMED_RESPONSES( &g_ins_data[ins_index].front_ring );
-        if( available )
+        
+        if( g_ins_data[ins_index].is_ring_ready )
         {
-            *Ins = &g_ins_data[ins_index];
-            goto ErrorExit;
+            available =
+                RING_HAS_UNCONSUMED_RESPONSES( &g_ins_data[ins_index].front_ring );
+            if( available )
+            {
+                *Ins = &g_ins_data[ins_index];
+                goto ErrorExit;
+            }
         }
     }
+        
 ErrorExit:
     return available;
 }
 
 
 int
-mw_xen_block_and_read_next_response( OUT mt_response_generic_t **response,
-                                     OUT mwcomms_ins_data_t    **Ins )
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_get_next_response( OUT mt_response_generic_t **Response,
+                          OUT mwcomms_ins_data_t    *Ins )
 {
 
     int rc = 0;
-    bool available = false;
     mt_response_generic_t *found_response = NULL;
-    mwcomms_ins_data_t *curr = NULL;
-    
-    //Find the ring that has an unconsumed response
-    do
+
+
+    if( NULL == Ins )
     {
-        
-        available = mw_xen_response_available( &curr );
-        if ( !available )
-        {
-            // Nothing available. Exit if requested, otherwise
-            // wait for a response to appear.
-            if ( g_mwxen_state.pending_exit )
-            {
-                goto ErrorExit;
-            }
+        pr_err("Null ins passed to mw_xen_get_resposne\n");
+        rc = -EIO;
+        goto ErrorExit;
+    }
 
-            // Either poll the ring buffer or wait for an event on
-            // the channel
-#if PVM_USES_EVENT_CHANNEL
-            if ( down_interruptible( &g_mwxen_state.event_channel_sem ) )
-            {
-                pr_info( "Received interrupt in response consumer thread\n" );
-                goto ErrorExit;
-            }
-#else
-            // Poll the ring
-            mwsocket_wait( RING_BUFFER_POLL_INTERVAL );
-#endif
-        }
-        
-    } while (!available);
+    //
+    // An item is available. Consume it. The response resides
+    // only on the ring now. It isn't in the active request
+    // yet. We only copy it there upon request.
+    //
+    found_response = (mt_response_generic_t *)
+        RING_GET_RESPONSE( &Ins->front_ring,
+                           Ins->front_ring.rsp_cons );
 
-        //
-        // An item is available. Consume it. The response resides
-        // only on the ring now. It isn't in the active request
-        // yet. We only copy it there upon request.
-        //
-
-        found_response = (mt_response_generic_t *)
-            RING_GET_RESPONSE( &curr->front_ring,
-                               curr->front_ring.rsp_cons );
-
-        if ( DEBUG_SHOW_TYPE( found_response->base.type ) )
-        {
-            pr_debug( "Response ID %lx size %x type %x status %d on ring \
+    if ( DEBUG_SHOW_TYPE( found_response->base.type ) )
+    {
+        pr_debug( "Response ID %lx size %x type %x status %d on ring \
                        at idx %x\n",
-                      (unsigned long)found_response->base.id,
-                      found_response->base.size, found_response->base.type,
-                      found_response->base.status,
-                      curr->front_ring.rsp_cons );
-        }
+                  (unsigned long)found_response->base.id,
+                  found_response->base.size, found_response->base.type,
+                  found_response->base.status,
+                  Ins->front_ring.rsp_cons );
+    }
 
-        if ( !MT_IS_RESPONSE( found_response ) )
-        {
-            // Fatal: The ring is corrupted.
-            pr_crit( "Received data that is not a response at idx %d\n",
-                     curr->front_ring.rsp_cons );
-            rc = -EIO;
-            goto ErrorExit;
-        }
+    if ( !MT_IS_RESPONSE( found_response ) )
+    {
+        // Fatal: The ring is corrupted.
+        pr_crit( "Received data that is not a response at idx %d\n",
+                 Ins->front_ring.rsp_cons );
+        rc = -EIO;
+        goto ErrorExit;
+    }
 
-        *Ins = curr;
-        *response = found_response;
+    *Response = found_response;
 
-// mw_xen_read_next_response
 ErrorExit:
     return rc;
 }
 
 int
-mw_xen_consume_response( mwcomms_ins_data_t * Ins )
+mw_xen_mark_response_consumed( mwcomms_ins_data_t * Ins )
 {
-
+    int rc = 0;
+    
+    if( NULL == Ins )
+    {
+        pr_error("Null ins pointer detected\n");
+        rc = -EIO;
+        goto ErrorExit;
+    }
     ++Ins->front_ring.rsp_cons;
     
-    return 0;
+ErrorExit:
+    return rc;
 }
 
 static void
@@ -845,7 +853,7 @@ mw_xen_socket_wait( long TimeoutJiffies )
 
 
 int
-mw_xen_get_ring_ready( bool WaitForRing, uint8_t **dest )
+mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **Dest )
 {
     int temp = 0;
     int rc = 0;
@@ -875,9 +883,9 @@ mw_xen_get_ring_ready( bool WaitForRing, uint8_t **dest )
         mw_xen_socket_wait( RING_FULL_TIMEOUT );
     } while( true );
     
-    *dest = (uint8_t *) RING_GET_REQUEST( &g_ins_data[temp].front_ring,
+    *Dest = (uint8_t *) RING_GET_REQUEST( &g_ins_data[temp].front_ring,
                                          g_ins_data[temp].front_ring.req_prod_pvt );
-    if ( !dest )
+    if ( !Dest )
     {
         pr_err( "Destination buffer is NULL\n" );
         rc = -EIO;
@@ -890,8 +898,9 @@ ErrorExit:
 }
 
 int
-mw_xen_send_request( mt_request_generic_t      * Request,
-                     uint8_t                   * dest)
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_dispatch_request( mt_request_generic_t      * Request,
+                         uint8_t                   * dest)
 {
     int temp = 0;
     
@@ -915,18 +924,28 @@ mw_xenstore_state_changed( struct xenbus_watch *W,
                            const char **V,
                            unsigned int L )
 {
+    int err = 0;
+    
     pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
     {
-        mw_xen_ins_found( V[ XS_WATCH_PATH ] );
+        err = mw_xen_ins_found( V[ XS_WATCH_PATH ] );
+        if ( err )
+        {
+            pr_err("Problem with reading domid from xenstore\n");
+        }
         goto ErrorExit;
     }
 
     if ( strstr( V[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
     {
-        mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
-        goto ErrorExit;
+        err = mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
+        if ( err )
+        {
+            pr_err( "Problem with binding event chn\n ");
+            goto ErrorExit;
+        }
     }
     
 ErrorExit:
@@ -980,14 +999,17 @@ ErrorExit:
 
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback )
+mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
+             mw_xen_event_handler_cb_t EventCallback )
 {
     int rc = 0;
 
     bzero( &g_mwxen_state, sizeof(g_mwxen_state) );
 
-    sema_init( &g_mwxen_state.event_channel_sem, 0 );
 
+    g_mwxen_state.completion_cb = CompletionCallback;
+    g_mwxen_state.event_cb = EventCallback;
+    
     g_mwxen_state.pending_exit = false;
 
     rc = mw_xen_initialize_keystore();
@@ -1034,6 +1056,7 @@ ErrorExit:
 
 
 static void
+MWSOCKET_DEBUG_ATTRIB
 mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 {
 
@@ -1059,11 +1082,13 @@ mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mw_xen_fini( void )
 {
 
     g_mwxen_state.pending_exit = true;
-    
+
+
     for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
         mw_xen_release_ins( &g_ins_data[i] );
@@ -1073,8 +1098,6 @@ mw_xen_fini( void )
     {
         unregister_xenbus_watch( &mw_xenstore_watch );
     }
-
-    up( &g_mwxen_state.event_channel_sem );
 
     mw_xen_initialize_keys();
 

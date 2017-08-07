@@ -382,6 +382,9 @@ typedef struct _mwsocket_globals
     struct mutex        sockinst_lock;
     atomic_t            sockinst_count;
 
+    // Indicates response(s) available
+    struct semaphore event_channel_sem;
+
     // Filesystem data
     struct vfsmount * fs_mount;
     bool              fs_registered;
@@ -487,10 +490,14 @@ mwsocket_get_next_id( void )
 void
 mwsocket_notify_ring_ready( void )
 {
-    g_mwsocket_state.is_xen_iface_ready = true;
-    complete_all( &g_mwsocket_state.xen_iface_ready );
+    // Triggered when new Ins is added.
+    // only call if this is the first Ins that has been added
+    if( false == g_mwsocket_state.is_xen_iface_ready )
+    {
+        g_mwsocket_state.is_xen_iface_ready = true;
+        complete_all( &g_mwsocket_state.xen_iface_ready );
+    }
 }
-
 
 static void
 mwsocket_wait( long TimeoutJiffies )
@@ -499,6 +506,12 @@ mwsocket_wait( long TimeoutJiffies )
     schedule_timeout( TimeoutJiffies );
 }
 
+
+void
+mwsocket_event_cb ( void )
+{
+    up( &g_mwsocket_state.event_channel_sem );
+}
 
 /******************************************************************************
  * Support for the MW socket pseudo "filesystem", needed for file
@@ -1429,7 +1442,11 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         goto ErrorExit;
     }
 
-    mw_xen_get_ring_ready( WaitForRing, &dest);
+    rc = mw_xen_get_next_request_slot( WaitForRing, &dest);
+    if( rc )
+    {
+        goto ErrorExit;
+    }
     
     // Populate the request further as needed. Do this only when we're
     // certain the send will succeed, as it modifies the sockinst
@@ -1447,7 +1464,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->rr.request.base.type );
     }
 
-    mw_xen_send_request( &ActiveRequest->rr.request, dest );
+    mw_xen_dispatch_request( &ActiveRequest->rr.request, dest );
     
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
@@ -1512,10 +1529,11 @@ ErrorExit:
 static int
 mwsocket_response_consumer( void * Arg )
 {
-    int rc = 0;
-    mwcomms_ins_data_t *ins;
+    int                         rc = 0;
+    mwcomms_ins_data_t        * ins = NULL;
     mwsocket_active_request_t * actreq = NULL;
-    mt_response_generic_t * response = NULL;
+    mt_response_generic_t     * response = NULL;
+    bool                        available = false;
     
 
     // TODO
@@ -1543,26 +1561,58 @@ mwsocket_response_consumer( void * Arg )
     // Policy: in case of pending exit, keep consuming the requests
     //         until there are no more
     //
+    
+    pr_debug("Entering response consumer loop\n");
 
     while( true )
     {
-        //Block until event_channel notification
 
-        mw_xen_block_and_read_next_response( &response, &ins );
+        do
+        {
 
+            available = mw_xen_response_available( &ins );
+            if( !available )
+            {
+                if( g_mwsocket_state.pending_exit )
+                {
+                    goto ErrorExit;
+                }
+                
+                if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
+                {
+                    rc = -EINTR;
+                    pr_info( "Received interrupt in response consumer thread\n" );
+                    goto ErrorExit;
+                }
+            }
+
+        } while (!available);
+        
+
+        rc = mw_xen_get_next_response( &response,  ins );
+         
+        if( g_mwsocket_state.pending_exit )
+        {
+            //NULL response means pending exit was detected
+            pr_debug("Pending exit detected, shutting down "
+                     "response conusmer thread\n" );
+            goto ErrorExit;
+        }
+            
+            
         // Hereafter advance index as soon as we're done with the item
         // in the ring buffer.
         rc = mwsocket_find_active_request_by_id( &actreq, response->base.id );
         if ( rc )
         {
             // Active requests should *never* just "disappear". They
-            // are destroyed in an orderly fashion either here (below)
+            // are destroyed in an orderly fashion either hxere (below)
             // or in mwsocket_read(). This state can be reached if a
             // requestor times out on the response arrival.
             pr_warn( "Couldn't find active request with ID %lx\n",
                      (unsigned long) response->base.id );
 
-            mw_xen_consume_response( ins );
+            mw_xen_mark_response_consumed( ins );
             continue; // move on
         }
 
@@ -1611,7 +1661,7 @@ mwsocket_response_consumer( void * Arg )
         }
 
         // We're done with this slot of the ring
-        mw_xen_consume_response( ins );
+        mw_xen_mark_response_consumed( ins );
 
         
         //Post Processing
@@ -1621,6 +1671,7 @@ mwsocket_response_consumer( void * Arg )
 
 ErrorExit:
     // Inform the cleanup function that this thread is done.
+    pr_debug("Response consumer thread exiting\n");
     complete( &g_mwsocket_state.response_reader_done );
     return rc;
 }
@@ -2257,6 +2308,7 @@ mwsocket_init( mw_region_t * SharedMem )
     mutex_init( &g_mwsocket_state.active_request_lock );
     mutex_init( &g_mwsocket_state.sockinst_lock );
 
+    sema_init( &g_mwsocket_state.event_channel_sem, 0 );
     init_completion( &g_mwsocket_state.response_reader_done );
     init_completion( &g_mwsocket_state.poll_monitor_done );
     init_completion( &g_mwsocket_state.xen_iface_ready );
@@ -2335,6 +2387,7 @@ ErrorExit:
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_fini( void )
 {
     mwsocket_active_request_t * currar = NULL;
@@ -2350,6 +2403,8 @@ mwsocket_fini( void )
     g_mwsocket_state.pending_exit = true;
     complete_all( &g_mwsocket_state.xen_iface_ready );
 
+    up( &g_mwsocket_state.event_channel_sem );
+    
     if ( NULL != g_mwsocket_state.response_reader_thread )
     {
         wait_for_completion( &g_mwsocket_state.response_reader_done );

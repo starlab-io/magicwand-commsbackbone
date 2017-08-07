@@ -20,7 +20,7 @@
 
 
 typedef int
-mw_xen_init_complete_cb_t( domid_t ClientId );
+mw_xen_init_complete_cb_t( void );
 
 typedef void
 mw_xen_event_handler_cb_t( void );
@@ -68,7 +68,8 @@ typedef struct _mwcomms_ins_data
 /// @param
 /// @param Function that is invoked when handshake is complete.
 int
-mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback );
+mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback,
+             mw_xen_event_handler_cb_t EventCallback );
 
 
 // @brief Cleans up the xen subsystem
@@ -94,17 +95,24 @@ char *
 mw_xen_read_from_key( const char * Dir, const char * Node );
 
 int
-mw_xen_get_ring_ready( bool WaitForRing, uint8_t **dest );
+mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **dest );
 
 int
-mw_xen_send_request( mt_request_generic_t      * Request,
-                     uint8_t                   * dest);
+mw_xen_dispatch_request( mt_request_generic_t      * Request,
+                         uint8_t                   * dest);    
 
 int
-mw_xen_block_and_read_next_response( OUT mt_response_generic_t **response,
-                                     mwcomms_ins_data_t        **Ins );
+mw_xen_get_next_response( OUT mt_response_generic_t     **Response,
+                          IN  mwcomms_ins_data_t        *Ins );
 
 int
-mw_xen_consume_response( mwcomms_ins_data_t *Ins );
+mw_xen_mark_response_consumed( mwcomms_ins_data_t *Ins );
+
+bool
+mw_xen_iface_ready( void );
+
+bool
+mw_xen_response_available( mwcomms_ins_data_t **Ins );
+
 
 #endif // mwcomms_xen_iface_h

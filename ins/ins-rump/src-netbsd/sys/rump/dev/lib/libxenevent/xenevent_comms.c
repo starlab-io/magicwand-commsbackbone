@@ -770,7 +770,6 @@ xe_comms_listeners( const char * Listeners )
                       INS_LISTENER_KEY );
     }
 
-    MYASSERT( bmk_strlen(Listeners) > 0 );
     err = xe_comms_write_str_to_key( listener_path, Listeners );
     if ( err )
     {

@@ -268,7 +268,7 @@ module_exit(mwbase_dev_fini);
 static mw_xen_init_complete_cb_t mwbase_client_ready_cb;
 
 static int
-mwbase_client_ready_cb( domid_t ClientId )
+mwbase_client_ready_cb( void )
 {
     mwsocket_notify_ring_ready();
     complete( &g_mwcomms_state.ring_shared );
@@ -352,7 +352,9 @@ mwbase_dev_init( void )
    // handshake is complete.
 
    init_completion( &g_mwcomms_state.ring_shared );
-   rc = mw_xen_init( mwbase_client_ready_cb );
+   
+   rc = mw_xen_init( mwbase_client_ready_cb,
+                     mwsocket_event_cb );
    if ( rc )
    {
        goto ErrorExit;
@@ -377,6 +379,7 @@ ErrorExit:
 
 
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
