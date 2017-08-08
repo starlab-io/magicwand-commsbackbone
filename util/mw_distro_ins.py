@@ -271,6 +271,21 @@ class PortForwarder:
 
         self._enable_rule( chain, rule )
 
+        # Prerequisite iptables rule
+        # iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
+
+        rule = iptc.Rule()
+        rule.protocol = "tcp"
+
+        match = rule.create_match("conntrack")
+        match.ctstate = "RELATED,ESTABLISHED"
+
+        rule.target = iptc.Target(rule, "ACCEPT")
+
+        self._enable_rule(chain, rule)
+
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)
         for table in ( iptc.Table.FILTER, iptc.Table.NAT, 
