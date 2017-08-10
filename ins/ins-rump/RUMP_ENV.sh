@@ -4,8 +4,7 @@
 ## First build rump (build-rr.sh xen), then source this script once:
 ## > source ./RUMP_ENV.sh
 ##
-## It MUST be run from Rump's root directory (where this script is
-## located).
+## You should be able to source it regardless of your current directory
 ##
 
 script_dir=$(readlink -f "${BASH_SOURCE[0]}")

@@ -1023,6 +1023,7 @@ mwsocket_debug_dump_actreq( void )
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 }
 
+
 // @brief Delivers signal to current process
 //
 // @return Returns pending error, or 0 if none

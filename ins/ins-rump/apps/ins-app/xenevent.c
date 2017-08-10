@@ -1098,9 +1098,9 @@ worker_thread_func( void * Arg )
 }
 
 void *
-heartbeat_thread_func( void* Args )
+heartbeat_thread_func( void * Args )
 {
-    while ( g_state.continue_heartbeat )
+    while ( !g_state.shutdown_pending )
     {
         char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
@@ -1123,8 +1123,6 @@ init_state( void )
     int rc = 0;
     
     bzero( &g_state, sizeof(g_state) );
-
-    g_state.continue_heartbeat = true;
 
     //
     // Init the buffer items
@@ -1259,7 +1257,6 @@ fini_state( void )
         sem_destroy( &curr->awaiting_work_sem );
     }
 
-    g_state.continue_heartbeat = false;
     pthread_join( g_state.heartbeat_thread, NULL );
 
     if ( g_state.input_fd > 0 )

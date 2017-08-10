@@ -11,9 +11,9 @@
 ##
 ## Environmental requirements:
 ##
-##   This script is run in an environment that is configured for Rump
-##   (i.e. rumprun is in the PATH; one way to achieve this is to
-##         source in RUMP_ENV.sh)
+##   This script is run as root in an environment that is configured
+##   for Rump, i.e. rumprun is in the PATH; one way to achieve this is
+##   to source in RUMP_ENV.sh)
 ##
 ##   xend is installed and accessible via TCP on localhost
 ##      On Ubuntu 14.04 / Xen 4.4, change /etc/xen/xend-config.sxp so
