@@ -68,6 +68,9 @@ echo "Standard build with: build-rr.sh xen"
 dbgbuildrump() {
     echo "Building rump; build log is build.log"
     ./build-rr.sh xen -- -F DBG=-ggdb > build.log
+    if [ $? -ne 0 ]; then
+        grep 'error:' build.log
+    fi
 }
 export -f dbgbuildrump
 echo "Command dbgbuildrump is available"
@@ -88,7 +91,7 @@ debugrump() {
     if [ -z $1 ]; then
         echo "WARNING: expected debug target binary as argument but not given."
     fi
-    gdb -ex 'target remote:1234' $*
+    gdb -ex 'target remote localhost:1234' $*
 }
 export -f debugrump
 echo "Command debugrump <app> is available"

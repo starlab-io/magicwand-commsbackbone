@@ -123,10 +123,12 @@ xe_comms_write_str_to_key( const char * Path,
     int                     res = 0;
     bool             started = false;
 
+    // N.B. We must handle an empty string here
+
     DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
 
-    err = xenbus_transaction_start(&txn);
-    if (err)
+    err = xenbus_transaction_start( &txn );
+    if ( err )
     {
         MYASSERT( !"xenbus_transaction_start" );
         goto ErrorExit;
@@ -134,24 +136,25 @@ xe_comms_write_str_to_key( const char * Path,
 
     started = true;
 
-    err = xenbus_write(txn, Path, Value);
-    if (err)
+    err = xenbus_write( txn, Path, Value );
+    if ( err )
     {
         MYASSERT( !"xenbus_transaction_start" );
         goto ErrorExit;
     } 
 
 ErrorExit:
-    if ( err )
+    if ( err ) 
     {
+        // there was an error above, so report error to caller
         res = 1;
         DEBUG_PRINT( "Failure: %s\n", err );
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree( err, BMK_MEMWHO_WIREDBMK );
     }
 
     if ( started )
     {
-        (void) xenbus_transaction_end(txn, 0, &retry);
+        (void) xenbus_transaction_end( txn, 0, &retry );
     }
 
     return res;
@@ -204,7 +207,7 @@ xe_comms_read_str_from_key( IN const char * Path,
 
     *OutVal = NULL;
 
-    err = xenbus_transaction_start(&txn);
+    err = xenbus_transaction_start( &txn );
     if (err)
     {
         MYASSERT( !"xenbus_transaction_start" );
@@ -213,7 +216,7 @@ xe_comms_read_str_from_key( IN const char * Path,
 
     started = true;
 
-    err = xenbus_read(txn, Path, OutVal);
+    err = xenbus_read( txn, Path, OutVal );
     if (err)
     {
         MYASSERT( !"xenbus_read" );
@@ -227,12 +230,12 @@ ErrorExit:
     {
         res = 1;
         DEBUG_PRINT( "Failure: %s\n", err );
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree( err, BMK_MEMWHO_WIREDBMK );
     }
 
     if ( started )
     {
-        (void) xenbus_transaction_end(txn, 0, &retry);
+        (void) xenbus_transaction_end( txn, 0, &retry );
     }
 
     return res;
@@ -317,9 +320,9 @@ xe_comms_wait_and_read_int_from_key( IN const char * Path,
     struct xenbus_event_queue events;
 
     bmk_memset( &events, 0, sizeof(events) );
-    xenbus_event_queue_init(&events);
+    xenbus_event_queue_init( &events );
 
-    xenbus_watch_path_token(XBT_NIL, Path, Path, &events);
+    xenbus_watch_path_token( XBT_NIL, Path, Path, &events );
 
     // Wait until we can read the key and its value is non-zero
     while ( (rc = xe_comms_read_int_from_key( Path, OutVal ) ) != 0
@@ -331,10 +334,10 @@ xe_comms_wait_and_read_int_from_key( IN const char * Path,
                          Path, *OutVal );
             //printed = true;
         }
-        xenbus_wait_for_watch(&events);
+        xenbus_wait_for_watch( &events );
     }
 
-    xenbus_unwatch_path_token(XBT_NIL, Path, Path );
+    xenbus_unwatch_path_token( XBT_NIL, Path, Path );
 
     return rc;
 }
@@ -412,7 +415,7 @@ xe_comms_read_item( void   * Memory,
 #if INS_USES_EVENT_CHANNEL
             xenevent_semaphore_down( g_state.messages_available );
 #else
-            xenevent_kpause("Poll ring buffer", true, 1, NULL);
+            xenevent_kpause( "Poll ring buffer", true, 1, NULL );
 #endif
             continue;
         }
@@ -491,7 +494,7 @@ xe_comms_write_item( void * Memory,
     (void) send_event( g_state.local_event_port );
 #endif
 
-    DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
+    DEBUG_PRINT( "g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt );
 
     return rc;
 }
@@ -536,7 +539,7 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
 
     xenbus_unwatch_path_token( XBT_NIL, path, XENEVENT_NO_NODE );
 
-    DEBUG_PRINT("Parsing grant references in %s\n", path);
+    DEBUG_PRINT( "Parsing grant references in %s\n", path );
 
     rc = xe_comms_read_str_from_key( path, &refstr );
     if ( rc )
@@ -746,7 +749,6 @@ xe_comms_listeners( const char * Listeners )
                       INS_LISTENER_KEY );
     }
 
-    MYASSERT( bmk_strlen(Listeners) > 0 );
     err = xe_comms_write_str_to_key( listener_path, Listeners );
     if ( err )
     {
