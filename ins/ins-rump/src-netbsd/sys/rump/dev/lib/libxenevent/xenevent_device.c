@@ -315,15 +315,15 @@ ErrorExit:
 
 
 static int
-xe_dev_open( dev_t Dev,
-             int Flags,
-             int Fmt,
+xe_dev_open( dev_t        Dev,
+             int          Flags,
+             int          Fmt,
              struct lwp * Lwp )
 {
     int rc = 0;
     DEBUG_PRINT("Opened device=%p, Flags=%x Fmt=%x Lwp=%p\n",
                 (void *)Dev, Flags, Fmt, Lwp);
-
+    DEBUG_BREAK();
     if ( xenevent_atomic_inc( &g_state.open_count ) > 1 )
     {
         rc = BMK_EBUSY;

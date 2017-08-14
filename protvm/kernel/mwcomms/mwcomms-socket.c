@@ -1384,9 +1384,16 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
     MYASSERT( ActiveRequest->sockinst );
     MYASSERT( Response );
 
-    if ( MtResponseSocketAccept != Response->base.type
-        || Response->base.status < 0 )
+    // Only process accept() responses
+    if ( MtResponseSocketAccept != Response->base.type ) { goto ErrorExit; }
+
+    // Bail if accept() failed. Make sure the errno is meaningful.
+    if ( Response->base.status < 0 )
     {
+        if ( MT_STATUS_INTERNAL_ERROR == Response->base.status )
+        {
+            Response->base.status = -EPROTO;
+        }
         goto ErrorExit;
     }
 
@@ -1405,7 +1412,6 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
                 Response->base.sockfd, rc );
         goto ErrorExit;
     }
-
 
     // The local creation succeeded. Update Response to reflect the
     // local socket.

@@ -355,7 +355,6 @@ open_device( void )
     int rc = 0;
 
     g_state.input_fd = open( XENEVENT_DEVICE, O_RDWR );
-    
     if ( g_state.input_fd < 0 )
     {
         rc = errno;
