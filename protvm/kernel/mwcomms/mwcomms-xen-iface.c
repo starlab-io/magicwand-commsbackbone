@@ -834,7 +834,7 @@ mw_xen_mark_response_consumed( mwcomms_ins_data_t * Ins )
     
     if( NULL == Ins )
     {
-        pr_error("Null ins pointer detected\n");
+        pr_err("Null ins pointer detected\n");
         rc = -EIO;
         goto ErrorExit;
     }
