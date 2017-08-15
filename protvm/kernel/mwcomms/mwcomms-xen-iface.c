@@ -350,10 +350,12 @@ ErrorExit:
 
 
 static void
-mw_xen_ins_seen( mwcomms_ins_data_t * Ins )
+mw_xen_ins_alive( mwcomms_ins_data_t * Ins )
 {
     MYASSERT( Ins );
     MYASSERT( 1 == atomic64_read( &Ins->in_use ) );
+
+    pr_debug( "Recognized heartbeat for INS %d\n", Ins->domid );
 
     Ins->last_seen_time = jiffies;
     Ins->missed_heartbeats = 0;
@@ -591,7 +593,7 @@ mw_xen_vm_port_is_bound( const char *Path )
         goto ErrorExit;
     }
 
-    mw_xen_ins_seen( Ins );
+    mw_xen_ins_alive( Ins );
 
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
@@ -648,7 +650,7 @@ mw_xen_ins_heartbeat( const char * Path )
         goto ErrorExit;
     }
 
-    mw_xen_ins_seen( ins );
+    mw_xen_ins_alive( ins );
 
 ErrorExit:
     return rc;
@@ -736,11 +738,9 @@ mw_xen_ins_found( const char *Path )
         }
     }
 
-    mw_xen_ins_seen( curr );
-
     err = mw_xen_init_ring_block( curr );
     if ( err ) { goto ErrorExit; }
-    
+
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn( curr );
     if ( err ) { goto ErrorExit; }
@@ -761,7 +761,9 @@ mw_xen_ins_found( const char *Path )
     // Complete: the handshake is done
     //
 
+    mw_xen_ins_alive( curr );
     curr->is_ring_ready = true;
+    pr_info( "INS %d is ready\n", curr->domid );
 
     g_mwxen_state.xen_iface_ready = true;
     g_mwxen_state.completion_cb();
@@ -773,6 +775,7 @@ ErrorExit:
     }
     return err;
 }
+
 
 bool
 MWSOCKET_DEBUG_ATTRIB
@@ -831,8 +834,6 @@ static int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_ins_reaper( void * Arg )
 {
-    int rc = 0;
-
     while ( true )
     {
         unsigned long now = jiffies;
@@ -857,12 +858,12 @@ mw_xen_ins_reaper( void * Arg )
             }
 
             ++ins->missed_heartbeats;
-            pr_err( "INS %d has missed %d hearbeat(s)\n",
+            pr_info( "INS %d has missed %d hearbeat(s)\n",
                     ins->domid, ins->missed_heartbeats );
 
             if ( ins->missed_heartbeats == HEARTBEAT_MAX_MISSES )
             {
-                pr_err( "INS %d is now considered dead\n", ins->domid );
+                pr_warn( "INS %d is now considered dead\n", ins->domid );
                 mw_xen_release_ins( ins );
             }
         }
@@ -873,14 +874,14 @@ mw_xen_ins_reaper( void * Arg )
             goto ErrorExit;
         }
 
-        // Sleep
+        // Sleep till next check
         set_current_state( TASK_INTERRUPTIBLE );
         schedule_timeout( INS_REAPER_INTERVAL_SEC * HZ );
     }
 
 ErrorExit:
     complete_all( &g_mwxen_state.ins_reaper_completion );
-    return rc;
+    return 0;
 }
 
 
@@ -905,7 +906,7 @@ mw_xen_response_available(OUT mwcomms_ins_data_t ** Ins)
             }
         }
     }
-        
+
 ErrorExit:
     return available;
 }
