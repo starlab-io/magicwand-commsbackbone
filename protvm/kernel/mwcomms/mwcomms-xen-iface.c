@@ -43,9 +43,10 @@
 #include <linux/semaphore.h>
 #include <linux/mutex.h>
 #include <linux/rwsem.h>
+#include <linux/sched.h>
 #include <linux/kthread.h>
-#include <linux/moduleparam.h>
-#include <linux/slab.h>
+//#include <linux/moduleparam.h>
+//#include <linux/slab.h>
 #include <asm/uaccess.h>          
 #include <linux/time.h>
 #include <asm/atomic.h>
@@ -59,6 +60,7 @@
 #include <xen/interface/callback.h>
 #include <xen/interface/io/ring.h>
 
+#include "mwcomms-common.h"
 #include "mwcomms-xen-iface.h"
 
 
@@ -72,6 +74,7 @@
 //how long to wait if we want to write a request but the ring is full
 #define RING_FULL_TIMEOUT (HZ >> 6)
 
+#define INS_REAPER_INTERVAL_SEC 1
 
 typedef struct _mwcomms_xen_globals
 {
@@ -85,7 +88,10 @@ typedef struct _mwcomms_xen_globals
 
     mw_xen_init_complete_cb_t * completion_cb;
     mw_xen_event_handler_cb_t * event_cb;
-    
+
+    // Kernel thread info:
+    struct task_struct * ins_reaper_thread;
+    struct completion    ins_reaper_completion;
 } mwcomms_xen_globals_t;
 
 static mwcomms_xen_globals_t g_mwxen_state = {0};
@@ -235,7 +241,7 @@ ErrorExit:
 }
 
 
-char *
+static char *
 mw_xen_read_from_key( const char * Dir, const char * Node )
 {
     struct xenbus_transaction   txn = {0};
@@ -343,6 +349,17 @@ ErrorExit:
 }
 
 
+static void
+mw_xen_ins_seen( mwcomms_ins_data_t * Ins )
+{
+    MYASSERT( Ins );
+    MYASSERT( 1 == atomic64_read( &Ins->in_use ) );
+
+    Ins->last_seen_time = jiffies;
+    Ins->missed_heartbeats = 0;
+}
+
+
 static irqreturn_t
 mw_xen_irq_event_handler( int Port, void * Data )
 {
@@ -351,7 +368,7 @@ mw_xen_irq_event_handler( int Port, void * Data )
 }
 
 
-void
+static void
 mw_xen_send_event( void )
 {
    struct evtchn_send send;
@@ -507,11 +524,10 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
 get_ins_from_xs_path( IN  const char *Path,
                       OUT mwcomms_ins_data_t ** Ins )
 {
-    int rc = 0;
+    int rc = -EINVAL;
     int index = 0;
     int domid = 0;
     char * copy = NULL;
@@ -542,11 +558,10 @@ get_ins_from_xs_path( IN  const char *Path,
     {
         if( g_ins_data[i].domid == domid )
         {
+            rc = 0;
             *Ins = &g_ins_data[i];
             break;
         }
-        //could not find ins
-        rc = -1;
     }
 
 ErrorExit:
@@ -576,9 +591,10 @@ mw_xen_vm_port_is_bound( const char *Path )
         goto ErrorExit;
     }
 
+    mw_xen_ins_seen( Ins );
+
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
-    
     if ( !is_bound_str )
     {
         rc = -EIO;
@@ -608,6 +624,36 @@ ErrorExit:
     }
     return rc;
 }
+
+
+static int
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_ins_heartbeat( const char * Path )
+{
+    int rc = 0;
+    mwcomms_ins_data_t * ins = NULL;
+
+    rc = get_ins_from_xs_path( Path, &ins );
+    if ( rc )
+    {
+        pr_err( "No ins found for vm_port_is_bound\n" );
+        goto ErrorExit;
+    }
+
+    // Heartbeat must come from active INS
+    if ( 1 != atomic64_read( &ins->in_use ) )
+    {
+        MYASSERT( !"Heartbeat from INS that is not in use" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
+    mw_xen_ins_seen( ins );
+
+ErrorExit:
+    return rc;
+}
+
 
 int
 MWSOCKET_DEBUG_ATTRIB
@@ -679,7 +725,7 @@ mw_xen_ins_found( const char *Path )
     {
         // atomic64_cmpexchng returns the original value
         // of the atomic64_t
-        if( !atomic64_cmpxchg( &g_ins_data[i].in_use, 0, 1 ) )
+        if( 0 == atomic64_cmpxchg( &g_ins_data[i].in_use, 0, 1 ) )
         {
             g_ins_data[i].domid = simple_strtol( client_id_str, NULL, 10 );
             curr = &g_ins_data[i];
@@ -690,6 +736,7 @@ mw_xen_ins_found( const char *Path )
         }
     }
 
+    mw_xen_ins_seen( curr );
 
     err = mw_xen_init_ring_block( curr );
     if ( err ) { goto ErrorExit; }
@@ -702,7 +749,7 @@ mw_xen_ins_found( const char *Path )
     err = mw_xen_offer_grant( curr );
     if( err ) { goto ErrorExit; }
 
-    //Allocate shared mem for new INS
+    // Allocate shared mem for new INS
     err = mw_xen_init_ring( curr );
     if ( err ) { goto ErrorExit; }
 
@@ -745,6 +792,94 @@ mw_xen_get_next_index_round_robin( void )
     rc = i;
 
     i++;
+    return rc;
+}
+
+
+static void
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_release_ins( mwcomms_ins_data_t * Ins )
+{
+    if ( 0 == atomic64_read( &Ins->in_use ) ) { goto ErrorExit; }
+
+    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    {
+        if ( 0 != Ins->grant_refs[ i ] )
+        {
+            pr_debug("Ending access to grant ref 0x%x\n", Ins->grant_refs[i]);
+            gnttab_end_foreign_access_ref( Ins->grant_refs[i], 0 );
+        }
+    }
+
+    if ( Ins->irq )
+    {
+        unbind_from_irqhandler( Ins->irq, NULL );
+    }
+
+    if ( !mw_xen_is_evt_chn_closed( Ins ) )
+    {
+        mw_xen_free_unbound_evt_chn( Ins );
+    }
+
+ErrorExit:
+    atomic64_set( &Ins->in_use, 0 );
+    return;
+}
+
+
+static int
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_ins_reaper( void * Arg )
+{
+    int rc = 0;
+
+    while ( true )
+    {
+        unsigned long now = jiffies;
+
+        for ( int i = 0; i < MAX_INS_COUNT; i++ )
+        {
+            mwcomms_ins_data_t * ins = &g_ins_data[i];
+
+            // Skip if not in use
+            if ( 0 == atomic64_read( &ins->in_use ) ) { continue; }
+
+            // Skip if it has been seen recently
+            unsigned long age = ( now - ins->last_seen_time ) / HZ;
+
+            // Otherwise, increase missed_heartbeats counter every
+            // time we've gone HEARTBEAT_INTERVAL_SEC seconds without
+            // hearing from INS
+            if ( age <=
+                 (HEARTBEAT_INTERVAL_SEC * ( ins->missed_heartbeats + 1 ) ) )
+            {
+                continue;
+            }
+
+            ++ins->missed_heartbeats;
+            pr_err( "INS %d has missed %d hearbeat(s)\n",
+                    ins->domid, ins->missed_heartbeats );
+
+            if ( ins->missed_heartbeats == HEARTBEAT_MAX_MISSES )
+            {
+                pr_err( "INS %d is now considered dead\n", ins->domid );
+                mw_xen_release_ins( ins );
+            }
+        }
+
+        if ( g_mwxen_state.pending_exit )
+        {
+            pr_debug( "Detected pending exit\n" );
+            goto ErrorExit;
+        }
+
+        // Sleep
+        set_current_state( TASK_INTERRUPTIBLE );
+        schedule_timeout( INS_REAPER_INTERVAL_SEC * HZ );
+    }
+
+ErrorExit:
+    complete_all( &g_mwxen_state.ins_reaper_completion );
     return rc;
 }
 
@@ -834,7 +969,7 @@ mw_xen_mark_response_consumed( mwcomms_ins_data_t * Ins )
     
     if( NULL == Ins )
     {
-        pr_error("Null ins pointer detected\n");
+        pr_err( "NULL INS pointer detected\n" );
         rc = -EIO;
         goto ErrorExit;
     }
@@ -944,8 +1079,14 @@ mw_xenstore_state_changed( struct xenbus_watch *W,
         if ( err )
         {
             pr_err( "Problem with binding event chn\n ");
-            goto ErrorExit;
         }
+        goto ErrorExit;
+    }
+
+    if ( strstr( V[ XS_WATCH_PATH ], INS_HEARTBEAT_KEY ) )
+    {
+        err = mw_xen_ins_heartbeat( V[ XS_WATCH_PATH ] );
+        goto ErrorExit;
     }
     
 ErrorExit:
@@ -1050,34 +1191,23 @@ mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
 
     g_mwxen_state.xenbus_watch_active = true;
 
-ErrorExit:
-    return rc;
-}
+    // 3. Reaper thread
 
+    init_completion( &g_mwxen_state.ins_reaper_completion );
 
-static void
-MWSOCKET_DEBUG_ATTRIB
-mw_xen_release_ins( mwcomms_ins_data_t * Ins )
-{
-
-    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    g_mwxen_state.ins_reaper_thread =
+        kthread_run( &mw_xen_ins_reaper,
+                     NULL,
+                     "mw_ins_reaper" );
+    if ( NULL == g_mwxen_state.ins_reaper_thread )
     {
-        if ( 0 != Ins->grant_refs[ i ] )
-        {
-            pr_debug("Ending access to grant ref 0x%x\n", Ins->grant_refs[i]);
-            gnttab_end_foreign_access_ref( Ins->grant_refs[i], 0 );
-        }
+        MYASSERT( !"kthread_run" );
+        rc = -ESRCH;
+        goto ErrorExit;
     }
     
-    if ( Ins->irq )
-    {
-        unbind_from_irqhandler( Ins->irq, NULL );
-    }
-
-    if ( !mw_xen_is_evt_chn_closed( Ins ) )
-    {
-        mw_xen_free_unbound_evt_chn( Ins );
-    }
+ErrorExit:
+    return rc;
 }
 
 
@@ -1085,9 +1215,7 @@ void
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_fini( void )
 {
-
     g_mwxen_state.pending_exit = true;
-
 
     for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
@@ -1102,6 +1230,11 @@ mw_xen_fini( void )
     mw_xen_initialize_keys();
 
     mw_xen_rm( XENEVENT_XENSTORE_ROOT, XENEVENT_XENSTORE_PVM_NODE );
+
+    if ( NULL != g_mwxen_state.ins_reaper_thread )
+    {
+        wait_for_completion( &g_mwxen_state.ins_reaper_completion );
+    }
 }
 
 

@@ -54,7 +54,13 @@ typedef struct _mwcomms_ins_data
 
     int           common_evtchn;
     int           irq;
-    
+
+     // Time last seen, in jiffies
+    unsigned long last_seen_time;
+
+    // count: how many heartbeats have been missed?
+    int           missed_heartbeats;
+
 } mwcomms_ins_data_t;
 
 /// @brief Initializes the Xen subsystem and initiates handshake with client
@@ -81,18 +87,8 @@ mw_xen_fini( void );
 domid_t
 mw_xen_get_local_domid( void );
 
-
-// @brief Sends an event on the common event channel.
-void
-mw_xen_send_event( void );
-
-
 int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value );
-
-
-char *
-mw_xen_read_from_key( const char * Dir, const char * Node );
 
 int
 mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **dest );
@@ -110,6 +106,9 @@ mw_xen_mark_response_consumed( mwcomms_ins_data_t *Ins );
 
 bool
 mw_xen_iface_ready( void );
+
+int
+mw_xen_read_old_ins( void );
 
 bool
 mw_xen_response_available( mwcomms_ins_data_t **Ins );

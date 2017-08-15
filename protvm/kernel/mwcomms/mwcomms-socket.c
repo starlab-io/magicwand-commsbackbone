@@ -1803,8 +1803,8 @@ mwsocket_poll_monitor( void * Arg )
         // Sleep
         mwsocket_wait( POLL_MONITOR_QUERY_INTERVAL );
         
-        // If there are any open mwsockets at all, complete a poll
-        // query exchange. The socket instance from this function
+        // If there are any "real" open mwsockets at all, complete a
+        // poll query exchange. The socket instance from this function
         // doesn't count, since it's only for poll monitoring.
         if ( atomic_read( &g_mwsocket_state.sockinst_count ) <= 1 )
         {
