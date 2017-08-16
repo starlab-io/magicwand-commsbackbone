@@ -415,11 +415,15 @@ socket( int Domain,
     int rc = 0;
     int err = 0;
 
+    // See socket(2); N.B. Type can be OR-ed with specific flags
     if ( AF_INET != Domain
-         || SOCK_STREAM != Type
+         || ( 0 == (SOCK_STREAM & Type ) )
          || (!USE_MWCOMMS) )
     {
         rc = libc_socket( Domain, Type, Protocol );
+        err = errno;
+        DEBUG_PRINT( "libc_socket( %d, %d, %d ) ==> %d\n",
+                     Domain, Type, Protocol, rc );
         goto ErrorExit;
     }
 
@@ -436,19 +440,17 @@ socket( int Domain,
     {
         err = errno;
         MYASSERT( !"ioctl" );
-        errno = err;
         goto ErrorExit;
     }
+
+    DEBUG_PRINT( "mwsocket( %d, %d, %d ) ==> %d\n",
+                 Domain, Type, Protocol, rc );
 
     rc = create.outfd;
 #endif
 
 ErrorExit:
-    err = errno;
-    DEBUG_PRINT( "socket( %d, %d, %d ) ==> %d\n",
-                 Domain, Type, Protocol, rc );
     errno = err;
-
     return rc;
 }
 
