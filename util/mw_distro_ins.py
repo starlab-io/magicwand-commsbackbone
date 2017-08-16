@@ -11,9 +11,9 @@
 ##
 ## Environmental requirements:
 ##
-##   This script is run in an environment that is configured for Rump
-##   (i.e. rumprun is in the PATH; one way to achieve this is to
-##         source in RUMP_ENV.sh)
+##   This script is run as root in an environment that is configured
+##   for Rump, i.e. rumprun is in the PATH; one way to achieve this is
+##   to source in RUMP_ENV.sh)
 ##
 ##   xend is installed and accessible via TCP on localhost
 ##      On Ubuntu 14.04 / Xen 4.4, change /etc/xen/xend-config.sxp so
@@ -270,6 +270,21 @@ class PortForwarder:
         rule.add_match( match )
 
         self._enable_rule( chain, rule )
+
+        # Prerequisite iptables rule
+        # iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
+
+        rule = iptc.Rule()
+        rule.protocol = "tcp"
+
+        match = rule.create_match("conntrack")
+        match.ctstate = "RELATED,ESTABLISHED"
+
+        rule.target = iptc.Target(rule, "ACCEPT")
+
+        self._enable_rule(chain, rule)
 
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)

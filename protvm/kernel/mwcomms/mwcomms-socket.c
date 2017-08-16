@@ -460,9 +460,9 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveReq,
                        IN bool                        WaitForRing );
 
 static int
-mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
-                       IN mt_request_generic_t * Request,
-                       IN bool                   AwaitResponse );
+mwsocket_send_message( IN mwsocket_active_request_t * ActiveRequest,
+                       IN mt_request_generic_t      * Request,
+                       IN bool                        AwaitResponse );
 
 static int
 mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
@@ -1126,6 +1126,7 @@ mwsocket_debug_dump_actreq( void )
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 }
 
+
 // @brief Delivers signal to current process
 //
 // @return Returns pending error, or 0 if none
@@ -1545,7 +1546,8 @@ ErrorExit:
 /**
  * @brief Post-process the response in the context of the process using the response
  *
- * Useful especially for dealing with successful call to accept(), which creates a new socket.
+ * Useful especially for dealing with successful call to accept(),
+ * which creates a new socket.
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
@@ -1559,9 +1561,22 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
     MYASSERT( ActiveRequest->sockinst );
     MYASSERT( Response );
 
-    if ( MtResponseSocketAccept != Response->base.type
-        || Response->base.status < 0 )
+    if ( (int)Response->base.status < 0 )
     {
+        pr_warn( "INS failure: Response ID %llx type %lx status %d\n",
+                 Response->base.id, (long)Response->base.type, Response->base.status );
+    }
+
+    // Only process accept() responses
+    if ( MtResponseSocketAccept != Response->base.type ) { goto ErrorExit; }
+
+    // Bail if accept() failed. Make sure the errno is meaningful.
+    if ( Response->base.status < 0 )
+    {
+        if ( MT_STATUS_INTERNAL_ERROR == Response->base.status )
+        {
+            Response->base.status = -EPROTO;
+        }
         goto ErrorExit;
     }
 
@@ -1709,35 +1724,32 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
-mwsocket_send_message( IN mwsocket_instance_t * SockInst,
-                       IN mt_request_generic_t * Request,
-                       IN bool                   AwaitResponse )
+mwsocket_send_message( IN mwsocket_active_request_t * ActiveRequest,
+                       IN mt_request_generic_t      * Request,
+                       IN bool                        AwaitResponse )
 {
     int rc = 0;
     int remoterc = 0;
-    mwsocket_active_request_t * actreq = NULL;
-    
-    rc = mwsocket_create_active_request( SockInst, &actreq );
-    if ( rc ) { goto ErrorExit; }
+    //mwsocket_active_request_t * actreq = NULL;
 
-    actreq->deliver_response = AwaitResponse;
+    MYASSERT( ActiveRequest );
+    MYASSERT( Request );
 
-    memcpy( &actreq->rr.request, Request, Request->base.size );
+    ActiveRequest->deliver_response = AwaitResponse;
 
-    rc = mwsocket_send_request( actreq, true );
+    memcpy( &ActiveRequest->rr.request, Request, Request->base.size );
+
+    rc = mwsocket_send_request( ActiveRequest, true );
     if ( rc ) { goto ErrorExit; }
 
     if ( !AwaitResponse ) { goto ErrorExit; }
 
-    wait_for_completion_interruptible( &actreq->arrived );
-    pr_debug( "Response arrived: %lx\n", (unsigned long)actreq->id );
+    wait_for_completion_interruptible( &ActiveRequest->arrived );
+    pr_debug( "Response arrived: %lx\n", (unsigned long)ActiveRequest->id );
 
-    remoterc = -actreq->rr.response.base.status;
+    remoterc = -ActiveRequest->rr.response.base.status;
 
 ErrorExit:
-    // If the active request was created, release it and socket instance
-    mwsocket_destroy_active_request( actreq );
-
     if ( remoterc )
     {
         rc = remoterc;
@@ -2115,13 +2127,21 @@ mwsocket_create( OUT mwsocket_t * SockFd,
     create.sock_protocol = Protocol;
 
     // Send request, wait for response
-    rc = mwsocket_send_message( sockinst,
+    rc = mwsocket_send_message( actreq,
                                 (mt_request_generic_t *)&create,
                                 true );
-    if ( rc ) { goto ErrorExit; }
+    if ( rc )
+    {
+        pr_err( "Socket creation failed: rc=%d, remote rc=%d\n",
+                rc, actreq->rr.response.base.status );
+        if ( -EMFILE == (int) actreq->rr.response.base.status )
+        {
+            pr_err( "INS failed: too many files. Check INS MAX_THREAD_COUNT.\n" );
+        }
+        goto ErrorExit;
+    }
 
 ErrorExit:
-
     mwsocket_destroy_active_request( actreq );
     if ( 0 == rc )
     {

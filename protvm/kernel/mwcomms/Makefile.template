@@ -15,7 +15,8 @@ mwcomms-y += mwcomms-base.o mwcomms-xen-iface.o mwcomms-socket.o
 mwcomms-y += mwcomms-backchannel.o
 
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
-ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
+ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common 
+ccflags-y += -I$(PWD)/../../../exports/imports
 
 # Include support for the backchannel?
 ccflags-y += -DBACKCHANNEL # support the netflow backchannel

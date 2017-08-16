@@ -6,11 +6,14 @@
 // concurrent connections we can handle. Under normal circumstances,
 // most of them will be in a wait state most of the time - so a large
 // number should be OK. However, Rump seems to have an internal limit
-// of 100.
+// of 100, although we have problems when we exceed 62 worker threads
+// (plus some extra that do other things). Exceeding the max causes
+// open to fail with EMFILE errno.
 //
-//#define MAX_THREAD_COUNT 100
 
-#define MAX_THREAD_COUNT 3
+// Hard max: 62?? XXXX: research this further: what's the true max?
+#define MAX_THREAD_COUNT 60   // for production
+//#define MAX_THREAD_COUNT 3  // for testing
 
 //
 // Number of buffer items. This is the number of requests (from the

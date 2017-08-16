@@ -31,7 +31,6 @@
  *
  */
 
-
 #include "mwcomms-common.h"
 
 #include <linux/init.h>           
@@ -60,7 +59,6 @@
 
 #include "mwcomms-xen-iface.h"
 #include <xen_keystore_defs.h>
-
 
 // Per-INS data
 typedef struct _mwcomms_xen_ins
@@ -93,12 +91,15 @@ static mwcomms_xen_globals_t g_mwxen_state;
 
 
 static int
-mw_xen_rm( const char *Dir, const char *Node )
+mw_xen_rm( const char * Dir, const char * Node )
 {
     struct xenbus_transaction   txn;
     int                         err;
     bool                        txnstarted = false;
     int                         term = 0;
+
+    MYASSERT( Dir );
+    MYASSERT( Node );
 
     err = xenbus_transaction_start( &txn );
     if ( err )
@@ -139,6 +140,9 @@ mw_xen_mkdir( const char * Dir, const char * Node )
     int                         err;
     bool                        txnstarted = false;
     int                         term = 0;
+
+    MYASSERT( Dir );
+    MYASSERT( Node );
 
     pr_debug( "Making dir %s/%s\n", Dir, Node );
 
@@ -189,17 +193,21 @@ ErrorExit:
 int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
 {
-   struct xenbus_transaction   txn;
-   int                         err;
-   bool                  txnstarted = false;
-   int                   term = 0;
+   struct xenbus_transaction txn;
+   int                       err;
+   int                      term = 0;
+   bool               txnstarted = false;
+
+   MYASSERT( Dir   );
+   MYASSERT( Node  );
+   MYASSERT( Value );
 
    pr_debug( "Writing %s to %s/%s\n", Value, Dir, Node );
 
    err = xenbus_transaction_start(&txn);
    if ( err )
    {
-       pr_err("Error starting xenbus transaction\n");
+       pr_err( "Error starting xenbus transaction\n" );
        goto ErrorExit;
    }
 
@@ -218,7 +226,7 @@ mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value )
    err = xenbus_write( txn, Dir, Node, Value );
    if ( err )
    {
-       pr_err("Could not write to XenStore Key dir:%s node:%s\n", Dir, Node );
+       pr_err( "Could not write to XenStore Key dir:%s node:%s\n", Dir, Node );
       goto ErrorExit;
    }
 
@@ -230,7 +238,7 @@ ErrorExit:
            pr_err( "Failed to end transaction: %s/%s = %s\n", Dir, Node, Value );
        }
    }
-   
+
    return err;
 }
 
@@ -246,14 +254,14 @@ mw_xen_read_from_key( const char * Dir, const char * Node )
 
    err = xenbus_transaction_start(&txn);
    if (err) {
-      pr_err("Error starting xenbus transaction\n");
+      pr_err( "Error starting xenbus transaction\n" );
       return NULL;
    }
 
    str = (char *)xenbus_read(txn, Dir, Node, NULL);
    if (XENBUS_IS_ERR_READ(str))
    {
-      pr_err("Could not read XenStore Key: %s/%s\n", Dir, Node );
+      pr_err( "Could not read XenStore Key: %s/%s\n", Dir, Node );
       xenbus_transaction_end(txn,1);
       return NULL;
    }
@@ -276,7 +284,7 @@ mw_xen_write_server_id_to_key( void )
 
    if ( NULL == dom_id_str )
    {
-       pr_err("Error: Failed to read my Dom Id Key\n");
+       pr_err( "Error: Failed to read my Dom Id Key\n" );
        err = -EIO;
        goto ErrorExit;
    }
@@ -362,7 +370,7 @@ mw_xen_send_event( void )
 
    if ( HYPERVISOR_event_channel_op(EVTCHNOP_send, &send) )
    {
-       pr_err("Failed to send event\n");
+       pr_err( "Failed to send event\n" );
    }
 }
 
@@ -435,7 +443,7 @@ mw_xen_offer_grant( domid_t ClientId )
    {
        rc = gnttab_grant_foreign_access( g_mwxen_state.remote_domid,
                                          mfn + i,
-                                         0 );
+                                         0 ); // not RO
        if ( rc < 0 )
        {
            pr_err( "gnttab_grant_foreign_access failed: %d\n", rc );
@@ -466,30 +474,38 @@ mw_xen_write_grant_refs_to_key( void )
     // Must be large enough for one grant ref, in hex, plus '\0'
     // Make space for 12345678\0
     char one_ref[ 8 + 1 ];
-    
-    // XXXX: If we make the shared memory region "really big", we may
-    // have to get this memory via kmalloc()
-    char gnt_refs[ XENEVENT_GRANT_REF_COUNT * sizeof(one_ref) ] = {0};
-
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
+    
+    size_t gnt_refs_sz = XENEVENT_GRANT_REF_COUNT * sizeof(one_ref);
+
+    char * gnt_refs = kmalloc( gnt_refs_sz, GFP_KERNEL );
+    if ( NULL == gnt_refs )
+    {
+        MYASSERT( "!kmalloc" );
+        rc = -ENOMEM;
+        goto ErrorExit;
+    }
+
+    gnt_refs[0] = '\0';
 
     for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
     {
         if ( snprintf( one_ref, sizeof(one_ref),
                        "%x ", g_mwxen_state.grant_refs[i] ) >= sizeof(one_ref))
         {
-            pr_err("Insufficient space to write grant ref.\n");
+            pr_err( "Insufficient space to write grant ref.\n" );
             rc = -E2BIG;
             goto ErrorExit;
         }
 
-        if ( strncat( gnt_refs, one_ref, sizeof(gnt_refs) ) >=
-             gnt_refs + sizeof(gnt_refs) )
+        if ( strlen( gnt_refs ) >= gnt_refs_sz - sizeof(one_ref) )
         {
-            pr_err("Insufficient space to write all grant refs.\n");
+            pr_err( "Insufficient space to write all grant refs.\n" );
             rc = -E2BIG;
             goto ErrorExit;
         }
+
+        (void) strncat( gnt_refs, one_ref, gnt_refs_sz );
     }
 
     snprintf( path, sizeof(path), "%s/%d",
@@ -498,12 +514,16 @@ mw_xen_write_grant_refs_to_key( void )
     rc = mw_xen_write_to_key( path, GNT_REF_KEY, gnt_refs );
 
 ErrorExit:
+    if ( NULL != gnt_refs )
+    {
+        kfree( gnt_refs );
+    }
     return rc;
 }
 
 
 static void
-mw_xen_vm_port_is_bound( const char *Path )
+mw_xen_vm_port_is_bound( const char * Path )
 {
     char * is_bound_str = NULL;
 
@@ -519,7 +539,7 @@ mw_xen_vm_port_is_bound( const char *Path )
         goto ErrorExit;
     }
 
-    pr_debug("The remote event channel is bound\n");
+    pr_debug( "The remote event channel is bound\n" );
 
     g_mwxen_state.irq =
         bind_evtchn_to_irqhandler( g_mwxen_state.common_evtchn,
@@ -539,7 +559,7 @@ ErrorExit:
 
 
 static void
-mw_ins_dom_id_found( const char *Path )
+mw_ins_dom_id_found( const char * Path )
 {
     char     *client_id_str = NULL;
     int       err = 0;
@@ -548,7 +568,7 @@ mw_ins_dom_id_found( const char *Path )
                                                   XENEVENT_NO_NODE );
     if ( !client_id_str )
     {
-        pr_err("Error reading client id key!!!\n");
+        pr_err( "Error reading client id key!!!\n" );
         goto ErrorExit;
     }
 
@@ -568,7 +588,8 @@ mw_ins_dom_id_found( const char *Path )
     if ( err ) { goto ErrorExit; }
    
     // Offer Grant to Client
-    mw_xen_offer_grant( g_mwxen_state.remote_domid );
+    err = mw_xen_offer_grant( g_mwxen_state.remote_domid );
+    if ( err ) { goto ErrorExit; }
 
     // Write Grant Ref to key 
     err = mw_xen_write_grant_refs_to_key();
@@ -590,10 +611,17 @@ ErrorExit:
 
 
 static void
-mw_xenstore_state_changed( struct xenbus_watch *W,
-                           const char **V,
-                           unsigned int L )
+mw_xenstore_state_changed( struct xenbus_watch * W,
+                           const char         ** V,
+                           unsigned int          L )
 {
+    if ( NULL == W
+         || NULL == V )
+    {
+        MYASSERT( !"NULL passed in" );
+        goto ErrorExit;
+    }
+
     pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
@@ -646,12 +674,12 @@ static int
 mw_xen_initialize_keys(void)
 {
     int rc = 0;
-    
+
     rc = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM,
                               SERVER_ID_KEY,
                               KEY_RESET_VAL );
     if ( rc ) goto ErrorExit;
-    
+
 ErrorExit:
     return rc;
 }
@@ -671,12 +699,12 @@ mw_xen_init( mw_region_t * SharedMem,
     g_mwxen_state.xen_shmem     = *SharedMem;
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb      = EventCallback;
-   
+
     // Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
     if ( rc )
     {
-        pr_err("Keystore initialization failed\n");
+        pr_err( "Keystore initialization failed\n" );
         goto ErrorExit;
     }
 
@@ -684,7 +712,7 @@ mw_xen_init( mw_region_t * SharedMem,
     rc = mw_xen_initialize_keys();
     if ( rc )
     {
-        pr_err("Key initialization failed: %d\n", rc );
+        pr_err( "Key initialization failed: %d\n", rc );
         goto ErrorExit;
     }
 
@@ -705,7 +733,7 @@ mw_xen_init( mw_region_t * SharedMem,
     rc = register_xenbus_watch( &mw_xenstore_watch );
     if (rc)
     {
-        pr_err("Failed to set xenstore_watcher\n");
+        pr_err( "Failed to set xenstore_watcher\n" );
         goto ErrorExit;
     }
 
@@ -723,7 +751,7 @@ mw_xen_fini( void )
     {
         if ( 0 != g_mwxen_state.grant_refs[ i ] )
         {
-            pr_debug("Ending access to grant ref 0x%x\n", g_mwxen_state.grant_refs[i]);
+            pr_debug( "Ending access to grant ref 0x%x\n", g_mwxen_state.grant_refs[i] );
             gnttab_end_foreign_access_ref( g_mwxen_state.grant_refs[i], 0 );
         }
     }
@@ -733,7 +761,7 @@ mw_xen_fini( void )
         unregister_xenbus_watch( &mw_xenstore_watch );
     }
 
-    mw_xen_initialize_keys();
+    (void) mw_xen_initialize_keys();
 
     if ( g_mwxen_state.irq )
     {

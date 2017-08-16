@@ -39,7 +39,6 @@ typedef struct _xenevent_globals
 
     domid_t   client_id;
     pthread_t heartbeat_thread;
-    bool continue_heartbeat;
 
     // Network statistics put in XenStore every time the heartbeat is
     // updated

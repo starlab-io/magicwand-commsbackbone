@@ -95,17 +95,16 @@ typedef struct _xen_comm_state
     mwevent_sring_t     * shared_ring;
     mwevent_back_ring_t   back_ring;
     size_t                shared_ring_size;
-    
+
     // Event channel memory
     void    * event_channel_mem;
     size_t    event_channel_mem_size;
-    
+
     // Event channel local port
     evtchn_port_t local_event_port;
-    
+
     // Semaphore that is signalled once for each message that has arrived
     xenevent_semaphore_t messages_available;
-
 } xen_comm_state_t;
 
 static xen_comm_state_t g_state;
@@ -124,45 +123,47 @@ xe_comms_write_str_to_key( const char * Path,
     int                     res = 0;
     bool             started = false;
 
+    // N.B. We must handle an empty string here
+
     DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
-    
-    err = xenbus_transaction_start(&txn);
-    if (err)
+
+    err = xenbus_transaction_start( &txn );
+    if ( err )
     {
         MYASSERT( !"xenbus_transaction_start" );
         goto ErrorExit;
     }
 
     started = true;
-    
-    err = xenbus_write(txn, Path, Value);
-    if (err)
+
+    err = xenbus_write( txn, Path, Value );
+    if ( err )
     {
         MYASSERT( !"xenbus_transaction_start" );
         goto ErrorExit;
     } 
 
 ErrorExit:
-    if ( err )
+    if ( err ) 
     {
+        // there was an error above, so report error to caller
         res = 1;
         DEBUG_PRINT( "Failure: %s\n", err );
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree( err, BMK_MEMWHO_WIREDBMK );
     }
 
     if ( started )
     {
-        (void) xenbus_transaction_end(txn, 0, &retry);
+        (void) xenbus_transaction_end( txn, 0, &retry );
     }
-    
+
     return res;
 }
 
 
-
 static int
 xe_comms_write_int_to_key( const char * Path,
-                           const int Value )
+                           const int    Value )
 {
     int rc = 0;
     char buf[MAX_KEY_VAL_WIDTH];
@@ -194,20 +195,19 @@ xe_comms_publish_ip_addr( const char * Ip )
 }
 
 
-
 static int
-xe_comms_read_str_from_key( IN const char *Path,
-                            OUT char ** OutVal)
+xe_comms_read_str_from_key( IN const char * Path,
+                            OUT char     ** OutVal )
 {
     xenbus_transaction_t txn;
     int                retry;
     char                *err;
     int                  res = 0;
     bool             started = false;
-    
+
     *OutVal = NULL;
-        
-    err = xenbus_transaction_start(&txn);
+
+    err = xenbus_transaction_start( &txn );
     if (err)
     {
         MYASSERT( !"xenbus_transaction_start" );
@@ -215,8 +215,8 @@ xe_comms_read_str_from_key( IN const char *Path,
     }
 
     started = true;
-    
-    err = xenbus_read(txn, Path, OutVal);
+
+    err = xenbus_read( txn, Path, OutVal );
     if (err)
     {
         MYASSERT( !"xenbus_read" );
@@ -224,33 +224,33 @@ xe_comms_read_str_from_key( IN const char *Path,
     }
 
     DEBUG_PRINT( "Read from xenstore: %s => %s\n", Path, *OutVal );
-    
+
 ErrorExit:
     if ( err )
     {
         res = 1;
         DEBUG_PRINT( "Failure: %s\n", err );
-        bmk_memfree(err, BMK_MEMWHO_WIREDBMK);
+        bmk_memfree( err, BMK_MEMWHO_WIREDBMK );
     }
 
     if ( started )
     {
-        (void) xenbus_transaction_end(txn, 0, &retry);
+        (void) xenbus_transaction_end( txn, 0, &retry );
     }
-    
-    return res;
 
+    return res;
 }
 
+
 static int
-xe_comms_remove_directory( const char *Path )
+xe_comms_remove_directory( const char * Path )
 {
     xenbus_transaction_t txn;
     int                retry;
     char                *err;
     int                  res = 0;
     bool             started = false;
-   
+
     err = xenbus_transaction_start( &txn );
     if ( err )
     {
@@ -280,7 +280,6 @@ ErrorExit:
         (void) xenbus_transaction_end( txn, 0, &retry );
     }
 
-
     return res;
 }
 
@@ -289,11 +288,11 @@ int
 xe_comms_read_int_from_key( IN const char * Path,
                             OUT int       * OutVal )
 {
-    char                *val = NULL;
-    int                  res = 0;
+    char * val = NULL;
+    int    res = 0;
 
     *OutVal = 0;
-    
+
     res = xe_comms_read_str_from_key( Path, &val );
     if ( res )
     {
@@ -307,23 +306,23 @@ ErrorExit:
     {
         bmk_memfree( val, BMK_MEMWHO_WIREDBMK );
     }
-    
+
     return res;
 }
 
 
 static int
-xe_comms_wait_and_read_int_from_key( IN const char *Path,
-                                     OUT int * OutVal)
+xe_comms_wait_and_read_int_from_key( IN const char * Path,
+                                     OUT int       * OutVal )
 {
     int     rc = 0;
     bool printed = false;
     struct xenbus_event_queue events;
 
     bmk_memset( &events, 0, sizeof(events) );
-    xenbus_event_queue_init(&events);
+    xenbus_event_queue_init( &events );
 
-    xenbus_watch_path_token(XBT_NIL, Path, Path, &events);
+    xenbus_watch_path_token( XBT_NIL, Path, Path, &events );
 
     // Wait until we can read the key and its value is non-zero
     while ( (rc = xe_comms_read_int_from_key( Path, OutVal ) ) != 0
@@ -335,10 +334,10 @@ xe_comms_wait_and_read_int_from_key( IN const char *Path,
                          Path, *OutVal );
             //printed = true;
         }
-        xenbus_wait_for_watch(&events);
+        xenbus_wait_for_watch( &events );
     }
 
-    xenbus_unwatch_path_token(XBT_NIL, Path, Path );
+    xenbus_unwatch_path_token( XBT_NIL, Path, Path );
 
     return rc;
 }
@@ -351,7 +350,7 @@ xe_comms_wait_and_read_int_from_key( IN const char *Path,
 
 #if PVM_USES_EVENT_CHANNEL
 static int
-send_event(evtchn_port_t Port)
+send_event( evtchn_port_t Port )
 {
 
     int  err;
@@ -371,11 +370,11 @@ send_event(evtchn_port_t Port)
 
 #if (INS_USES_EVENT_CHANNEL || PVM_USES_EVENT_CHANNEL)
 static void
-xe_comms_event_callback( evtchn_port_t Port,
-                         struct pt_regs *Regs,
-                         void *Data )
+xe_comms_event_callback( evtchn_port_t    Port,
+                         struct pt_regs * Regs,
+                         void           * Data )
 {
-    DEBUG_PRINT("Event Channel %u\n", Port );
+    DEBUG_PRINT( "Event Channel %u\n", Port );
 
 #if INS_USES_EVENT_CHANNEL
     //
@@ -395,8 +394,8 @@ xe_comms_event_callback( evtchn_port_t Port,
  * signals ("up" functions) without an item becoming available.
  */
 int
-xe_comms_read_item( void * Memory,
-                    size_t Size,
+xe_comms_read_item( void   * Memory,
+                    size_t   Size,
                     size_t * BytesRead )
 {
     int                         rc = 0;
@@ -415,16 +414,8 @@ xe_comms_read_item( void * Memory,
             // arrives or (b) a timeout has expired, and try again.
 #if INS_USES_EVENT_CHANNEL
             xenevent_semaphore_down( g_state.messages_available );
-/*
-            // XXXX: poor man's semaphore_timeout()
-            if ( !xenevent_semaphore_trydown( g_state.messages_available ) )
-            {
-                xenevent_kpause("Semaphore poll", true, 1, NULL);
-            }
-*/
-
 #else
-            xenevent_kpause("Poll ring buffer", true, 1, NULL);
+            xenevent_kpause( "Poll ring buffer", true, 1, NULL );
 #endif
             continue;
         }
@@ -439,26 +430,26 @@ xe_comms_read_item( void * Memory,
                  g_state.back_ring.req_cons,
                  (unsigned long)request->base.id, request->base.size );
     
-    if ( !MT_IS_REQUEST( request ) ||
-         request->base.size > Size  )
+    if ( !MT_IS_REQUEST( request )
+         || request->base.size > Size  )
     {
         rc = BMK_EINVAL;
         MYASSERT( !"Programming error: there's a problem with the request" );
         goto ErrorExit;
     }
 
-    // Total size: header + payload sizes. Do a direct memory copy,
-    // since Rump has no division between user and kernel memory.
+    // Total size: header + payload sizes. Do a direct memory copy;
+    // Rump has no division between user and kernel memory.
     *BytesRead = request->base.size;
     bmk_memcpy( Memory, request, *BytesRead );
 
 ErrorExit:
-    // Advance the counter for the next request
+    // Advance the local (private) counter for the next request
     ++g_state.back_ring.req_cons;
-    RING_FINAL_CHECK_FOR_REQUESTS( &g_state.back_ring, available );
 
     return rc;
 }
+
 
 /**
  * xe_comms_write_item
@@ -486,7 +477,7 @@ xe_comms_write_item( void * Memory,
     // Verify that we are clobbering a request with a response.
     MYASSERT( MT_IS_REQUEST( (mt_response_generic_t *)dest ) );
     MYASSERT( MT_IS_RESPONSE( response ) );
-    
+
     *BytesWritten = response->base.size;
     MYASSERT( *BytesWritten <= Size );
 
@@ -502,8 +493,8 @@ xe_comms_write_item( void * Memory,
 #if PVM_USES_EVENT_CHANNEL
     (void) send_event( g_state.local_event_port );
 #endif
-    
-    DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
+
+    DEBUG_PRINT( "g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt );
 
     return rc;
 }
@@ -518,7 +509,7 @@ xe_comms_write_item( void * Memory,
  * is XENEVENT_GRANT_REF_COUNT.
  */
 static int
-receive_grant_references( domid_t RemoteId )
+xe_comms_rcv_grant_refs( domid_t RemoteId )
 {
     struct xenbus_event_queue events;
     int rc = 0;
@@ -536,7 +527,7 @@ receive_grant_references( domid_t RemoteId )
                   XENEVENT_XENSTORE_ROOT,
                   g_state.local_id,
                   GNT_REF_KEY ); 
-              
+
     xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
     while ( (err = xenbus_read( XBT_NIL, path, &msg ) ) != NULL
             ||  msg[0] == '0')
@@ -548,14 +539,14 @@ receive_grant_references( domid_t RemoteId )
 
     xenbus_unwatch_path_token( XBT_NIL, path, XENEVENT_NO_NODE );
 
-    DEBUG_PRINT("Parsing grant references in %s\n", path);
+    DEBUG_PRINT( "Parsing grant references in %s\n", path );
 
     rc = xe_comms_read_str_from_key( path, &refstr );
     if ( rc )
     {
         goto ErrorExit;
     }
-    
+
     // Extract the grant references from XenStore - they are space-delimited hex values
     msgptr = msg;
     for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
@@ -565,7 +556,7 @@ receive_grant_references( domid_t RemoteId )
         if ( *next != XENEVENT_GRANT_REF_DELIM [0] )
         {
             rc = BMK_EINVAL;
-            MYASSERT( !("Invalid data in grant ref path" ) );
+            MYASSERT( !"Invalid data in grant ref path" );
             goto ErrorExit;
         }
 
@@ -580,17 +571,18 @@ receive_grant_references( domid_t RemoteId )
         gntmap_map_grant_refs( &g_state.gntmap_map,
                                XENEVENT_GRANT_REF_COUNT,  // number of grant refs
                                (uint32_t *) &RemoteId,    // dom ID (only 1 so stride=0)
-                               0,      
+                               0,
                                (grant_ref_t *) g_state.grant_refs,
                                1 ); // region is writable
-    if (NULL == g_state.shared_ring)
+    if ( NULL == g_state.shared_ring )
     {
         MYASSERT( !"gntmap_map_grant_refs failed" );
-        return BMK_ENOMEM;
+        rc = BMK_ENOMEM;
+        goto ErrorExit;
     }
 
     g_state.shared_ring_size = XENEVENT_GRANT_REF_COUNT * PAGE_SIZE;
-    
+
 ErrorExit:
     if ( refstr )
     {
@@ -603,13 +595,13 @@ ErrorExit:
 
 static int
 xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
-                               evtchn_port_t Remote_Prt_Nmbr)
+                               evtchn_port_t Remote_Prt_Nmbr )
 {
     int err = 0;
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
     // Don't use minios_evtchn_bind_interdomain; spurious events are
     // delivered to us when we do.
-    
+
     g_state.event_channel_mem = bmk_pgalloc( INS_EVENT_CHANNEL_MEM_ORDER );
     if (NULL == g_state.event_channel_mem)
     {
@@ -633,7 +625,7 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
         MYASSERT(!"Could not bind to event channel\n");
         goto ErrorExit;
     }
-    
+
     // Clear channel of events and unmask
     minios_clear_evtchn( g_state.local_event_port );
     minios_unmask_evtchn( g_state.local_event_port );
@@ -652,19 +644,10 @@ xe_comms_bind_to_interdom_chn (domid_t Srvr_Id,
         goto ErrorExit;
     }
 
-    /*
-    bmk_printf( "Waiting." );
-    for ( int i = 0; i < 10; i++ )
-    {
-        if ( i % 5 == 0 ) bmk_printf(".");
-    }
-
-    send_event( g_state.local_event_port );
-    */
-
 ErrorExit:
     return err;
 }
+
 
 int
 xe_comms_get_sock_params( OUT char * SockParams )
@@ -704,14 +687,13 @@ ErrorExit:
 }
 
 
-
 int
 xe_comms_heartbeat( const char * NetworkStats )
 {
     static int heartbeat = 0;
-    int err = 0;
     static char heartbeat_path[XENEVENT_PATH_STR_LEN] = {0};
     static char stats_path[XENEVENT_PATH_STR_LEN] = {0};
+    int err = 0;
 
     if ( 0 == heartbeat )
     {
@@ -754,15 +736,12 @@ ErrorExit:
 int
 xe_comms_listeners( const char * Listeners )
 {
-    static bool listener_path_init = false;
-    int err = 0;
     static char listener_path[XENEVENT_PATH_STR_LEN] = {0};
+    int err = 0;
 
-    if ( !listener_path_init )
+    // Just create path the first time
+    if ( '\0' == listener_path[0] )
     {
-        // Just create path the first time
-        listener_path_init = true;
-
         bmk_snprintf( listener_path, sizeof( listener_path ),
                       INS_XENSTORE_DIR_FMT "/%s",
                       XENEVENT_XENSTORE_ROOT,
@@ -770,7 +749,6 @@ xe_comms_listeners( const char * Listeners )
                       INS_LISTENER_KEY );
     }
 
-    MYASSERT( bmk_strlen(Listeners) > 0 );
     err = xe_comms_write_str_to_key( listener_path, Listeners );
     if ( err )
     {
@@ -838,7 +816,6 @@ xe_comms_register( void )
     int             rc = 0;
     domid_t         remoteId = 0;
     char            path[ MAX_KEY_VAL_WIDTH ] = {0};
-
     evtchn_port_t   vm_evt_chn_prt_nmbr = 0;
 
     //
@@ -874,7 +851,7 @@ xe_comms_register( void )
     //
     // Wait for the grant references and map them in
     //
-    rc = receive_grant_references( remoteId );
+    rc = xe_comms_rcv_grant_refs( remoteId );
     if ( rc )
     {
         goto ErrorExit;
@@ -887,7 +864,7 @@ xe_comms_register( void )
                   XENEVENT_XENSTORE_ROOT,
                   g_state.local_id,
                   VM_EVT_CHN_PORT_KEY );
-              
+
     rc = xe_comms_wait_and_read_int_from_key( path,
                                               &vm_evt_chn_prt_nmbr );
     if ( rc )
@@ -900,27 +877,13 @@ xe_comms_register( void )
     {
         goto ErrorExit;
     }
-/*
-    // Initialize heartbeat
-    bmk_snprintf( path,
-                  sizeof( path ),
-                  "%s/%d/%s",
-                  XENEVENT_XENSTORE_ROOT,
-                  g_state.local_id,
-                  INS_HEARTBEAT_KEY );
 
-    rc = xe_comms_write_int_to_key( path, 0 );
-    if( 0 != rc )
-    {
-        goto ErrorExit;
-    }
-*/
     // The grant has been accepted. We can use shared memory for the
     // ring buffer now. We're the back end, so we only perform the back init.
     BACK_RING_INIT( &g_state.back_ring,
                     g_state.shared_ring,
                     g_state.shared_ring_size );
-    
+
 ErrorExit:
     return rc;
 }

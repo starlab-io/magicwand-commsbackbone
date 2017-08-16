@@ -553,6 +553,7 @@ accept( int               SockFd,
     mt_request_generic_t  request;
     mt_response_generic_t response = {0};
     ssize_t rc = 0;
+    int e = 0;
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -571,10 +572,8 @@ accept( int               SockFd,
         goto ErrorExit;
     }
 
-    if ( response.base.status < 0 )
+    if ( (int) response.base.status < 0 )
     {
-        rc = -1;
-        errno = -response.base.status;
         goto ErrorExit;
     }
 
@@ -583,7 +582,9 @@ accept( int               SockFd,
                           &response.socket_accept.sockaddr );
 
 ErrorExit:
+    e = errno;
     DEBUG_PRINT( "accept(%d, ...) ==> %d\n", SockFd, (int)rc );
+    errno = e;
     return rc;
 }
 
@@ -1713,7 +1714,6 @@ init_wrapper( void )
 void __attribute__((destructor))
 fini_wrapper( void )
 {
-    
     if ( g_dlh_libc )
     {
         dlclose( g_dlh_libc );
@@ -1725,10 +1725,11 @@ fini_wrapper( void )
         libc_close( devfd );
     }
 
+    // Don't call DEBUG_PRINT() after g_log_file is closed!
+    DEBUG_PRINT( "Intercept module unloaded\n" );
+
     if ( NULL != g_log_file )
     {
         fclose( g_log_file );
     }
-
-    DEBUG_PRINT( "Intercept module unloaded\n" );
 }
