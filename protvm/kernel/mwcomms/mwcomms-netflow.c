@@ -35,7 +35,7 @@ typedef int
 pfn_import_single_range_t(int rw, void __user *buf, size_t len,
                           struct iovec *iov, struct iov_iter *i);
 
-typedef struct _mwcomms_netflow_info
+typedef struct _mwcomms_netflow_channel
 {
     struct list_head list;
     bool             active;
@@ -43,7 +43,7 @@ typedef struct _mwcomms_netflow_info
 
     int              id;
     struct socket  * conn;
-} mwcomms_netflow_info_t;
+} mwcomms_netflow_channel_t;
 
 
 typedef struct _mwcomms_netflow_state
@@ -82,7 +82,7 @@ mw_netflow_dump( void )
 
     down_read( &g_mwbc_state.conn_list_lock );
 
-    mwcomms_netflow_info_t * curr = NULL;
+    mwcomms_netflow_channel_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
         printk( KERN_DEBUG  "Connection %d from %s\n",
@@ -98,9 +98,9 @@ mw_netflow_dump( void )
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_netflow_read( IN    mwcomms_netflow_info_t * Channel,
-                     OUT   void                       * Message,
-                     INOUT size_t                     * Len )
+mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
+                 OUT   void                      * Message,
+                 INOUT size_t                    * Len )
 {
     MYASSERT( Len );
     MYASSERT( *Len > 0 );
@@ -180,9 +180,9 @@ ErrorExit:
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_netflow_write_one( IN mwcomms_netflow_info_t * Channel,
-                          IN void                       * Message,
-                          IN size_t                       Len )
+mw_netflow_write_one( IN mwcomms_netflow_channel_t * Channel,
+                      IN void                      * Message,
+                      IN size_t                      Len )
 {
     int rc = 0;
     struct msghdr hdr = {0};
@@ -240,7 +240,7 @@ mw_netflow_write_all( void * Message, size_t Len )
 
     down_read( &g_mwbc_state.conn_list_lock );
 
-    mwcomms_netflow_info_t * curr = NULL;
+    mwcomms_netflow_channel_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
         int rc2 = mw_netflow_write_one( curr, Message, Len );
@@ -287,7 +287,7 @@ ErrorExit:
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_netflow_process_feat_req( IN mwcomms_netflow_info_t * Channel )
+mw_netflow_process_feat_req( IN mwcomms_netflow_channel_t * Channel )
 {
     int rc = 0;
 
@@ -340,22 +340,22 @@ mw_netflow_add_conn( struct socket * AcceptedSock )
     struct sockaddr_in addr;
     int addrlen = sizeof(struct sockaddr_in);
 
-    mwcomms_netflow_info_t * backinfo =
-        (mwcomms_netflow_info_t *) kmalloc( sizeof( *backinfo ),
+    mwcomms_netflow_channel_t * channel =
+        (mwcomms_netflow_channel_t *) kmalloc( sizeof( *channel ),
                                                 GFP_KERNEL | __GFP_ZERO );
-    if ( NULL == backinfo )
+    if ( NULL == channel )
     {
         rc = -ENOMEM;
         MYASSERT( !"kmalloc" );
         goto ErrorExit;
     }
 
-    backinfo->conn = AcceptedSock;
+    channel->conn = AcceptedSock;
     atomic_inc( &g_mwbc_state.active_conns );
     atomic_inc( &g_mwbc_state.conn_ct );
 
-    backinfo->active = true;
-    backinfo->id     = atomic_read( &g_mwbc_state.conn_ct );
+    channel->active = true;
+    channel->id     = atomic_read( &g_mwbc_state.conn_ct );
 
     rc = AcceptedSock->ops->getname( AcceptedSock,
                                      (struct sockaddr *) &addr,
@@ -367,14 +367,14 @@ mw_netflow_add_conn( struct socket * AcceptedSock )
         goto ErrorExit;
     }
 
-    snprintf( backinfo->peer, sizeof(backinfo->peer),
+    snprintf( channel->peer, sizeof(channel->peer),
               "%pI4:%hu", &addr.sin_addr, ntohs( addr.sin_port ) );
 
-    pr_info( "Accepted connection from %s\n", backinfo->peer );
+    pr_info( "Accepted connection from %s\n", channel->peer );
 
     // Nothing has failed: add to the global list
     down_write( &g_mwbc_state.conn_list_lock );
-    list_add( &backinfo->list,
+    list_add( &channel->list,
               &g_mwbc_state.conn_list );
     up_write( &g_mwbc_state.conn_list_lock );
 
@@ -526,8 +526,8 @@ mw_netflow_monitor( void * Arg )
 
         // Now, poll the existing connections. Check for pending read and close.
         down_write( &g_mwbc_state.conn_list_lock );
-        mwcomms_netflow_info_t * curr = NULL;
-        mwcomms_netflow_info_t * next = NULL;
+        mwcomms_netflow_channel_t * curr = NULL;
+        mwcomms_netflow_channel_t * next = NULL;
 
         list_for_each_entry_safe( curr, next, &g_mwbc_state.conn_list, list )
         {
@@ -579,8 +579,8 @@ ErrorExit:
 void
 mw_netflow_fini( void )
 {
-    mwcomms_netflow_info_t * curr = NULL;
-    mwcomms_netflow_info_t * prev = NULL;
+    mwcomms_netflow_channel_t * curr = NULL;
+    mwcomms_netflow_channel_t * prev = NULL;
 
     if ( !g_mwbc_state.initialized )
     {

@@ -193,9 +193,9 @@ def send_feature_request( conn, sockfd, feature, value=None ):
     if not val:
         val = 0
 
-    outstanding_requests[ ident ] = { 'type'    : 'feature', 
-                                      'mod'     : modify, 
-                                      'sockfd'  : sockfd, 
+    outstanding_requests[ ident ] = { 'type'    : 'feature',
+                                      'mod'     : modify,
+                                      'sockfd'  : sockfd,
                                       'feature' : feature,
                                       'value'   : value }
 
@@ -223,6 +223,9 @@ def monitor_netflow( conn ):
         if SIG_NF_INFO == sig:
             process_info_netflow( conn )
 
+            # Exercise feature requests/mitigation given a valid socket
+            # For now, PVM just reads requests and writes responses;
+            # no processing is done
             if iters % 2 == 0 and len(open_socks) > 0:
                 sockfd = open_socks.keys()[0] # grab sockfd "at random"
                 send_feature_request( conn, sockfd, FEATURES[ 'MwFeatureSocketSendBuf' ][0], None ) 
