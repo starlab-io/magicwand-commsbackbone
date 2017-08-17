@@ -57,11 +57,24 @@ SIG_FMT       = "!H"
 BASE_FMT_PART = "!I" # base is sig + id
 BASE_FMT_ALL  = "!HI"
 
+
 ADDR_FMT = "!HH16s"
 INFO_FMT = "!HQQQQi20s20sQQQ" # everything after the signature
 
-FEATURE_REQ_FMT = "!HIHHiQ" # everything, including signature
-FEATURE_RES_FMT = "!IIQ"   # everything after the signature
+# All of feature request
+FEATURE_REQ_FMT = "!HIHHiQ"
+
+# Feature response, after the signature
+FEATURE_RES_FMT = "!IiQ"
+
+MAX_ID = 0xffffffff
+
+outstanding_requests = dict()
+open_socks = dict() # sockfd => True
+
+def b2h( bytes ):
+    """ Convert byte string to hex ASCII string """
+    return ' '.join( [ '{0:02x}'.format( ord(y) ) for y in bytes ] )
 
 def recvall( sock, size ):
     tot = 0
@@ -131,7 +144,6 @@ def get_obs_str( obs ):
              6 : "close" }.get( obs, "invalid" )
 
 def process_info_netflow( sock ):
-
     try:
         raw = recvall( sock, struct.calcsize( INFO_FMT ) )
         vals = struct.unpack( INFO_FMT, raw )
@@ -151,12 +163,18 @@ def process_info_netflow( sock ):
     pvm    = Ip( p )
     obs    = get_obs_str( o )
 
+    if obs is "bind":
+        open_socks[ sockfd ] = True
+    elif obs is "accept":
+        assert sockfd in open_socks
+        open_socks[ extra ] = True
+    elif obs is "close":
+        del open_socks[ sockfd ]
+
     print( "[{0:0.3f}] {1:x} {2} | {3} {4} bytes {5}/{6} ext {7:x}".
            format( age, sockfd, pvm, remote, 
                    obs, inbytes, outbytes, extra ) )
 
-outstanding_requests = dict()
-MAX_ID = 0xffffffff
 def get_next_id():
     curr_id = random.randint( 0, MAX_ID )
 
@@ -165,7 +183,9 @@ def get_next_id():
 
     outstanding_requests[ curr_id ] = None
 
-def send_feature_request( sock, sockfd, feature, value=None ):
+    return curr_id
+
+def send_feature_request( conn, sockfd, feature, value=None ):
     ident = get_next_id()
 
     modify = (None == value)
@@ -173,33 +193,42 @@ def send_feature_request( sock, sockfd, feature, value=None ):
     if not val:
         val = 0
 
-    outstanding_requests[ ident ] = { type    : 'feature', 
-                                      mod     : modify, 
-                                      sockfd  : sockfd, 
-                                      feature : feature,
-                                      value   : value }
+    outstanding_requests[ ident ] = { 'type'    : 'feature', 
+                                      'mod'     : modify, 
+                                      'sockfd'  : sockfd, 
+                                      'feature' : feature,
+                                      'value'   : value }
 
-    req = struct.pack( FEATURE_REQ_FMT, "!HIHHiQ" # everything, including signature
+    req = struct.pack( FEATURE_REQ_FMT, # everything, including signature
                        SIG_FEA_REQ, ident, int(modify), feature, sockfd, val )
-                       
-    sock.sendall( req )
+
+    logging.info( "Sending {0}".format( b2h( req ) ) )
+    conn.sendall( req )
 
 def process_feature_response( sock ):
-    ident, status, val = recvall( sock, struct.calcsize( FEATURE_RES_FMT ) )
+    data = recvall( sock, struct.calcsize( FEATURE_RES_FMT ) )
+    ident, status, val = struct.unpack( FEATURE_RES_FMT, data )
 
     state = outstanding_requests[ ident ]
     del outstanding_requests[ ident ]
 
     # lookup ident for more info
-    logging.info( "Feature response\tid {0:x}: {1:x} [{2:r}]}".format( ident, status, val ) )
+    print( "Feature response\tid {0:x}: {1:x} [{2:x}]".format( ident, status, val ) )
 
-def monitor_netflow( sock ):
+def monitor_netflow( conn ):
+    iters = 0
     while True:
-        sig, = struct.unpack( SIG_FMT, sock.recv( struct.calcsize( SIG_FMT ) ) )
+        iters += 1
+        sig, = struct.unpack( SIG_FMT, conn.recv( struct.calcsize( SIG_FMT ) ) )
         if SIG_NF_INFO == sig:
-            process_info_netflow( sock )
+            process_info_netflow( conn )
+
+            if iters % 2 == 0 and len(open_socks) > 0:
+                sockfd = open_socks.keys()[0] # grab sockfd "at random"
+                send_feature_request( conn, sockfd, FEATURES[ 'MwFeatureSocketSendBuf' ][0], None ) 
+
         elif SIG_FEA_RES == sig:
-            process_feature_response( sock )
+            process_feature_response( conn )
         else:
             continue
 

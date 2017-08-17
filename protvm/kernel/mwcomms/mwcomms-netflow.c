@@ -6,7 +6,7 @@
 
 #include "mwcomms-common.h"
 
-#include "mwcomms-backchannel.h"
+#include "mwcomms-netflow.h"
 
 #include <net/sock.h>
 #include <net/inet_sock.h>
@@ -28,13 +28,14 @@
 #define LISTENER_KILL_TIMEOUT (HZ * 2) // X seconds
 
 // Sampling rate of listening thread. Must be less than kill timeout above.
-#define LISTENER_MONITOR_INTERVAL (HZ * 1)
+//#define LISTENER_MONITOR_INTERVAL (HZ * 1) // 1 sec
+#define LISTENER_MONITOR_INTERVAL (HZ >> 1) // 1/2 sec
 
 typedef int
 pfn_import_single_range_t(int rw, void __user *buf, size_t len,
                           struct iovec *iov, struct iov_iter *i);
 
-typedef struct _mwcomms_backchannel_info
+typedef struct _mwcomms_netflow_info
 {
     struct list_head list;
     bool             active;
@@ -42,10 +43,10 @@ typedef struct _mwcomms_backchannel_info
 
     int              id;
     struct socket  * conn;
-} mwcomms_backchannel_info_t;
+} mwcomms_netflow_info_t;
 
 
-typedef struct _mwcomms_backchannel_state
+typedef struct _mwcomms_netflow_state
 {
     pfn_import_single_range_t * p_import_single_range;
 
@@ -63,15 +64,15 @@ typedef struct _mwcomms_backchannel_state
     bool                      exit_pending;
     struct task_struct *      listen_thread;
     struct completion         listen_thread_done;
-} mwcomms_backchannel_state_t;
+} mwcomms_netflow_state_t;
 
-static mwcomms_backchannel_state_t g_mwbc_state = {0};
+static mwcomms_netflow_state_t g_mwbc_state = {0};
 
 static void
-mw_backchannel_dump( void )
+mw_netflow_dump( void )
 {
 #ifdef DEBUG
-    pr_debug( "Backchannel state\n" );
+    pr_debug( "Netflow state\n" );
 
     printk( KERN_DEBUG "initialized:      %d\n", g_mwbc_state.initialized );
     printk( KERN_DEBUG "connection count: %d\n",
@@ -79,15 +80,9 @@ mw_backchannel_dump( void )
     printk( KERN_DEBUG "listen port:      %d\n", g_mwbc_state.listen_port );
     printk( KERN_DEBUG "\nsocket list: \n");
 
-# if 0
-    pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
-    pr_debug("connection count:    %d\n", atomic_read( &g_mwbc_state.active_conns ));
-    pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
-    pr_debug("\nsocket list: \n");
-#endif
     down_read( &g_mwbc_state.conn_list_lock );
 
-    mwcomms_backchannel_info_t * curr = NULL;
+    mwcomms_netflow_info_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
         printk( KERN_DEBUG  "Connection %d from %s\n",
@@ -98,44 +93,27 @@ mw_backchannel_dump( void )
 }
 
 
-
-#if 0
-// @brief Make the socket non-blocking
-//
-// Likely not needed; cannot be used until sock_alloc_file() has been called
-static void
-mw_backchannel_nonblock( struct socket * Sock )
-{
-    if ( NULL == Sock ||
-         NULL == Sock->file )
-    {
-        return;
-    }
-    spin_lock( &Sock->file->f_lock );
-    Sock->file->f_flags |= O_NONBLOCK;
-    spin_unlock( &Sock->file->f_lock );
-}
-#endif
-
-
-// @brief Read data off the given buffer. Won't block.
+/**
+ * @brief Read data off the given buffer. Won't block.
+ */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
+mw_netflow_read( IN    mwcomms_netflow_info_t * Channel,
                      OUT   void                       * Message,
                      INOUT size_t                     * Len )
 {
-    int rc = 0;
-    struct msghdr hdr = {0};
-    struct iovec iov = {0};
-
     MYASSERT( Len );
     MYASSERT( *Len > 0 );
+
+    int rc = 0;
+    size_t size = *Len;
+    struct msghdr hdr = {0};
+    struct iovec iov = {0};
 
     // See sendto syscall def in net/socket.c
     rc = g_mwbc_state.p_import_single_range( READ,
                                              Message,
-                                             *Len,
+                                             size,
                                              &iov,
                                              &hdr.msg_iter );
     if ( rc )
@@ -152,69 +130,57 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
     // sock_recvmsg( struct socket * soc, struct msghdr * m, int flags);
 
 #if ( LINUX_VERSION_CODE <= KERNEL_VERSION(4,4,70) )
-    rc = sock_recvmsg( Channel->conn, &hdr, *Len, 0 );
+    rc = sock_recvmsg( Channel->conn, &hdr, *Len, MSG_DONTWAIT );
 #else
-    rc = sock_recvmsg( Channel->conn, &hdr, 0 );
+    rc = sock_recvmsg( Channel->conn, &hdr, MSG_DONTWAIT );
 #endif
 
     pr_debug( "Read %d bytes from socket", rc );
     // Returns number of bytes (>=0) or error (<0)
     if ( 0 == rc )
     {
-        // POLLIN event indicated but no data
+        // POLLIN event indicated but no data: channel is dead
+        MYASSERT( !"Channel has no bytes to read" );
+        rc = -EPIPE;
         Channel->active = false;
         goto ErrorExit;
     }
     else if ( -EAGAIN == rc )
     {
-        rc = 0;
-        goto ErrorExit; // no (more) data
+        // Return error, having cleared POLLIN flag from socket. There
+        // is no data right now but the connection is still alive.
+        goto ErrorExit; 
     }
-
-    if ( rc < 0 )
+    else if ( rc < 0 )
     {
+        // There's an unexpected failure. Consider the connection
+        // dead.
+        Channel->active = false;
         MYASSERT( !"sock_recvmsg" );
         goto ErrorExit;
     }
 
+    // XXXX: did we read all the bytes?
+    MYASSERT( rc == size );
+    pr_debug( "Successfully read %d bytes from socket\n", rc );
     *Len = rc;
     rc = 0;
 
-    pr_debug( "Read %d bytes from socket\n", rc );
+
 
 ErrorExit:
     return rc;
-} // mw_backchannel_read()
+} // mw_netflow_read()
 
 
-// @brief Consume all read buffers in the given socket
+/**
+ * @brief Writes the message to one connections.
+ *
+ * Caller must hold connection lock.
+ */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_readall_drop( IN mwcomms_backchannel_info_t * Channel )
-{
-    int rc = 0;
-    char buf[32] = {0};
-
-    while ( true )
-    {
-        size_t size = sizeof(buf);
-        memset( &buf, 0, sizeof(buf) );
-
-        rc = mw_backchannel_read( Channel, buf, &size );
-        if ( 0 == rc || 0 == size )
-        {
-            break;
-        }
-    }
-
-//ErrorExit:
-    return rc;
-}
-
-
-static int
-MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_write_one( IN mwcomms_backchannel_info_t * Channel,
+mw_netflow_write_one( IN mwcomms_netflow_info_t * Channel,
                           IN void                       * Message,
                           IN size_t                       Len )
 {
@@ -235,12 +201,15 @@ mw_backchannel_write_one( IN mwcomms_backchannel_info_t * Channel,
     }
 
     // N.B. sock_sendmsg modifies hdr
+
     rc = sock_sendmsg( Channel->conn, &hdr );
     if ( rc == Len ) 
     {
         rc = 0; // success
         goto ErrorExit;
     }
+
+    MYASSERT( !"sock_sendmsg" );
 
     // Failure...
     pr_err( "Failed to write all %d bytes in message: %d\n", (int) Len, rc );
@@ -258,29 +227,37 @@ ErrorExit:
 }
 
 
+/**
+ * @brief Writes the message to all connections.
+ *
+ * Acquires connection lock.
+ */
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_write( void * Message, size_t Len )
+mw_netflow_write_all( void * Message, size_t Len )
 {
     int rc = 0;
 
     down_read( &g_mwbc_state.conn_list_lock );
 
-    mwcomms_backchannel_info_t * curr = NULL;
+    mwcomms_netflow_info_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
-        rc = mw_backchannel_write_one( curr, Message, Len );
-        // continue upon failure
+        int rc2 = mw_netflow_write_one( curr, Message, Len );
+        if ( rc2 )
+        {
+            // continue upon failure
+            rc = rc2;
+        }
     }
 
-//ErrorExit:
     up_read( &g_mwbc_state.conn_list_lock );
     return rc;
-} // mw_backchannel_write()
+}
 
 
 int
-mw_backchannel_write_msg( const char * Fmt, ... )
+mw_netflow_write_msg( const char * Fmt, ... )
 {
     char buf[128] = {0};
     va_list args;
@@ -296,42 +273,76 @@ mw_backchannel_write_msg( const char * Fmt, ... )
         goto ErrorExit;
     }
 
-    rc = mw_backchannel_write( buf, rc );
+    rc = mw_netflow_write_all( buf, rc );
 
 ErrorExit:
     return rc;
 }
 
 
+/**
+ * @brief Reads feature request, processes it, and writes response.
+ *
+ * Caller must hold connection lock.
+ */
+static int
+MWSOCKET_DEBUG_ATTRIB
+mw_netflow_process_feat_req( IN mwcomms_netflow_info_t * Channel )
+{
+    int rc = 0;
+
+    while ( true )
+    {
+        mw_feature_request_t req = {0};
+        mw_feature_response_t res = {0};
+        size_t size = sizeof( req );
+        uint64_t answer = 0;
+
+        rc = mw_netflow_read( Channel, &req, &size );
+        if ( rc || sizeof(req) != size ) { break; }
+
+        req.base.sig = __be16_to_cpu( req.base.sig );
+        req.base.id  = __be32_to_cpu( req.base.id );
+        req.act      = __be16_to_cpu( req.act );
+        req.feat     = __be16_to_cpu( req.feat );
+        req.sockfd   = __be32_to_cpu( req.sockfd );
+        req.inarg    = __be64_to_cpu( req.inarg );
+
+        MYASSERT( MW_MESSAGE_SIG_FEATURE_REQUEST == req.base.sig );
+
+        // Process the feature request
+
+        res.base.sig = __cpu_to_be16( MW_MESSAGE_SIG_FEATURE_RESPONSE );
+        res.base.id  = __cpu_to_be32( req.base.id );
+        res.status   = __cpu_to_be32( rc );
+        res.outarg   = __cpu_to_be64( answer );
+
+        rc = mw_netflow_write_one( Channel, &res, sizeof( res ) );
+        if ( rc ) { break; }
+    }
+
+//ErrorExit:
+    return rc;
+}
+
+
 bool
-mw_backchannel_consumer_exists( void )
+mw_netflow_consumer_exists( void )
 {
     return ( atomic_read( &g_mwbc_state.active_conns ) > 0 );
 }
 
 
-static unsigned int
-mw_backchannel_poll_socket( struct socket * Sock )
-{
-    unsigned int events = Sock->ops->poll( Sock->file,
-                                           Sock,
-                                           &g_mwbc_state.poll_tbl );
-    MYASSERT( events >= 0 );
-
-    return events;
-}
-
-
 static int
-mw_backchannel_add_conn( struct socket * AcceptedSock )
+mw_netflow_add_conn( struct socket * AcceptedSock )
 {
     int rc = 0;
-    mwcomms_backchannel_info_t * backinfo = NULL;
     struct sockaddr_in addr;
     int addrlen = sizeof(struct sockaddr_in);
 
-    backinfo = (mwcomms_backchannel_info_t *)
-        kmalloc( sizeof( *backinfo ), GFP_KERNEL | __GFP_ZERO );
+    mwcomms_netflow_info_t * backinfo =
+        (mwcomms_netflow_info_t *) kmalloc( sizeof( *backinfo ),
+                                                GFP_KERNEL | __GFP_ZERO );
     if ( NULL == backinfo )
     {
         rc = -ENOMEM;
@@ -367,7 +378,7 @@ mw_backchannel_add_conn( struct socket * AcceptedSock )
               &g_mwbc_state.conn_list );
     up_write( &g_mwbc_state.conn_list_lock );
 
-    mw_backchannel_dump();
+    mw_netflow_dump();
 
 ErrorExit:
     return rc;
@@ -375,7 +386,7 @@ ErrorExit:
 
 
 static int
-mw_backchannel_init_listen_port( void )
+mw_netflow_init_listen_port( void )
 {
     int rc = 0;
     uint16_t port = 0;
@@ -389,7 +400,7 @@ mw_backchannel_init_listen_port( void )
                       &g_mwbc_state.listen_sock );
     if ( rc )
     {
-        MYASSERT( !"Failed to create backchannel socket" );
+        MYASSERT( !"Failed to create netflow socket" );
         goto ErrorExit;
     }
 
@@ -423,7 +434,7 @@ mw_backchannel_init_listen_port( void )
     rc = kernel_listen( g_mwbc_state.listen_sock, 5 );
     if ( rc )
     {
-        MYASSERT( !"Failed to listen on backchannel socket" );
+        MYASSERT( !"Failed to listen on netflow socket" );
         goto ErrorExit;
     }
 
@@ -454,12 +465,10 @@ mw_backchannel_init_listen_port( void )
         (void) snprintf( listenstr, sizeof(listenstr),
                          "%pISc:%hu", g_mwbc_state.local_ip, port );
     }
-    pr_info( "Listening on %s\n", listenstr );
-
     pr_info( "Netflow channel listening on %s\n", listenstr );
 
     // Make this a non-blocking socket
-    //mw_backchannel_nonblock( g_mwbc_state.listen_sock );
+    //mw_netflow_nonblock( g_mwbc_state.listen_sock );
     if ( NULL == sock_alloc_file( g_mwbc_state.listen_sock, O_NONBLOCK, NULL ) )
     {
         MYASSERT( !"sock_alloc_file" );
@@ -468,7 +477,7 @@ mw_backchannel_init_listen_port( void )
     }
 
     rc = mw_xen_write_to_key( XENEVENT_XENSTORE_PVM,
-                              SERVER_BACKCHANNEL_PORT_KEY,
+                              SERVER_NETFLOW_PORT_KEY,
                               listenstr );
     if ( rc )
     {
@@ -482,11 +491,9 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_backchannel_monitor( void * Arg )
+mw_netflow_monitor( void * Arg )
 {
     int rc = 0;
-
-    pr_debug( "Entering\n" );
 
     while( true )
     {
@@ -505,11 +512,8 @@ mw_backchannel_monitor( void * Arg )
         if ( 0 == rc )
         {
             // Success
-            rc = mw_backchannel_add_conn( newsock );
-            if ( rc )
-            {
-                goto ErrorExit;
-            }
+            rc = mw_netflow_add_conn( newsock );
+            if ( rc ) { goto ErrorExit; }
         }
         else
         {
@@ -522,31 +526,35 @@ mw_backchannel_monitor( void * Arg )
 
         // Now, poll the existing connections. Check for pending read and close.
         down_write( &g_mwbc_state.conn_list_lock );
-        mwcomms_backchannel_info_t * curr = NULL;
-        mwcomms_backchannel_info_t * next = NULL;
+        mwcomms_netflow_info_t * curr = NULL;
+        mwcomms_netflow_info_t * next = NULL;
 
         list_for_each_entry_safe( curr, next, &g_mwbc_state.conn_list, list )
         {
-            unsigned int events = mw_backchannel_poll_socket( curr->conn );
-	    
+            unsigned int events = curr->conn->ops->poll( curr->conn->file,
+                                                         curr->conn,
+                                                         &g_mwbc_state.poll_tbl );
             if ( ( POLLHUP | POLLRDHUP ) & events )
             {
-                 curr->active = false;
+                // Remote side closed
+                curr->active = false;
             }
             else if ( POLLIN & events )
             {
-                // Data is available. At some point this is how we'll
-                // receive a mitigation messages from the analytics
-                // system. For now, read the data and throw it away to
-                // clear the POLLIN event.
-                (void) mw_backchannel_readall_drop( curr );
+                // There's data to read. We must read it to clear this
+                // flag, even if that just results in EAGAIN status.
+                //
+                // The only failure we care about is if the socket is
+                // no longer useable, in which case curr->active has
+                // been cleared.
+                (void) mw_netflow_process_feat_req( curr );
             }
 
             if ( !curr->active )
             {
-                pr_debug( "Killing socket\n" );
-
-                // Killing connection to $IP port $PORT
+                // We determined from above that the connection is
+                // dead. Close this side.
+                pr_info( "Dropping connection to %s\n", curr->peer );
                 kernel_sock_shutdown( curr->conn, SHUT_RDWR );
                 sock_release( curr->conn );
                 atomic_dec( &g_mwbc_state.active_conns );
@@ -564,16 +572,15 @@ mw_backchannel_monitor( void * Arg )
 
 ErrorExit:
     complete( &g_mwbc_state.listen_thread_done );
-    pr_debug( "Leaving\n" );
     return rc;
 }
 
 
 void
-mw_backchannel_fini( void )
+mw_netflow_fini( void )
 {
-    mwcomms_backchannel_info_t * curr = NULL;
-    mwcomms_backchannel_info_t * prev = NULL;
+    mwcomms_netflow_info_t * curr = NULL;
+    mwcomms_netflow_info_t * prev = NULL;
 
     if ( !g_mwbc_state.initialized )
     {
@@ -613,7 +620,7 @@ ErrorExit:
 
 
 int
-mw_backchannel_init( struct sockaddr * LocalIp )
+mw_netflow_init( struct sockaddr * LocalIp )
 {
     int rc = 0;
 
@@ -637,14 +644,11 @@ mw_backchannel_init( struct sockaddr * LocalIp )
         goto ErrorExit;
     }
 
-    rc = mw_backchannel_init_listen_port();
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
+    rc = mw_netflow_init_listen_port();
+    if ( rc ) { goto ErrorExit; }
 
     g_mwbc_state.listen_thread =
-        kthread_run( &mw_backchannel_monitor,
+        kthread_run( &mw_netflow_monitor,
                      NULL,
                      "magicwand_netflow_thread" );
 
@@ -658,7 +662,7 @@ mw_backchannel_init( struct sockaddr * LocalIp )
 ErrorExit:
     if ( rc )
     {
-        mw_backchannel_fini();
+        mw_netflow_fini();
     }
     return rc;
 }

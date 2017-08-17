@@ -176,7 +176,7 @@
 
 #include "mwcomms-xen-iface.h"
 #include "mwcomms-socket.h"
-#include "mwcomms-backchannel.h"
+#include "mwcomms-netflow.h"
 
 #include "mwcomms-ioctls.h"
 
@@ -474,13 +474,11 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
-#ifdef BACKCHANNEL
-   rc = mw_backchannel_init( &g_mwcomms_state.local_ip );
+   rc = mw_netflow_init( &g_mwcomms_state.local_ip );
    if ( rc )
    {
        goto ErrorExit;
    }
-#endif
 
 ErrorExit:
    if ( rc )
@@ -503,9 +501,7 @@ mwbase_dev_fini( void )
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
 
-#ifdef BACKCHANNEL
-    mw_backchannel_fini();
-#endif
+    mw_netflow_fini();
 
     if ( NULL != g_mwcomms_state.xen_shmem.ptr )
     {

@@ -12,14 +12,11 @@ obj-m += mwcomms.o
 
 # The objects that are linked to create the module
 mwcomms-y += mwcomms-base.o mwcomms-xen-iface.o mwcomms-socket.o
-mwcomms-y += mwcomms-backchannel.o
+mwcomms-y += mwcomms-netflow.o
 
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
 ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common 
 ccflags-y += -I$(PWD)/../../../exports/imports
-
-# Include support for the backchannel?
-ccflags-y += -DBACKCHANNEL # support the netflow backchannel
 
 # Name of external-facing network interface
 ccflags-y += -DEXT_IFACE=\"eth0\"

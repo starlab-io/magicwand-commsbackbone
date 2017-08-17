@@ -422,7 +422,7 @@ socket( int Domain,
     {
         rc = libc_socket( Domain, Type, Protocol );
         err = errno;
-        DEBUG_PRINT( "libc_socket( %d, %d, %d ) ==> %d\n",
+        DEBUG_PRINT( "libc_socket( %d, 0x%x, %d ) ==> %d\n",
                      Domain, Type, Protocol, rc );
         goto ErrorExit;
     }
@@ -443,7 +443,7 @@ socket( int Domain,
         goto ErrorExit;
     }
 
-    DEBUG_PRINT( "mwsocket( %d, %d, %d ) ==> %d\n",
+    DEBUG_PRINT( "mwsocket( %d, 0x%x, %d ) ==> %d\n",
                  Domain, Type, Protocol, rc );
 
     rc = create.outfd;

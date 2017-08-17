@@ -144,7 +144,7 @@
 #include <translate.h>
 #include <xen_keystore_defs.h>
 
-#include "mwcomms-backchannel.h"
+#include "mwcomms-netflow.h"
 #include <mw_netflow_iface.h>
 
 // Defines:
@@ -1375,7 +1375,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     mw_netflow_info_t nf = {0};
     int obs = MwObservationNone;
 
-    if ( !mw_backchannel_consumer_exists() )
+    if ( !mw_netflow_consumer_exists() )
     {
         goto ErrorExit;
     }
@@ -1424,7 +1424,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     nf.obs = __cpu_to_be16( (mw_obs_space_t) obs );
 
     mwsocket_populate_netflow( ActiveRequest, &nf );
-    mw_backchannel_write( &nf, sizeof(nf) );
+    mw_netflow_write_all( &nf, sizeof(nf) );
 
 ErrorExit:
     return;
