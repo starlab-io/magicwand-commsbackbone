@@ -1316,15 +1316,15 @@ mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
     {
         // N.B. items in sockaddr struct are already in network byte order
     case AF_INET:
-        Endpoint->addr_fam = __cpu_to_be16( 4 );
+        Endpoint->addr.af = __cpu_to_be32( 4 );
         Endpoint->port = sa4->sin_port;
-        memcpy( &Endpoint->addr, &sa4->sin_addr, sizeof( sa4->sin_addr ) );
+        memcpy( &Endpoint->addr.a, &sa4->sin_addr, sizeof( sa4->sin_addr ) );
         break;
     case AF_INET6:
-        Endpoint->addr_fam = __cpu_to_be16( 6 );
+        Endpoint->addr.af = __cpu_to_be32( 6 );
         Endpoint->port = sa6->sin6_port;
         // Addr in struct is network-ordered
-        memcpy( &Endpoint->addr, &sa6->sin6_addr, sizeof( sa6->sin6_addr ) );
+        memcpy( &Endpoint->addr.a, &sa6->sin6_addr, sizeof( sa6->sin6_addr ) );
         break;
     default:
         MYASSERT( !"Invalid address family" );
@@ -1345,14 +1345,15 @@ mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
     struct timespec ts;
     getnstimeofday( &ts );
 
-    Netflow->sig      = __cpu_to_be16( MW_MESSAGE_SIG_NETFLOW_INFO );
-    Netflow->sockfd   = __cpu_to_be32( sockinst->remote_fd );
+    Netflow->base.sig = __cpu_to_be16( MW_MESSAGE_SIG_NETFLOW_INFO );
 
     Netflow->ts_session_start.sec  = __cpu_to_be64( sockinst->est_time.tv_sec );
     Netflow->ts_session_start.ns   = __cpu_to_be64( sockinst->est_time.tv_nsec );
 
     Netflow->ts_curr.sec  = __cpu_to_be64( ts.tv_sec );
     Netflow->ts_curr.ns   = __cpu_to_be64( ts.tv_nsec );
+
+    Netflow->sockfd   = __cpu_to_be32( sockinst->remote_fd );
 
     mwsocket_populate_netflow_ip( &sockinst->local_bind, &Netflow->pvm );
     mwsocket_populate_netflow_ip( &sockinst->peer,       &Netflow->remote );
@@ -1382,6 +1383,9 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
 
     switch( Response->base.type )
     {
+    case MtResponseSocketCreate:
+        obs = MwObservationCreate;
+        break;
     case MtResponseSocketClose:
         obs = MwObservationClose;
         break;
@@ -1391,7 +1395,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketBind:
         obs = MwObservationBind;
         break;
-    case MtResponseSocketAccept:
+    case MtResponseSocketAccept: // "extra" field holds new sockfd
         obs = MwObservationAccept;
         nf.extra = __cpu_to_be64( Response->socket_accept.base.sockfd );
         break;
@@ -1403,7 +1407,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
         obs = MwObservationRecv;
         break;
     case MtResponseSocketShutdown:
-    case MtResponseSocketCreate:
+
     case MtResponseSocketListen:
     case MtResponseSocketGetName:
     case MtResponseSocketGetPeer:
@@ -2187,8 +2191,8 @@ mwsocket_handle_attrib( IN struct file            * File,
     request->base.size = MT_REQUEST_SOCKET_ATTRIB_SIZE;
 
     request->modify = SetAttribs->modify;
-    request->attrib = SetAttribs->attrib;
-    request->value  = SetAttribs->value;
+    request->name   = SetAttribs->name;
+    request->val    = SetAttribs->val;
 
     rc = mwsocket_send_request( actreq, true );
     if ( rc ) { goto ErrorExit; }
@@ -2213,7 +2217,7 @@ mwsocket_handle_attrib( IN struct file            * File,
 
     if ( SetAttribs->modify )
     {
-        SetAttribs->value = response->outval;
+        SetAttribs->val = response->val;
     }
 
 ErrorExit:
@@ -2458,9 +2462,9 @@ mwsocket_ioctl( struct file * File,
 
         if ( attrib.modify )
         {
-            rc = copy_to_user( &uattrib->value,
-                               &attrib.value,
-                               sizeof(attrib.value) );
+            rc = copy_to_user( &uattrib->val,
+                               &attrib.val,
+                               sizeof(attrib.val) );
             if ( rc )
             {
                 MYASSERT( !"Invalid memory provided\n" );

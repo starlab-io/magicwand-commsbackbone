@@ -22,24 +22,45 @@
  *    but does not respond to them directly. The info includes a
  *    socket identifier.
  *
- * 2. Mitigation: a request for mitigation is sent from the analytics
- *    engine to the PVM. The PVM will process the mitigation request
- *    and send a response back to the engine. Example: analytics
- *    engine requests that the PVM close a suspicious socket; the PVM
- *    does so, and reports its status back to the engine. The status
- *    is 0 upon success or a positive Linux errno value on failure.
- *
- * 3. Status: the analytics engine requests information about a
- *    socket, and the PVM issues a response back. For instance, the
- *    engine requests a socket's receive buffer size, the PVM finds
- *    that info and responds with it to the engine.
+ * 2. Feature: a feature request can either read or write a feature. A
+ *    feature request is send from the analytics engine to the PVM; a
+ *    feature response is then sent from the PVM back to the engine.
+ *    Modification of a feature is considered mitigation. The egine
+ *    may read the feature first and then write to it, or it might
+ *    just write to it without an initial query. For example, the
+ *    engine might decide that a socket is suspect and its feature
+ *    "receive buffer size" should be changed. It first queries that
+ *    feature, calculates what the new value should be, and then sends
+ *    a feature write request to change the feature's value. On the
+ *    other hand, it might decide that a socket needs to be closed, in
+ *    which case it can just send a close request (a feature request
+ *    that sets the "open" value to false).
  ************************************************************************/
+
+#ifndef _mw_netflow_iface_h
+#define _mw_netflow_iface_h
+
+// Structures are shared across VMs in code built by different gccs.
+// Make sure they agree on the layout.
+#define MT_STRUCT_ATTRIBS __attribute__ ((__packed__))
+
 
 /**
  * Base info for netflow interface. The signature determines the type
  * of message (described above).
  */
 typedef uint16_t mw_netflow_sig_t;
+typedef uint32_t mw_message_id_t;
+
+//
+// Every message on the netflow channel must start with this base
+//
+typedef struct _mw_base
+{
+    mw_netflow_sig_t sig;
+    mw_message_id_t  id;
+} __attribute__((packed)) mw_base_t;
+
 
 #define _MW_SIG_HI 0xd3
 
@@ -51,16 +72,11 @@ typedef uint16_t mw_netflow_sig_t;
 
 #define MW_MESSAGE_SIG_NETFLOW_INFO        MW_SIG( 0x10 )
 
-#define MW_MESSAGE_SIG_FEATURE_REQUEST     MW_SIG( 0x20 )
-#define MW_MESSAGE_SIG_FEATURE_RESPONSE    MW_SIG( 0x21 )
+#define MW_MESSAGE_SIG_FEATURE_REQUEST   MW_SIG( 0x20 )
+//#define MW_MESSAGE_SIG_FEATURE_REQUEST_BY_SOCKFD   MW_SIG( 0x20 )
+//#define MW_MESSAGE_SIG_FEATURE_REQUEST_BY_IP       MW_SIG( 0x21 )
+#define MW_MESSAGE_SIG_FEATURE_RESPONSE            MW_SIG( 0x2f )
 
-/*
-#define MW_MESSAGE_SIG_MITIGATION_REQUEST  MW_SIG( 0x20 )
-#define MW_MESSAGE_SIG_MITIGATION_RESPONSE MW_SIG( 0x21 )
-
-#define MW_MESSAGE_SIG_STATUS_REQUEST      MW_SIG( 0x30 )
-#define MW_MESSAGE_SIG_STATUS_RESPONSE     MW_SIG( 0x31 )
-*/
 
 /**
  * Informational message only that comes from the PVM. Not for
@@ -79,19 +95,23 @@ typedef uint16_t mw_netflow_sig_t;
 //
 
 #define NETFLOW_INFO_ADDR_LEN 16
-//#define NETFLOW_INFO_MSG_LEN ( 2 * 56 + 30 )
-//#define NETFLOW_INFO_PAYLOAD 16
 
 typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
 
-typedef struct _mw_endpoint
+typedef struct _mw_addr
 {
-    uint16_t  addr_fam; // 4 or 6
-    uint16_t  port;
+    uint32_t  af; // 4 or 6, wastes space but helps with alignment
 
     // Address in network order, just as in sockaddr struct
-    uint8_t addr[ NETFLOW_INFO_ADDR_LEN ];
-} __attribute__((packed)) mw_endpoint_t; // 2 + 2 + 16 = 20 bytes
+    uint8_t a[ NETFLOW_INFO_ADDR_LEN ];
+} __attribute__((packed)) mw_addr_t; // 4 + 16 = 20 bytes
+
+
+typedef struct _mw_endpoint
+{
+    mw_addr_t addr;
+    uint16_t  port;
+} __attribute__((packed)) mw_endpoint_t;
 
 
 typedef struct _mw_timestamp
@@ -104,12 +124,13 @@ typedef struct _mw_timestamp
 typedef enum _mw_observation
 {
     MwObservationNone    = 0,
-    MwObservationBind    = 1,
-    MwObservationAccept  = 2,
-    MwObservationConnect = 3,
-    MwObservationRecv    = 4,
-    MwObservationSend    = 5,
-    MwObservationClose   = 6,
+    MwObservationCreate  = 1,
+    MwObservationBind    = 2,
+    MwObservationAccept  = 3,
+    MwObservationConnect = 4,
+    MwObservationRecv    = 5,
+    MwObservationSend    = 6,
+    MwObservationClose   = 7,
 } mw_observation_t;
 
 typedef uint16_t mw_obs_space_t;
@@ -117,7 +138,7 @@ typedef uint64_t mw_bytecount_t;
 
 typedef struct _mw_netflow_info
 {
-    mw_netflow_sig_t sig; // MW_MESSAGE_NETFLOW_INFO
+    mw_base_t        base; // signature: MW_MESSAGE_NETFLOW_INFO
 
     mw_obs_space_t   obs; // mw_observation_t
 
@@ -142,73 +163,126 @@ typedef struct _mw_netflow_info
  * its associated request.
  */
 
+
 /**
- * Some of the possible values for the mitigation argument.
+ * Types and values that are used by both the netflow channel and by
+ * the PVM/INS internally. The are prefixed with Mt rather than Mw.
+ *
+ * Fields passed over the netflow channel are put into network
+ * endianess. However, the fields are passed natively interally by the
+ * PVM/INS.
  */
 typedef enum
 {
-    MwCongctlReno    = 0x90, // action: congctl
-    MwCongctlNewReno = 0x91, // action: congctl
-    MwCongctlCubic   = 0x92, // action: congctl
-} mw_congctl_arg_val_t;
+    MtCongctlReno    = 0x90, // action: congctl
+    MtCongctlNewReno = 0x91, // action: congctl
+    MtCongctlCubic   = 0x92, // action: congctl
+} mt_congctl_arg_val_t;
+
+
+/**
+ * Socket behavioral attributes, normally set via setsockopt() and
+ * fcntl(). This subset is supported by Magic Wand. Some of these can
+ * also be used for mitigation.
+ */
+
+#define MT_SOCK_ATTR_MITIGATES(_x) ((_x) & 0x0100) // mitigation is allowed
+#define MT_SOCK_ATTR_PER_INS(_x)   ((_x) & 0x1000) // INS-wide setting
 
 typedef enum
 {
-    MwFeatureNone = 0x00,
+    MtSockAttribNone              = 0x0000,
 
-    // Per-socket features
-    MwFeatureOwningThreadRunning = 0x01, // arg: bool
-    MwFeatureSocketOpen          = 0x02, // arg: bool
+    // Per-socket attributes
+    MtSockAttribIsOpen            = 0x0101,
+    MtSockAttribOwnerRunning      = 0x0102,
 
-    MwFeatureSocketSendBuf       = 0x10, // arg: sz in bytes (uint32_t)
-    MwFeatureSocketRecvBuf       = 0x11, // arg: sz in bytes (uint32_t)
-    MwFeatureSocketSendLoWat     = 0x12, // arg: sz in bytes (uint32_t)
-    MwFeatureSocketRecvLoWat     = 0x13, // arg: sz in bytes (uint32_t)
-    MwFeatureSocketSendTimo      = 0x14, // arg: milliseconds (uint64_t)
-    MwFeatureSocketRecvTimo      = 0x15, // arg: milliseconds (uint64_t)
+    MtSockAttribNonblock          = 0x0003,
+    MtSockAttribReuseaddr         = 0x0004,
+    MtSockAttribReuseport         = 0x0005,
+    MtSockAttribKeepalive         = 0x0006,
+    MtSockAttribDeferAccept       = 0x0007,
+    MtSockAttribNodelay           = 0x0008,
 
-    // INS-wide changes
+    MtSockAttribSndBuf            = 0x0109,
+    MtSockAttribRcvBuf            = 0x010a,
+    MtSockAttribSndTimeo          = 0x010b,
+    MtSockAttribRcvTimeo          = 0x010c,
+    MtSockAttribSndLoWat          = 0x010d,
+    MtSockAttribRcvLoWat          = 0x010e,
+
+    // INS-wide settings
 
     // Change congestion control algo, arg: see vals below
-    MwFeatureSystemInsCongctl    = 0x20, // arg: mw_congctl_arg_val_t (uint32_t)
-
+    MtSockAttribGlobalCongctl     = 0x1101,
     // Change of delay ACK ticks: arg is signed tick differential
-    MwFeatureSystemDelackTicks   = 0x21,  // arg: tick count (uint32_t)
-} __attribute__((packed)) mw_feature_t;
+    MtSockAttribGlobalDelackTicks = 0x1102,
+} mt_sockfeat_name_val_t;
+
+typedef uint16_t mt_sockfeat_name_t; // holds an mt_sockfeat_name_t
 
 
-typedef enum
+//
+// For usage on getsockopt/setsockopt with timeouts
+//
+typedef struct MT_STRUCT_ATTRIBS _mt_sockfeat_time_arg
 {
-    MwActionRead  = 0,
-    MwActionWrite = 1,
-} mw_action_t;
+    uint64_t  s; // seconds
+    uint64_t us; // microseconds
+} mt_sockfeat_time_arg_t;
 
-typedef uint16_t mw_action_storage_t;
-typedef uint16_t mw_feature_storage_t;
+
+typedef union MT_STRUCT_ATTRIBS _mt_sockfeat_arg
+{
+    uint64_t               v;
+    mt_sockfeat_time_arg_t t;
+} mt_sockfeat_arg_t;
+
+
+//
+// Valid feature flags
+//
+
+//#define MW_FEATURE_FLAG_READ    0x0 // action: read
+#define MW_FEATURE_FLAG_WRITE   0x1 // action: write
+
+// Exactly one of the following two bits must be asserted
+#define MW_FEATURE_FLAG_BY_SOCK 0x2 // use sockfd as identifier
+//#define MW_FEATURE_FLAG_BY_PEER 0x4 // use peer IP as identifier XXXX: UNSUPPORTED
+
+typedef uint16_t mw_sockfeat_flags_t;
 typedef uint32_t mw_status_t; // status: 0 on success, otherwise positive Linux errno
-typedef uint64_t mw_feature_arg_t;
+//typedef uint64_t mw_feature_arg_t;
 
-typedef uint32_t mw_message_id_t;
-
-typedef struct _mw_status_base
-{
-    mw_netflow_sig_t sig;
-    mw_message_id_t  id;
-} __attribute__((packed)) mw_base_t;
 
 /**
  * A feature request. Can be used for getting information (status) or
  * setting value (mitigation).
+ *
+ * A request that retrieves information must specify a socket
+ * identifier (ident.sockfd).
+ *
+ * (FUTURE) However, a request that sets an attribute may give either
+ * a socket identifier or an IP (ident.peer).
+ *
+ * (FUTURE) If an IP is given, the given attribute will be set on all
+ * current and future connections where the remote IP matches the one
+ * given.
+ *
  */
-typedef struct _mw_feature_request
+typedef struct MT_STRUCT_ATTRIBS _mw_feature_request
 {
-    mw_base_t              base;
-    mw_action_storage_t    act;
-    mw_feature_storage_t   feat;
-    mw_socket_fd_t         sockfd;
-    mw_feature_arg_t       inarg; // used only if act == MwActionWrite
-}  __attribute__((packed)) mw_feature_request_t;
-
+    mw_base_t           base;
+    mw_sockfeat_flags_t flags;
+    mt_sockfeat_name_t  name;
+    mt_sockfeat_arg_t   val; // used only if flags & MW_FEATURE_FLAG_WRITE
+    union
+    {
+        mw_socket_fd_t  sockfd;
+        mw_addr_t       remote;
+    } ident;
+//}  __attribute__((packed)) mw_feature_request_t;
+} mw_feature_request_t;
 
 /**
  * Response to mitigation request. Its id matches that from the
@@ -216,103 +290,9 @@ typedef struct _mw_feature_request
  */
 typedef struct _mw_feature_response
 {
-    mw_base_t        base;
-    mw_status_t      status;
-    mw_feature_arg_t outarg; // used only if act == MwActionRead
+    mw_base_t         base;
+    mw_status_t       status;
+    mt_sockfeat_arg_t val; // populated only if !(flags & MW_FEATURE_FLAG_WRITE)
 }  __attribute__((packed)) mw_feature_response_t;
 
-
-#if 0
-
-
-/**
- * Mitigation request/response: used when the analytics engine decides
- * to take action against a suspect connection.
- */
-typedef enum
-{
-    MwMitigationNone              = 0x00, // arg: none
-
-    // Per-socket changes
-    MwMitigationKillThread        = 0x01, // arg: none
-    MwMitigationCloseSocket       = 0x02, // arg: none
-
-    // Send, recv buffer size: arg is byte differential (+/- bytes)
-    MwMitigationChangeSockSendBuf = 0x10,
-    MwMitigationChangeSockRecvBuf = 0x11,
-
-    // Send, recv low water mark: arg is signed millisec differential (+/- ms)
-    MwMitigationChangeSockSendLoWat = 0x12,
-    MwMitigationChangeSockRecvLoWat = 0x13,
-
-    // Send, recv timeout: arg is signed millisec differential (+/- ms)
-    MwMitigationChangeSockSendTimo = 0x14,
-    MwMitigationChangeSockRecvTimo = 0x15,
-
-    // INS-wide changes
-
-    // Change congestion control algo, arg: see vals below
-    MwMitigationChangeInsCongctl  = 0x20,
-
-    // Change of delay ACK ticks: arg is signed tick differential
-    MwMitigationChangeDelackTicks = 0x21,
-
-} mw_mitigation_action_val_t;
-typedef uint32_t mw_mitigation_action_t; // holds mw_mitigation_action_val_t
-
-
-
-/**
- * A mitigation request.
- */
-typedef struct _mw_mitigation_request
-{
-    mw_base_t              base;
-    mw_socket_fd_t         sockfd;
-    mw_mitigation_action_t act;
-    mw_mitigation_arg_t    arg;
-}  __attribute__((packed))  mw_mitigation_request_t;
-
-
-/**
- * Response to mitigation request. Its id matches that from the
- * associated request.
- */
-typedef struct _mw_mitigation_response
-{
-    mw_base_t base;
-    uint32_t  status;
-}  __attribute__((packed)) mw_mitigation_response_t;
-
-
-/**
- * Request for information about system or socket.
- */
-typedef enum
-{
-    MwInfoSendBuf = 0x10,
-    MwInfoRecvBuf = 0x11,
-
-    MwInfoCongctl = 0x20,
-} mw_congctl_t;
-
-typedef uint32_t mw_status_t; // holds mw_congctl_t among other things
-
-typedef struct _mw_status_request_msg
-{
-    mw_base_t   base;
-    mw_status_t req;
-} __attribute__((packed)) mw_status_request_msg_t;
-
-
-/**
- * Response to info request. Its id matches that from the associated
- * request.
- */
-typedef struct _mw_status_response_msg
-{
-    mw_base_t base;
-    uint32_t  val;
-} __attribute__((packed)) mw_status_response_msg_t;
-
-#endif
+#endif // _mw_netflow_iface_h

@@ -17,7 +17,10 @@ import struct
 
 SIG_NF_INFO = 0xd310
 SIG_FEA_REQ = 0xd320
-SIG_FEA_RES = 0xd321
+SIG_FEA_RES = 0xd32f
+
+FEA_FLAG_WRITE   = 0x1
+FEA_FLAG_BY_SOCK = 0x2
 
 #SIG_MIT_REQ = 0xd320
 #SIG_MIT_RES = 0xd321
@@ -25,27 +28,36 @@ SIG_FEA_RES = 0xd321
 #SIG_STA_RES = 0xd331
 
 FEATURES = dict(
-    MwFeatureNone = 0x00,
+    MtSockAttribNone = 0x00,
 
-    # Per-socket features
-    MwFeatureOwningThreadRunning = (0x01, bool), # arg: bool
-    MwFeatureSocketOpen          = (0x02, bool), # arg: bool
+    # Per-socket features: name => (value, argtype)
 
-    MwFeatureSocketSendBuf       = (0x10, int), # arg: sz in bytes (uint32_t)
-    MwFeatureSocketRecvBuf       = (0x11, int), # arg: sz in bytes (uint32_t)
-    MwFeatureSocketSendLoWat     = (0x12, int), # arg: sz in bytes (uint32_t)
-    MwFeatureSocketRecvLoWat     = (0x13, int), # arg: sz in bytes (uint32_t)
-    MwFeatureSocketSendTimo      = (0x14, int), # arg: milliseconds (uint64_t)
-    MwFeatureSocketRecvTimo      = (0x15, int), # arg: milliseconds (uint64_t)
+    MtSockAttribOwnerRunning  = (0x0101, bool), # arg: bool
+    MtSockAttribOpen          = (0x0102, bool), # arg: bool
+
+    MtSockAttribSndBuf       = (0x0109, int), # arg: sz in bytes (uint32_t)
+    MtSockAttribRcvBuf       = (0x010a, int), # arg: sz in bytes (uint32_t)
+
+    MtSockAttribSndTimeo     = (0x010b, (int,int)), # arg: (s,us) tuple
+    MtSockAttribRcvTimeo     = (0x010c, (int,int)), # arg: (s,us) tuple
+
+    MtSockAttribSndLoWat     = (0x010d, int), # arg: sz in bytes (uint32_t)
+    MtSockAttribRcvLoWat     = (0x010e, int), # arg: sz in bytes (uint32_t)
 
     # INS-wide changes
 
     # Change congestion control algo, arg: see vals below
-    MwFeatureSystemInsCongctl    = (0x20, str), # arg: mw_congctl_arg_val_t (uint32_t)
+    MtSockAttribSystemInsCongctl    = (0x20, str), # arg: mw_congctl_arg_val_t (uint32_t)
 
     # Change of delay ACK ticks: arg is signed tick differential
-    MwFeatureSystemDelackTicks   = (0x21, int),  # arg: tick count (uint32_t)
+    MtSockAttribSystemDelackTicks   = (0x21, int),  # arg: tick count (uint32_t)
 )
+
+FLAGS = dict(
+    MW_FEATURE_FLAG_WRITE   = 0x1,
+    MW_FEATURE_FLAG_BY_SOCK = 0x2,
+)
+
 
 CONGCTL_ALGO = dict(
     MwCongctlReno    = 0x90, # action: congctl
@@ -53,19 +65,47 @@ CONGCTL_ALGO = dict(
     MwCongctlCubic   = 0x92, # action: congctl
 )
 
-SIG_FMT       = "!H"
+
+# mw_base_t: the beginning of every message
+BASE_FMT = "!HI"
+
+# mw_addr_t, not standalone (no byte ordering given)
+# addr is transmitted in network byte ordering as stored in sockaddr*
+ADDR_FMT = "I" + "16s" # 20 bytes
+
+# mw_endpoint_t, not standalone
+ENDPOINT_FMT = ADDR_FMT + "H"
+
+
+##
+## Input read from netflow channel
+##
+
+# mw_netflow_info_t, post-signature
+INFO_FMT = "!HQQQQi" + ENDPOINT_FMT + ENDPOINT_FMT + "QQQ"
+
+# Feature response, post-signature
+FEATURE_RES_FMT = "i16s"
+
+
+##
+## Output written to netflow channel
+##
+
+# Feature request by sockfd, last substring is sockfd + rest of addr
+FEATURE_REQ_FMT = BASE_FMT + "HH" + "QQ" + "i16s"
+
 BASE_FMT_PART = "!I" # base is sig + id
 BASE_FMT_ALL  = "!HI"
 
-
 ADDR_FMT = "!HH16s"
-INFO_FMT = "!HQQQQi20s20sQQQ" # everything after the signature
+
 
 # All of feature request
-FEATURE_REQ_FMT = "!HIHHiQ"
+
 
 # Feature response, after the signature
-FEATURE_RES_FMT = "!IiQ"
+
 
 MAX_ID = 0xffffffff
 
@@ -111,37 +151,37 @@ def connect_to_netflow( server ):
     return s
 
 
-class Ip:
-    def __init__( self, packed ):
+class Endpoint:
+    def __init__( self, af, ip, port ):
 
-        (ver, port, ip) = struct.unpack( ADDR_FMT, packed )
-
-        self._ver = ver
+        #(af, ip, port) = struct.unpack( "!" + ENDPOINT_FMT, packed )
+        self._af   = af
         self._port = port
 
-        if 4 == ver:
+        if 4 == af:
             self._ip = ip[:4]
-        elif 6 == ver:
+        elif 6 == af:
             self._ip = ip
         else:
             raise RuntimeError( "Invalid IP address family" )
 
     def __str__ ( self ):
-        if 4 == self._ver:
+        if 4 == self._af:
             i = socket.inet_ntop( socket.AF_INET, self._ip )
-        elif 6 == self._ver:
+        elif 6 == self._af:
             i = '[' + socket.inet_ntop( socket.AF_INET6, self._ip ) + ']'
 
         return "{0}:{1}".format( i, self._port )
 
 def get_obs_str( obs ):
     return { 0 : "none",
-             1 : "bind",
-             2 : "accept",
-             3 : "connect",
-             4 : "recv",
-             5 : "send",
-             6 : "close" }.get( obs, "invalid" )
+             1 : "create",
+             2 : "bind",
+             3 : "accept",
+             4 : "connect",
+             5 : "recv",
+             6 : "send",
+             7 : "close" }.get( obs, "invalid" )
 
 def process_info_netflow( sock ):
     try:
@@ -149,21 +189,23 @@ def process_info_netflow( sock ):
         vals = struct.unpack( INFO_FMT, raw )
 
     except Exception, e:
-        import pdb;pdb.set_trace()
         raise
 
     ( o, start_sec, start_ns, curr_sec, curr_ns ) = vals[:5]
-    ( sockfd, p, r, inbytes, outbytes, extra )    = vals[5:]
+    ( sockfd )     = vals[5]
+    ( pf, pa, pp ) = vals[6:9]
+    ( rf, ra, rp ) = vals[9:12]
+    ( inbytes, outbytes, extra )    = vals[12:]
 
     start_time = start_sec + start_ns / 1000000000.
     event_time = curr_sec  + curr_ns  / 1000000000.
     age = event_time - start_time
 
-    remote = Ip( r )
-    pvm    = Ip( p )
+    remote = Endpoint( rf, ra, rp )
+    pvm    = Endpoint( pf, pa, pp )
     obs    = get_obs_str( o )
 
-    if obs is "bind":
+    if obs is "create":
         open_socks[ sockfd ] = True
     elif obs is "accept":
         assert sockfd in open_socks
@@ -185,41 +227,47 @@ def get_next_id():
 
     return curr_id
 
-def send_feature_request( conn, sockfd, feature, value=None ):
+
+def send_feature_request( conn, sockfd, name, value=None ):
+    """ value is 2-tuple """
     ident = get_next_id()
 
     modify = (None == value)
     val = value
     if not val:
-        val = 0
+        val = ( 0, 0 )
 
     outstanding_requests[ ident ] = { 'type'    : 'feature',
                                       'mod'     : modify,
                                       'sockfd'  : sockfd,
-                                      'feature' : feature,
+                                      'name'    : name,
                                       'value'   : value }
-
     req = struct.pack( FEATURE_REQ_FMT, # everything, including signature
-                       SIG_FEA_REQ, ident, int(modify), feature, sockfd, val )
+                       SIG_FEA_REQ, ident,
+                       FLAGS['MW_FEATURE_FLAG_BY_SOCK'], name,
+                       val[0], val[1],
+                       sockfd, "" )
 
     logging.info( "Sending {0}".format( b2h( req ) ) )
     conn.sendall( req )
 
-def process_feature_response( sock ):
+def process_feature_response( sock, ident ):
     data = recvall( sock, struct.calcsize( FEATURE_RES_FMT ) )
-    ident, status, val = struct.unpack( FEATURE_RES_FMT, data )
+    status, val = struct.unpack( FEATURE_RES_FMT, data )
 
     state = outstanding_requests[ ident ]
     del outstanding_requests[ ident ]
 
+    vals = struct.unpack( "!QQ", val )
+
     # lookup ident for more info
-    print( "Feature response\tid {0:x}: {1:x} [{2:x}]".format( ident, status, val ) )
+    print( "Feature response\tid {0:x}: {1:x} [{2:x}:{3:x}]".format( ident, status, vals[0], vals[1] ) )
 
 def monitor_netflow( conn ):
     iters = 0
     while True:
         iters += 1
-        sig, = struct.unpack( SIG_FMT, conn.recv( struct.calcsize( SIG_FMT ) ) )
+        sig, ident = struct.unpack( BASE_FMT, conn.recv( struct.calcsize( BASE_FMT ) ) )
         if SIG_NF_INFO == sig:
             process_info_netflow( conn )
 
@@ -228,10 +276,10 @@ def monitor_netflow( conn ):
             # no processing is done
             if iters % 2 == 0 and len(open_socks) > 0:
                 sockfd = open_socks.keys()[0] # grab sockfd "at random"
-                send_feature_request( conn, sockfd, FEATURES[ 'MwFeatureSocketSendBuf' ][0], None ) 
+                send_feature_request( conn, sockfd, FEATURES[ 'MtSockAttribSndBuf' ][0], None ) 
 
         elif SIG_FEA_RES == sig:
-            process_feature_response( conn )
+            process_feature_response( conn, ident )
         else:
             continue
 

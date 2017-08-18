@@ -35,6 +35,7 @@
 #include <xen/interface/io/ring.h>
 
 #include <mwcomms-ioctls.h>
+#include <message_types.h>
 #include "mwcomms-common.h"
 #include "mwcomms-xen-iface.h"
 
@@ -90,6 +91,16 @@ mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
 int
 mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
                                     IN int            SignalNum );
+
+/**
+ * @brief Sends request to INS and puts response in given buffer.
+ *
+ * @param Response must hold the max size of the region it points to
+ *        in its base field.
+ */
+int
+mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
+                            INOUT mt_response_generic_t * Response );
 
 
 #endif // mwcomms_socket_h

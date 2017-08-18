@@ -7,6 +7,7 @@
 #include "mwcomms-common.h"
 
 #include "mwcomms-netflow.h"
+#include "mwcomms-socket.h"
 
 #include <net/sock.h>
 #include <net/inet_sock.h>
@@ -23,6 +24,8 @@
 #include "mwcomms-xen-iface.h"
 
 #include <mw_netflow_iface.h>
+#include <message_types.h>
+
 
 // In rundown, how long to wait for listener thread to die?
 #define LISTENER_KILL_TIMEOUT (HZ * 2) // X seconds
@@ -48,19 +51,24 @@ typedef struct _mwcomms_netflow_channel
 
 typedef struct _mwcomms_netflow_state
 {
+    bool                      initialized;
+
     pfn_import_single_range_t * p_import_single_range;
 
-    bool                      initialized;
+    // For connection management
     struct list_head          conn_list;
     struct rw_semaphore       conn_list_lock;
     atomic_t                  active_conns; // active connections
     atomic_t                  conn_ct;      // count; monotonically increases
 
+    // Info about local end of netflow channel
     struct sockaddr         * local_ip;
     uint16_t                  listen_port;
     struct socket *           listen_sock;
+
     struct poll_table_struct  poll_tbl;
 
+    // For thread management
     bool                      exit_pending;
     struct task_struct *      listen_thread;
     struct completion         listen_thread_done;
@@ -80,13 +88,12 @@ mw_netflow_dump( void )
     printk( KERN_DEBUG "listen port:      %d\n", g_mwbc_state.listen_port );
     printk( KERN_DEBUG "\nsocket list: \n");
 
-    down_read( &g_mwbc_state.conn_list_lock );
-
     mwcomms_netflow_channel_t * curr = NULL;
+
+    down_read( &g_mwbc_state.conn_list_lock );
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
-        printk( KERN_DEBUG  "Connection %d from %s\n",
-                curr->id, curr->peer );
+        printk( KERN_DEBUG "Connection %d from %s\n", curr->id, curr->peer );
     }
     up_read( &g_mwbc_state.conn_list_lock );
 #endif
@@ -165,8 +172,6 @@ mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
     pr_debug( "Successfully read %d bytes from socket\n", rc );
     *Len = rc;
     rc = 0;
-
-
 
 ErrorExit:
     return rc;
@@ -281,13 +286,118 @@ ErrorExit:
 
 
 /**
+ * @brief Processes feature request, either on PVM or via ring buffer.
+ *
+ */
+static int
+mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
+                             OUT mw_feature_response_t * Response )
+{
+    MYASSERT( Request );
+    MYASSERT( Response );
+
+    int rc = 0;
+    bool modify = (Request->flags & MW_FEATURE_FLAG_WRITE);
+    bool send = false;
+
+    // if send is true, then create a new active connection, send it, and wait for response
+
+    mt_request_socket_attrib_t  mtreq = {0};
+    mt_response_socket_attrib_t mtres = {0};
+
+    // BY_PEER is not supported
+    if ( !(Request->flags & MW_FEATURE_FLAG_BY_SOCK) )
+    {
+        MYASSERT( !"Invalid flag" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
+    if ( !MT_SOCK_ATTR_MITIGATES( Request->name ) )
+    {
+        MYASSERT( !"Non-mitigating attribute" );
+        rc = -EINVAL;
+        goto ErrorExit;
+    }
+
+    // Convert the inbound feature request into an
+    // mt_request_socket_attrib_t. To simplify our logic and shorten
+    // this function, we set some fields unnecessarily.
+
+    mtreq.name = Request->name;
+    switch( Request->name )
+    {
+    case MtSockAttribOwnerRunning:
+        MYASSERT( Request->flags & MW_FEATURE_FLAG_BY_SOCK );
+        Response->val.v = true;
+        if ( modify )
+        {
+            rc = mwsocket_signal_owner_by_remote_fd( Request->ident.sockfd, SIGINT );
+        }
+        break;
+    case MtSockAttribIsOpen:
+        MYASSERT( Request->flags & MW_FEATURE_FLAG_BY_SOCK );
+        Response->val.v = true;
+        if ( modify )
+        {
+            rc = mwsocket_close_by_remote_fd( Request->ident.sockfd, true ); // wait
+        }
+        break;
+    case MtSockAttribSndTimeo:
+    case MtSockAttribRcvTimeo:
+    case MtSockAttribSndBuf:
+    case MtSockAttribRcvBuf:
+    case MtSockAttribSndLoWat:
+    case MtSockAttribRcvLoWat:
+        // Global INS settings - sockfd/IP ignored
+    case MtSockAttribGlobalCongctl:
+    case MtSockAttribGlobalDelackTicks:
+        send = true;
+        break;
+    default:
+        MYASSERT( !"Unsupported name given" );
+        rc = -EINVAL;
+        break;
+    }
+
+    if ( send )
+    {
+        mtreq.base.size = sizeof( mtreq );
+        mtreq.base.type = MtRequestSocketAttrib;
+        mtreq.modify    = modify;
+        mtreq.name      = Request->name;
+        mtreq.val       = Request->val;
+        mtres.base.size = sizeof( mtres );
+
+        rc = Response->status =
+            mwsocket_send_bare_request( (mt_request_generic_t *) &mtreq,
+                                        (mt_response_generic_t *) &mtres );
+
+        Response->status = rc; //mtres.base.status;
+        if ( !modify && (0 == Response->status) )
+        {
+            // Struct copy
+            Response->val = mtres.val;
+        }
+    }
+    if ( rc && (0 == Response->status) )
+    {
+        Response->status = rc;
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+/**
  * @brief Reads feature request, processes it, and writes response.
  *
  * Caller must hold connection lock.
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_netflow_process_feat_req( IN mwcomms_netflow_channel_t * Channel )
+mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
 {
     int rc = 0;
 
@@ -296,32 +406,51 @@ mw_netflow_process_feat_req( IN mwcomms_netflow_channel_t * Channel )
         mw_feature_request_t req = {0};
         mw_feature_response_t res = {0};
         size_t size = sizeof( req );
-        uint64_t answer = 0;
+        //uint64_t answer = 0;
 
         rc = mw_netflow_read( Channel, &req, &size );
         if ( rc || sizeof(req) != size ) { break; }
 
         req.base.sig = __be16_to_cpu( req.base.sig );
         req.base.id  = __be32_to_cpu( req.base.id );
-        req.act      = __be16_to_cpu( req.act );
-        req.feat     = __be16_to_cpu( req.feat );
-        req.sockfd   = __be32_to_cpu( req.sockfd );
-        req.inarg    = __be64_to_cpu( req.inarg );
+        req.flags    = __be16_to_cpu( req.flags );
+        req.name     = __be16_to_cpu( req.name );
+        res.val.t.s  = __be64_to_cpu( res.val.t.s  );
+        res.val.t.us = __be64_to_cpu( res.val.t.us );
+
+        // Value: handled by mw_netflow_process_feat_req()
+        if ( req.flags & MW_FEATURE_FLAG_BY_SOCK )
+        {
+            req.ident.sockfd = __be32_to_cpu( req.ident.sockfd );
+        }
+        else
+        {
+            req.ident.remote.af = __be32_to_cpu( req.ident.remote.af );
+        }
+
 
         MYASSERT( MW_MESSAGE_SIG_FEATURE_REQUEST == req.base.sig );
 
-        // Process the feature request
+        // Process the feature request. No matter the results, we owe
+        // a response to the other side.
+//        rc = mw_netflow_process_feat_req( &req, &res );
+        if ( rc )
+        {
+            pr_warn( "Feature processing failed (%d). Sending failure to %s\n",
+                     rc, Channel->peer );
+        }
 
         res.base.sig = __cpu_to_be16( MW_MESSAGE_SIG_FEATURE_RESPONSE );
         res.base.id  = __cpu_to_be32( req.base.id );
         res.status   = __cpu_to_be32( rc );
-        res.outarg   = __cpu_to_be64( answer );
+        //res.val   = __cpu_to_be64( answer ); // XXXX
+        res.val.t.s  = __cpu_to_be64( res.val.t.s );
+        res.val.t.us = __cpu_to_be64( res.val.t.us );
 
         rc = mw_netflow_write_one( Channel, &res, sizeof( res ) );
         if ( rc ) { break; }
     }
 
-//ErrorExit:
     return rc;
 }
 
@@ -547,7 +676,7 @@ mw_netflow_monitor( void * Arg )
                 // The only failure we care about is if the socket is
                 // no longer useable, in which case curr->active has
                 // been cleared.
-                (void) mw_netflow_process_feat_req( curr );
+                (void) mw_netflow_handle_feat_req( curr );
             }
 
             if ( !curr->active )
