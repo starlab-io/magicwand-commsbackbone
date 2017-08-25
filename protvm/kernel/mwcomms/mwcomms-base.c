@@ -1,8 +1,8 @@
 /*************************************************************************
-* STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
-* Unauthorized copying of this file, via any medium is strictly prohibited.
-***************************************************************************/
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2016, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ ***************************************************************************/
 
 /**
  * @file    mwcomms-base.c
@@ -277,6 +277,7 @@ mwbase_client_ready_cb( void )
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_init( void )
 {
     int rc = 0;
@@ -298,83 +299,83 @@ mwbase_dev_init( void )
           , "c" (mod) );
 #endif
 
-   bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
+    bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
 
-   //
-   // Dynamically allocate a major number for the device
-   //
+    //
+    // Dynamically allocate a major number for the device
+    //
 
-   g_mwcomms_state.dev_major_num =
-       register_chrdev( 0, DEVICE_NAME, &mwcomms_fops );
+    g_mwcomms_state.dev_major_num =
+        register_chrdev( 0, DEVICE_NAME, &mwcomms_fops );
 
-   if ( g_mwcomms_state.dev_major_num < 0 )
-   {
-       rc =  g_mwcomms_state.dev_major_num;
-       pr_err( "register_chrdev failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    if ( g_mwcomms_state.dev_major_num < 0 )
+    {
+        rc =  g_mwcomms_state.dev_major_num;
+        pr_err( "register_chrdev failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
-   // Register the device class
-   g_mwcomms_state.dev_class = class_create( THIS_MODULE, CLASS_NAME );
-   if ( IS_ERR( g_mwcomms_state.dev_class ) )
-   {
-       rc = PTR_ERR( g_mwcomms_state.dev_class );
-       pr_err( "class_create failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    // Register the device class
+    g_mwcomms_state.dev_class = class_create( THIS_MODULE, CLASS_NAME );
+    if ( IS_ERR( g_mwcomms_state.dev_class ) )
+    {
+        rc = PTR_ERR( g_mwcomms_state.dev_class );
+        pr_err( "class_create failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
-   // Register the device driver
-   g_mwcomms_state.dev_device =
-       device_create( g_mwcomms_state.dev_class,
-                      NULL,
-                      MKDEV( g_mwcomms_state.dev_major_num, 0 ),
-                      NULL,
-                      DEVICE_NAME);
-   if ( IS_ERR( g_mwcomms_state.dev_device ) )
-   {
-       rc = PTR_ERR( g_mwcomms_state.dev_device );
-       pr_err( "device_create failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    // Register the device driver
+    g_mwcomms_state.dev_device =
+        device_create( g_mwcomms_state.dev_class,
+                       NULL,
+                       MKDEV( g_mwcomms_state.dev_major_num, 0 ),
+                       NULL,
+                       DEVICE_NAME);
+    if ( IS_ERR( g_mwcomms_state.dev_device ) )
+    {
+        rc = PTR_ERR( g_mwcomms_state.dev_device );
+        pr_err( "device_create failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
 
-   g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
+    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
-   // The socket iface is invoked when the ring sharing is
-   // complete. Therefore, init it before the Xen iface.
-   rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
-   if ( rc )
-   {
-       goto ErrorExit;
-   }
+    // The socket iface is invoked when the ring sharing is
+    // complete. Therefore, init it before the Xen iface.
+    rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
    
-   // Init the Xen interface. The callback will be invoked when client
-   // handshake is complete.
+    // Init the Xen interface. The callback will be invoked when client
+    // handshake is complete.
 
-   init_completion( &g_mwcomms_state.ring_shared );
+    init_completion( &g_mwcomms_state.ring_shared );
    
-   rc = mw_xen_init( mwbase_client_ready_cb,
-                     mwsocket_event_cb );
-   if ( rc )
-   {
-       goto ErrorExit;
-   }
+    rc = mw_xen_init( mwbase_client_ready_cb,
+                      mwsocket_event_cb );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
 #ifdef BACKCHANNEL
-   rc = mw_backchannel_init();
-   if ( rc )
-   {
-       goto ErrorExit;
-   }
+    rc = mw_backchannel_init();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 #endif
 
 ErrorExit:
-   if ( rc )
-   {
-       mwbase_dev_fini();
-   }
+    if ( rc )
+    {
+        mwbase_dev_fini();
+    }
 
-   return rc;
+    return rc;
 }
 
 
@@ -468,9 +469,9 @@ mwbase_dev_ioctl( struct file  * File,
         }
 
         rc = mwsocket_create( &create.outfd,
-                               create.domain,
-                               create.type,
-                               create.protocol );
+                              create.domain,
+                              create.type,
+                              create.protocol );
         if ( rc ) goto ErrorExit;
 
         // Copy the resulting FD back to the user
