@@ -575,7 +575,7 @@ mwsocket_fs_init( void )
 
     g_mwsocket_state.fs_mount = kern_mount( &mwsocket_fs_type );
 
-    if ( IS_ERR(g_mwsocket_state.fs_mount) )
+    if ( IS_ERR( g_mwsocket_state.fs_mount ) )
     {
         rc = PTR_ERR( g_mwsocket_state.fs_mount );
         pr_err( "kern_mount() failed: %d\n", rc );
@@ -1423,9 +1423,14 @@ MWSOCKET_DEBUG_ATTRIB
 mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                        IN bool                        WaitForRing )
 {
-    int rc = 0;
-    uint8_t * dest = NULL;
-    mt_request_base_t * base = &ActiveRequest->rr.request.base;
+    int                   rc    = 0;
+    uint8_t              *dest  = NULL;
+    void                 *h    = NULL;    
+    mt_request_base_t    *base = NULL;
+
+    MYASSERT( ActiveRequest );
+
+    base = &ActiveRequest->rr.request.base;
 
     // Perform minimal base field prep
     base->sig    = MT_SIGNATURE_REQUEST;
@@ -1442,7 +1447,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         goto ErrorExit;
     }
 
-    rc = mw_xen_get_next_request_slot( WaitForRing, &dest);
+    
+    //Get a request slot
+    rc = mw_xen_get_next_request_slot( WaitForRing,
+                                       base->sockfd,
+                                       &dest,
+                                       &h );
     if( rc )
     {
         goto ErrorExit;
@@ -1464,7 +1474,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->rr.request.base.type );
     }
 
-    mw_xen_dispatch_request( &ActiveRequest->rr.request, dest );
+    //Request pointer comes from get netxt request slot
+    memcpy( dest,
+            &ActiveRequest->rr.request,
+            ActiveRequest->rr.request.base.size );
+    
+    mw_xen_dispatch_request( h );
     
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
@@ -1482,7 +1497,7 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
-mwsocket_send_message( IN mwsocket_instance_t * SockInst,
+mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
                        IN mt_request_generic_t * Request,
                        IN bool                   AwaitResponse )
 {
@@ -1530,7 +1545,7 @@ static int
 mwsocket_response_consumer( void * Arg )
 {
     int                         rc = 0;
-    mwcomms_ins_data_t        * ins = NULL;
+    void                      * h = NULL;
     mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t     * response = NULL;
     bool                        available = false;
@@ -1570,7 +1585,7 @@ mwsocket_response_consumer( void * Arg )
         do
         {
 
-            available = mw_xen_response_available( &ins );
+            available = mw_xen_response_available( &h );
             if( !available )
             {
                 if( g_mwsocket_state.pending_exit )
@@ -1589,7 +1604,7 @@ mwsocket_response_consumer( void * Arg )
         } while (!available);
         
 
-        rc = mw_xen_get_next_response( &response,  ins );
+        rc = mw_xen_get_next_response( &response, h );
          
         if( g_mwsocket_state.pending_exit )
         {
@@ -1612,7 +1627,7 @@ mwsocket_response_consumer( void * Arg )
             pr_warn( "Couldn't find active request with ID %lx\n",
                      (unsigned long) response->base.id );
 
-            mw_xen_mark_response_consumed( ins );
+            mw_xen_mark_response_consumed( h );
             continue; // move on
         }
 
@@ -1661,11 +1676,10 @@ mwsocket_response_consumer( void * Arg )
         }
 
         // We're done with this slot of the ring
-        mw_xen_mark_response_consumed( ins );
+        mw_xen_mark_response_consumed( h );
 
         
         //Post Processing
-        //Mark consumed
 
     } // while( true )
 

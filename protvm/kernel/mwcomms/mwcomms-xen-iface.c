@@ -79,7 +79,7 @@ typedef struct _mwcomms_xen_globals
 
     bool             xenbus_watch_active;
     bool             pending_exit;
-    bool             xen_iface_ready;    
+    atomic64_t       ins_count;
 
     struct semaphore event_channel_sem;
 
@@ -88,9 +88,34 @@ typedef struct _mwcomms_xen_globals
     
 } mwcomms_xen_globals_t;
 
-static mwcomms_xen_globals_t g_mwxen_state = {0};
 
+// Per-INS data
+typedef struct _mwcomms_ins_data
+{
+    atomic64_t    in_use;
+    domid_t       domid;
+
+    // Ring memory descriptions
+    // Is there a reason to keep a ring and an sring
+    // reference anymore?
+    mw_region_t   ring;
+    struct mwevent_sring * sring;
+    struct mwevent_front_ring front_ring;
+
+    bool is_ring_ready;
+
+    //Grant refs shared with this INS
+    grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
+
+    int           common_evtchn;
+    int           irq;
+    
+} mwcomms_ins_data_t;
+
+
+static mwcomms_xen_globals_t g_mwxen_state = {0};
 static mwcomms_ins_data_t g_ins_data[ MAX_INS_COUNT ] = {0};
+
 
 static int
 mw_xen_rm( const char *Dir, const char *Node )
@@ -308,9 +333,11 @@ mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
    char                        str[ MAX_GNT_REF_WIDTH ] = {0};
    char                        path[ XENEVENT_PATH_STR_LEN ] = {0};
    int                         err = 0;
-
-   if ( !Ins->domid )
+   MYASSERT( Ins );
+   
+   if ( 0 >= Ins->domid  )
    {
+       pr_err("Invalid domid passed to mw_xen_create_unbound_evt_chn\n");
        goto ErrorExit;
    }
 
@@ -337,7 +364,8 @@ mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
              XENEVENT_XENSTORE_ROOT, Ins->domid );
 
    err = mw_xen_write_to_key( path, VM_EVT_CHN_PORT_KEY, str );
-
+   if ( err ) { goto ErrorExit; }
+   
 ErrorExit:
    return err;
 }
@@ -352,14 +380,12 @@ mw_xen_irq_event_handler( int Port, void * Data )
 
 
 void
-mw_xen_send_event( void )
+mw_xen_send_event( void *Handle )
 {
    struct evtchn_send send;
-   int temp = 0;
+   mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
 
-   //send.port = Ins->common_evtchn;
-   //TODO REMOVE THSI IS BAD
-   send.port = g_ins_data[temp].common_evtchn;
+   send.port = ins->common_evtchn;
    
    //xen_clear_irq_pending(irq);
 
@@ -508,10 +534,10 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-get_ins_from_xs_path( IN  const char *Path,
+mw_xen_get_ins_from_xs_path( IN  const char *Path,
                       OUT mwcomms_ins_data_t ** Ins )
 {
-    int rc = 0;
+    int rc = -EINVAL;
     int index = 0;
     int domid = 0;
     char * copy = NULL;
@@ -542,11 +568,10 @@ get_ins_from_xs_path( IN  const char *Path,
     {
         if( g_ins_data[i].domid == domid )
         {
+            rc = 0;
             *Ins = &g_ins_data[i];
             break;
         }
-        //could not find ins
-        rc = -1;
     }
 
 ErrorExit:
@@ -568,13 +593,8 @@ mw_xen_vm_port_is_bound( const char *Path )
     mwcomms_ins_data_t *Ins = NULL;
     int rc = 0;
 
-    
-    if( get_ins_from_xs_path( Path, &Ins ) )
-    {
-        pr_err( "No ins found for vm_port_is_bound\n");
-        rc = -EIO;
-        goto ErrorExit;
-    }
+    rc = mw_xen_get_ins_from_xs_path( Path, &Ins );
+    if( rc ) { goto ErrorExit; }
 
     is_bound_str = (char *) mw_xen_read_from_key( Path, 
                                                   XENEVENT_NO_NODE );
@@ -593,11 +613,20 @@ mw_xen_vm_port_is_bound( const char *Path )
 
     pr_debug("The remote event channel is bound\n");
 
-    Ins->irq =
-        bind_evtchn_to_irqhandler( Ins->common_evtchn,
-                                   mw_xen_irq_event_handler,
-                                   0, NULL, NULL );
+    
 
+    rc =  bind_evtchn_to_irqhandler( Ins->common_evtchn,
+                                     mw_xen_irq_event_handler,
+                                     0, NULL, NULL );
+    if( rc <= 0 )
+    {
+        pr_err( "bind_evtchn_to_irqhandler failed\n" );
+        goto ErrorExit;
+    }
+    
+    Ins->irq = rc;
+
+       
     pr_debug( "Bound event channel %d to irq: %d\n",
               Ins->common_evtchn, Ins->irq );
 
@@ -626,25 +655,33 @@ mw_xen_init_ring( mwcomms_ins_data_t * Ins )
 
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_init_ring_block( mwcomms_ins_data_t * Ins )
+mw_xen_init_ring_block( void )
 {
     int rc = 0;
-    
-    // Get shared memory in an entire zeroed block
-    Ins->ring.ptr = (void *)
-        __get_free_pages( GFP_KERNEL | __GFP_ZERO,
-        XENEVENT_GRANT_REF_ORDER );
-            
-    if ( NULL == Ins->ring.ptr )
+    mwcomms_ins_data_t *curr = NULL;
+
+    for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
-        pr_err( "Failed to allocate 0x%x pages for domid %d\n",
-                XENEVENT_GRANT_REF_COUNT, Ins->domid );
-        rc = -ENOMEM;
+        
+        // Get shared memory in an entire zeroed block
+        g_ins_data[i].ring.ptr = (void *)
+            __get_free_pages( GFP_KERNEL | __GFP_ZERO,
+                              XENEVENT_GRANT_REF_ORDER );
+            
+        if ( NULL == g_ins_data[i].ring.ptr )
+        {
+            pr_err( "Failed to allocate 0x%x pages for domid %d\n",
+                    XENEVENT_GRANT_REF_COUNT, g_ins_data[i].domid );
+            rc = -ENOMEM;
+            goto ErrorExit;
+        }
+
+        g_ins_data[i].sring = (struct mwevent_sring *) g_ins_data[i].ring.ptr;
+        g_ins_data[i].ring.pagect = XENEVENT_GRANT_REF_COUNT;
     }
 
-    Ins->sring = (struct mwevent_sring *) Ins->ring.ptr;
-    Ins->ring.pagect = XENEVENT_GRANT_REF_COUNT;
-
+ErrorExit:
+    
     return rc;
 }
 
@@ -653,9 +690,10 @@ static int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_ins_found( const char *Path )
 {
-    char       *client_id_str = NULL;
-    int        err = 0;
+    char               *client_id_str = NULL;
+    int                 err = -ENXIO;
     mwcomms_ins_data_t *curr = NULL;
+    
 
     client_id_str = (char *)mw_xen_read_from_key( Path,
                                                   XENEVENT_NO_NODE );
@@ -677,22 +715,26 @@ mw_xen_ins_found( const char *Path )
     //
     for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
+
         // atomic64_cmpexchng returns the original value
         // of the atomic64_t
-        if( !atomic64_cmpxchg( &g_ins_data[i].in_use, 0, 1 ) )
+        if( 0 == atomic64_cmpxchg( &g_ins_data[i].in_use, 0, 1 ) )
         {
             g_ins_data[i].domid = simple_strtol( client_id_str, NULL, 10 );
             curr = &g_ins_data[i];
             pr_debug("Discovered client, domid %d added to ins_data[] pos: %d\n",
                      g_ins_data[i].domid, i );
-
+            err = 0;
             break;
         }
     }
 
+    if( err )
+    {
+        pr_err("No available INS slots for new INS instance");
+        goto ErrorExit;
+    }
 
-    err = mw_xen_init_ring_block( curr );
-    if ( err ) { goto ErrorExit; }
     
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn( curr );
@@ -702,7 +744,6 @@ mw_xen_ins_found( const char *Path )
     err = mw_xen_offer_grant( curr );
     if( err ) { goto ErrorExit; }
 
-    //Allocate shared mem for new INS
     err = mw_xen_init_ring( curr );
     if ( err ) { goto ErrorExit; }
 
@@ -713,10 +754,9 @@ mw_xen_ins_found( const char *Path )
     //
     // Complete: the handshake is done
     //
-
     curr->is_ring_ready = true;
 
-    g_mwxen_state.xen_iface_ready = true;
+    atomic64_inc( &g_mwxen_state.ins_count );
     g_mwxen_state.completion_cb();
 
 ErrorExit:
@@ -731,12 +771,18 @@ bool
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_iface_ready( void )
 {
-    return g_mwxen_state.xen_iface_ready;
+    bool ready = false;
+    if ( atomic64_read ( &g_mwxen_state.ins_count ) > 0 )
+    {
+        ready = true;
+    }
+
+    return ready;
 }
 
 
 static int
-mw_xen_get_next_index_round_robin( void )
+mw_xen_get_next_index_rr( void )
 {
     static int i = 0;
     int rc = 0;
@@ -749,15 +795,45 @@ mw_xen_get_next_index_round_robin( void )
 }
 
 
+static int
+mw_xen_new_socket_rr( void )
+{
+
+#ifdef DEBUG_MULTI_INS
+    
+    return g_ins_data[0].domid;
+    
+#else
+    
+    static int curr_index = 0;
+    int selected = 0;
+    
+    for ( int i = 0; i < MAX_INS_COUNT; i++ )
+    {
+        if( g_ins_data[ curr_index % MAX_INS_COUNT ].is_ring_ready  )
+        {
+            selected = curr_index % MAX_INS_COUNT;
+            curr_index++;
+            goto ErrorExit;
+        }
+    }
+
+ErrorExit:
+    return g_ins_data[selected].domid;
+    
+#endif
+}
+
+
 bool
-mw_xen_response_available(OUT mwcomms_ins_data_t ** Ins)
+mw_xen_response_available(OUT void ** Handle)
 {
     bool available = false;
     int ins_index = 0;
     
     for( int i = 0; i < MAX_INS_COUNT; i++ )
     {
-        ins_index = mw_xen_get_next_index_round_robin();
+        ins_index = mw_xen_get_next_index_rr();
         
         if( g_ins_data[ins_index].is_ring_ready )
         {
@@ -765,7 +841,7 @@ mw_xen_response_available(OUT mwcomms_ins_data_t ** Ins)
                 RING_HAS_UNCONSUMED_RESPONSES( &g_ins_data[ins_index].front_ring );
             if( available )
             {
-                *Ins = &g_ins_data[ins_index];
+                *Handle = &g_ins_data[ins_index];
                 goto ErrorExit;
             }
         }
@@ -779,16 +855,17 @@ ErrorExit:
 int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_get_next_response( OUT mt_response_generic_t **Response,
-                          OUT mwcomms_ins_data_t    *Ins )
+                          OUT void                   *Handle )
 {
 
     int rc = 0;
     mt_response_generic_t *found_response = NULL;
+    mwcomms_ins_data_t    *ins = (mwcomms_ins_data_t *) Handle;
 
 
-    if( NULL == Ins )
+    if( NULL == Handle )
     {
-        pr_err("Null ins passed to mw_xen_get_resposne\n");
+        pr_err("NULL INS passed to mw_xen_get_resposne\n");
         rc = -EIO;
         goto ErrorExit;
     }
@@ -799,8 +876,8 @@ mw_xen_get_next_response( OUT mt_response_generic_t **Response,
     // yet. We only copy it there upon request.
     //
     found_response = (mt_response_generic_t *)
-        RING_GET_RESPONSE( &Ins->front_ring,
-                           Ins->front_ring.rsp_cons );
+        RING_GET_RESPONSE( &ins->front_ring,
+                           ins->front_ring.rsp_cons );
 
     if ( DEBUG_SHOW_TYPE( found_response->base.type ) )
     {
@@ -809,14 +886,14 @@ mw_xen_get_next_response( OUT mt_response_generic_t **Response,
                   (unsigned long)found_response->base.id,
                   found_response->base.size, found_response->base.type,
                   found_response->base.status,
-                  Ins->front_ring.rsp_cons );
+                  ins->front_ring.rsp_cons );
     }
 
     if ( !MT_IS_RESPONSE( found_response ) )
     {
         // Fatal: The ring is corrupted.
         pr_crit( "Received data that is not a response at idx %d\n",
-                 Ins->front_ring.rsp_cons );
+                 ins->front_ring.rsp_cons );
         rc = -EIO;
         goto ErrorExit;
     }
@@ -828,17 +905,18 @@ ErrorExit:
 }
 
 int
-mw_xen_mark_response_consumed( mwcomms_ins_data_t * Ins )
+mw_xen_mark_response_consumed( void *Handle )
 {
     int rc = 0;
+    mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
     
-    if( NULL == Ins )
+    if( NULL == ins )
     {
-        pr_err("Null ins pointer detected\n");
+        pr_err("NULL INS pointer detected\n");
         rc = -EIO;
         goto ErrorExit;
     }
-    ++Ins->front_ring.rsp_cons;
+    ++ins->front_ring.rsp_cons;
     
 ErrorExit:
     return rc;
@@ -853,12 +931,57 @@ mw_xen_socket_wait( long TimeoutJiffies )
 
 
 int
-mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **Dest )
+mw_xen_get_ins_from_domid( IN domid_t          Domid,
+                           OUT mwcomms_ins_data_t **Ins )
 {
-    int temp = 0;
-    int rc = 0;
+    int rc = -ENXIO;
     
-    if ( !g_ins_data[temp].is_ring_ready )
+    for( int i = 0; i < MAX_INS_COUNT; i++ )
+    {
+        if( g_ins_data[i].domid == Domid )
+        {
+            rc = 0;
+            *Ins = &g_ins_data[i];
+            goto ErrorExit;
+        }
+    }
+
+    pr_err("Unable to get INS from domid\n");
+
+ErrorExit:
+    return rc;
+}
+
+
+int
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_get_next_request_slot( IN bool            WaitForRing,
+                              IN mw_socket_fd_t  Sock,
+                              OUT uint8_t      **Dest,
+                              OUT void         **Handle )
+{
+    int                 rc    = 0;
+    mwcomms_ins_data_t *ins   = NULL;
+    domid_t             domid = 0;
+    
+    MYASSERT( NULL != Handle );
+    MYASSERT( NULL != Dest );
+
+    
+    if( MT_INVALID_SOCKET_FD == Sock )
+    {
+        domid = mw_xen_new_socket_rr();
+    }
+    else
+    {
+        domid = MW_SOCKET_CLIENT_ID( Sock );
+    }
+
+    rc = mw_xen_get_ins_from_domid( domid, &ins );
+    if( rc ) { goto ErrorExit; }
+
+    
+    if ( !ins->is_ring_ready )
     {
         MYASSERT( !"Received request too early - ring not ready.\n" );
         rc = -EIO;
@@ -867,7 +990,7 @@ mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **Dest )
 
     do
     {
-        if ( !RING_FULL( &g_ins_data[temp].front_ring ) )
+        if ( !RING_FULL( &ins->front_ring ) )
         {
             break;
         }
@@ -883,8 +1006,8 @@ mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **Dest )
         mw_xen_socket_wait( RING_FULL_TIMEOUT );
     } while( true );
     
-    *Dest = (uint8_t *) RING_GET_REQUEST( &g_ins_data[temp].front_ring,
-                                         g_ins_data[temp].front_ring.req_prod_pvt );
+    *Dest = (uint8_t *) RING_GET_REQUEST( &ins->front_ring,
+                                           ins->front_ring.req_prod_pvt );
     if ( !Dest )
     {
         pr_err( "Destination buffer is NULL\n" );
@@ -892,27 +1015,25 @@ mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **Dest )
         goto ErrorExit;
     }
 
+    *Handle = ins;
+    
 ErrorExit:
-    //return for preprocessing
     return rc;
 }
 
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_dispatch_request( mt_request_generic_t      * Request,
-                         uint8_t                   * dest)
+mw_xen_dispatch_request( void *Handle )
 {
-    int temp = 0;
-    
-    memcpy( dest,
-            Request,
-            Request->base.size );
+    mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
 
-    ++g_ins_data[temp].front_ring.req_prod_pvt;
-    RING_PUSH_REQUESTS( &g_ins_data[temp].front_ring );
+    MYASSERT( NULL != Handle );
+    
+    ++ins->front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &ins->front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    mw_xen_send_event();
+    mw_xen_send_event( ins );
 #endif
     return 0;
 }
@@ -920,32 +1041,24 @@ mw_xen_dispatch_request( mt_request_generic_t      * Request,
     
 static void
 MWSOCKET_DEBUG_ATTRIB
-mw_xenstore_state_changed( struct xenbus_watch *W,
+mw_xen_xenstore_state_changed( struct xenbus_watch *W,
                            const char **V,
                            unsigned int L )
 {
-    int err = 0;
+    MYASSERT( V );
     
     pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
     {
-        err = mw_xen_ins_found( V[ XS_WATCH_PATH ] );
-        if ( err )
-        {
-            pr_err("Problem with reading domid from xenstore\n");
-        }
+        mw_xen_ins_found( V[ XS_WATCH_PATH ] );
         goto ErrorExit;
     }
 
     if ( strstr( V[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
     {
-        err = mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
-        if ( err )
-        {
-            pr_err( "Problem with binding event chn\n ");
-            goto ErrorExit;
-        }
+        mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
+        goto ErrorExit;
     }
     
 ErrorExit:
@@ -954,10 +1067,10 @@ ErrorExit:
 
 
 static struct xenbus_watch
-mw_xenstore_watch =
+mw_xen_xenstore_watch =
 {
     .node = XENEVENT_XENSTORE_ROOT,
-    .callback = mw_xenstore_state_changed
+    .callback = mw_xen_xenstore_state_changed
 };
 
 
@@ -1012,6 +1125,11 @@ mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
     
     g_mwxen_state.pending_exit = false;
 
+
+    rc = mw_xen_init_ring_block();
+    if ( rc ) { goto ErrorExit; }
+    
+
     rc = mw_xen_initialize_keystore();
     if ( rc )
     {
@@ -1034,14 +1152,9 @@ mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
         goto ErrorExit;
     }
 
-    // *******************************************************
-    // Since we have both watchers watching the root, this
-    // is ineficient, consider merging both watches into one
-    // function
-    // *******************************************************
 
     // 2. Watch Client Id XenStore Key
-    rc = register_xenbus_watch( &mw_xenstore_watch );
+    rc = register_xenbus_watch( &mw_xen_xenstore_watch );
     if (rc)
     {
         pr_err("Failed to set xenstore_watcher\n");
@@ -1096,7 +1209,7 @@ mw_xen_fini( void )
     
     if ( g_mwxen_state.xenbus_watch_active )
     {
-        unregister_xenbus_watch( &mw_xenstore_watch );
+        unregister_xenbus_watch( &mw_xen_xenstore_watch );
     }
 
     mw_xen_initialize_keys();

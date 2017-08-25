@@ -42,6 +42,9 @@ typedef  mw_socket_fd_t mw_fd_t; // alias
 #define MW_SOCKET_GET_ID(x)                     \
     ((x) & MW_SOCKET_LOCAL_ID_MASK )
 
+#define MW_SOCKET_CLIENT_ID(x)      \
+    ( ( (x) & MW_SOCKET_CLIENT_MASK ) >> 8 )
+
 //
 // Pseudo-socket FDs for epoll_wait() support. Format same as
 // MW_SOCKET, but the prefix is different.

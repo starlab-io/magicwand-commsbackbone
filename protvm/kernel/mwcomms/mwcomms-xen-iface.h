@@ -34,29 +34,6 @@ mw_xen_event_handler_cb_t( void );
 DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 
 
-// Per-INS data
-typedef struct _mwcomms_ins_data
-{
-    atomic64_t    in_use;
-    domid_t       domid;
-
-    // Ring memory descriptions
-    // Is there a reason to keep a ring and an sring
-    // reference anymore?
-    mw_region_t   ring;
-    struct mwevent_sring * sring;
-    struct mwevent_front_ring front_ring;
-
-    bool is_ring_ready;
-
-    //Grant refs shared with this INS
-    grant_ref_t   grant_refs[ XENEVENT_GRANT_REF_COUNT ];
-
-    int           common_evtchn;
-    int           irq;
-    
-} mwcomms_ins_data_t;
-
 /// @brief Initializes the Xen subsystem and initiates handshake with client
 ///
 /// When CompletionCallback is invoked, the handshake has completed
@@ -84,7 +61,7 @@ mw_xen_get_local_domid( void );
 
 // @brief Sends an event on the common event channel.
 void
-mw_xen_send_event( void );
+mw_xen_send_event( void *Handle );
 
 
 int
@@ -95,24 +72,26 @@ char *
 mw_xen_read_from_key( const char * Dir, const char * Node );
 
 int
-mw_xen_get_next_request_slot( bool WaitForRing, uint8_t **dest );
+mw_xen_get_next_request_slot( IN  bool                   WaitForRing,
+                              IN  mw_socket_fd_t         Sock,
+                              OUT uint8_t              **Dest,
+                              OUT void                 **Handle );
 
 int
-mw_xen_dispatch_request( mt_request_generic_t      * Request,
-                         uint8_t                   * dest);    
+mw_xen_dispatch_request( void *Handle );    
 
 int
 mw_xen_get_next_response( OUT mt_response_generic_t     **Response,
-                          IN  mwcomms_ins_data_t        *Ins );
+                          IN  void                      *Handle );
 
 int
-mw_xen_mark_response_consumed( mwcomms_ins_data_t *Ins );
+mw_xen_mark_response_consumed( void *Handle );
 
 bool
 mw_xen_iface_ready( void );
 
 bool
-mw_xen_response_available( mwcomms_ins_data_t **Ins );
+mw_xen_response_available( void **Handle );
 
 
 #endif // mwcomms_xen_iface_h
