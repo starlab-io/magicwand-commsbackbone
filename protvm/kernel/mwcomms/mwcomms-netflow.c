@@ -111,6 +111,7 @@ mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
 {
     MYASSERT( Len );
     MYASSERT( *Len > 0 );
+    MYASSERT( rwsem_is_locked( &g_mwbc_state.conn_list_lock ) );
 
     int rc = 0;
     size_t size = *Len;
@@ -129,12 +130,8 @@ mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
         goto ErrorExit;
     }
 
-    // The prototype is one of these:
-    //
-    // sock_recvmsg( struct socket * soc, struct msghdr * m,
-    //               size_t total_len, int flags);
-    //
-    // sock_recvmsg( struct socket * soc, struct msghdr * m, int flags);
+    // In demostrating their commitment to backward compatibility, the
+    // Linux kernel devs changed this function signature on us.
 
 #if ( LINUX_VERSION_CODE <= KERNEL_VERSION(4,4,70) )
     rc = sock_recvmsg( Channel->conn, &hdr, *Len, MSG_DONTWAIT );
@@ -156,7 +153,7 @@ mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
     {
         // Return error, having cleared POLLIN flag from socket. There
         // is no data right now but the connection is still alive.
-        goto ErrorExit; 
+        goto ErrorExit;
     }
     else if ( rc < 0 )
     {
@@ -243,6 +240,7 @@ mw_netflow_write_all( void * Message, size_t Len )
 {
     int rc = 0;
 
+//    MYASSERT( !rwsem_is_locked( &g_mwbc_state.conn_list_lock ) );
     down_read( &g_mwbc_state.conn_list_lock );
 
     mwcomms_netflow_channel_t * curr = NULL;
@@ -287,7 +285,6 @@ ErrorExit:
 
 /**
  * @brief Processes feature request, either on PVM or via ring buffer.
- *
  */
 static int
 mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
@@ -295,6 +292,7 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
 {
     MYASSERT( Request );
     MYASSERT( Response );
+    MYASSERT( rwsem_is_locked( &g_mwbc_state.conn_list_lock ) );
 
     int rc = 0;
     bool modify = (Request->flags & MW_FEATURE_FLAG_WRITE);
@@ -308,14 +306,14 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
     // BY_PEER is not supported
     if ( !(Request->flags & MW_FEATURE_FLAG_BY_SOCK) )
     {
-        MYASSERT( !"Invalid flag" );
+        MYASSERT( !"Feature's sockfd must be given" );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
     if ( !MT_SOCK_ATTR_MITIGATES( Request->name ) )
     {
-        MYASSERT( !"Non-mitigating attribute" );
+        //MYASSERT( !"Non-mitigating attribute" );
         rc = -EINVAL;
         goto ErrorExit;
     }
@@ -329,7 +327,7 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
     {
     case MtSockAttribOwnerRunning:
         MYASSERT( Request->flags & MW_FEATURE_FLAG_BY_SOCK );
-        Response->val.v = true;
+        Response->val.v32 = true;
         if ( modify )
         {
             rc = mwsocket_signal_owner_by_remote_fd( Request->ident.sockfd, SIGINT );
@@ -337,7 +335,7 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
         break;
     case MtSockAttribIsOpen:
         MYASSERT( Request->flags & MW_FEATURE_FLAG_BY_SOCK );
-        Response->val.v = true;
+        Response->val.v32 = true;
         if ( modify )
         {
             rc = mwsocket_close_by_remote_fd( Request->ident.sockfd, true ); // wait
@@ -362,30 +360,25 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
 
     if ( send )
     {
-        mtreq.base.size = sizeof( mtreq );
-        mtreq.base.type = MtRequestSocketAttrib;
+        mtreq.base.size   = sizeof( mtreq );
+        mtreq.base.type   = MtRequestSocketAttrib;
+        mtreq.base.sockfd = Request->ident.sockfd;
         mtreq.modify    = modify;
         mtreq.name      = Request->name;
         mtreq.val       = Request->val;
+
         mtres.base.size = sizeof( mtres );
 
-        rc = Response->status =
-            mwsocket_send_bare_request( (mt_request_generic_t *) &mtreq,
-                                        (mt_response_generic_t *) &mtres );
-
-        Response->status = rc; //mtres.base.status;
-        if ( !modify && (0 == Response->status) )
+        rc = mwsocket_send_bare_request( (mt_request_generic_t *) &mtreq,
+                                         (mt_response_generic_t *) &mtres );
+        if ( !modify && !rc )
         {
-            // Struct copy
-            Response->val = mtres.val;
+            Response->val = mtres.val; // struct copy
         }
-    }
-    if ( rc && (0 == Response->status) )
-    {
-        Response->status = rc;
     }
 
 ErrorExit:
+    if ( rc && !Response->status ) { Response->status = rc; }
     return rc;
 }
 
@@ -406,7 +399,6 @@ mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
         mw_feature_request_t req = {0};
         mw_feature_response_t res = {0};
         size_t size = sizeof( req );
-        //uint64_t answer = 0;
 
         rc = mw_netflow_read( Channel, &req, &size );
         if ( rc || sizeof(req) != size ) { break; }
@@ -415,10 +407,12 @@ mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
         req.base.id  = __be32_to_cpu( req.base.id );
         req.flags    = __be16_to_cpu( req.flags );
         req.name     = __be16_to_cpu( req.name );
+        // req.val handled by mw_netflow_process_feat_req()
         res.val.t.s  = __be64_to_cpu( res.val.t.s  );
         res.val.t.us = __be64_to_cpu( res.val.t.us );
 
-        // Value: handled by mw_netflow_process_feat_req()
+        MYASSERT( MW_MESSAGE_SIG_FEATURE_REQUEST == req.base.sig );
+
         if ( req.flags & MW_FEATURE_FLAG_BY_SOCK )
         {
             req.ident.sockfd = __be32_to_cpu( req.ident.sockfd );
@@ -428,22 +422,18 @@ mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
             req.ident.remote.af = __be32_to_cpu( req.ident.remote.af );
         }
 
-
-        MYASSERT( MW_MESSAGE_SIG_FEATURE_REQUEST == req.base.sig );
-
-        // Process the feature request. No matter the results, we owe
-        // a response to the other side.
-//        rc = mw_netflow_process_feat_req( &req, &res );
+        // Process the feature request. Response must be send!
+        rc = mw_netflow_process_feat_req( &req, &res );
         if ( rc )
         {
-            pr_warn( "Feature processing failed (%d). Sending failure to %s\n",
-                     rc, Channel->peer );
-        }
+            pr_warn( "Feature processing failed (%d). "
+                     "Reporting on channel.\n", rc );
+        } // fall-through to response code
 
+        // Send response on channel
         res.base.sig = __cpu_to_be16( MW_MESSAGE_SIG_FEATURE_RESPONSE );
         res.base.id  = __cpu_to_be32( req.base.id );
-        res.status   = __cpu_to_be32( rc );
-        //res.val   = __cpu_to_be64( answer ); // XXXX
+        res.status   = __cpu_to_be32( res.status );
         res.val.t.s  = __cpu_to_be64( res.val.t.s );
         res.val.t.us = __cpu_to_be64( res.val.t.us );
 
@@ -653,17 +643,20 @@ mw_netflow_monitor( void * Arg )
             }
         }
 
-        // Now, poll the existing connections. Check for pending read and close.
-        down_write( &g_mwbc_state.conn_list_lock );
+        // Now, poll the existing connections. Check for pending read
+        // and close. Only hold the read lock for this, as the feature
+        // handling code can call back into the netflow code.
+
+        down_read( &g_mwbc_state.conn_list_lock );
         mwcomms_netflow_channel_t * curr = NULL;
         mwcomms_netflow_channel_t * next = NULL;
 
-        list_for_each_entry_safe( curr, next, &g_mwbc_state.conn_list, list )
+        list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
         {
             unsigned int events = curr->conn->ops->poll( curr->conn->file,
                                                          curr->conn,
                                                          &g_mwbc_state.poll_tbl );
-            if ( ( POLLHUP | POLLRDHUP ) & events )
+            if ( (POLLHUP | POLLRDHUP) & events )
             {
                 // Remote side closed
                 curr->active = false;
@@ -678,20 +671,24 @@ mw_netflow_monitor( void * Arg )
                 // been cleared.
                 (void) mw_netflow_handle_feat_req( curr );
             }
-
-            if ( !curr->active )
-            {
-                // We determined from above that the connection is
-                // dead. Close this side.
-                pr_info( "Dropping connection to %s\n", curr->peer );
-                kernel_sock_shutdown( curr->conn, SHUT_RDWR );
-                sock_release( curr->conn );
-                atomic_dec( &g_mwbc_state.active_conns );
-                list_del( &curr->list );
-                kfree( curr );
-            }
         }
+        up_read( &g_mwbc_state.conn_list_lock );
 
+        // Purge inactive connections, this time holding the write lock.
+        down_write( &g_mwbc_state.conn_list_lock );
+        list_for_each_entry_safe( curr, next, &g_mwbc_state.conn_list, list )
+        {
+            if ( curr->active ) { continue; }
+
+            // We determined from above that the connection is
+            // dead. Close this side and remove from our list.
+            pr_info( "Dropping connection to %s\n", curr->peer );
+            kernel_sock_shutdown( curr->conn, SHUT_RDWR );
+            sock_release( curr->conn );
+            atomic_dec( &g_mwbc_state.active_conns );
+            list_del( &curr->list );
+            kfree( curr );
+        }
         up_write( &g_mwbc_state.conn_list_lock );
 
         // Sleep
@@ -779,7 +776,7 @@ mw_netflow_init( struct sockaddr * LocalIp )
     g_mwbc_state.listen_thread =
         kthread_run( &mw_netflow_monitor,
                      NULL,
-                     "magicwand_netflow_thread" );
+                     "mw_netflow_monitor" );
 
     if ( NULL == g_mwbc_state.listen_thread )
     {

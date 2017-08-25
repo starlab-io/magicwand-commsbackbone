@@ -316,11 +316,11 @@ typedef struct _mwsocket_instance
     // The ID of the blocking request. Only one at a time!
     mt_id_t             blockid;
 
-    // did user indicate a read() is next?
+    // Did user indicate a read() is next?
     bool                read_expected; 
-    // have we started remote close?
+    // Have we started remote close?
     bool                remote_close_requested; 
-    // did the remote side close unexpectedly?
+    // Did the remote side close unexpectedly?
     bool                remote_surprise_close; 
 
     // Do not allow close() while certain operations are
@@ -329,6 +329,9 @@ typedef struct _mwsocket_instance
     // read lock. Don't block the close indefinitely -- the INS might
     // have died.
     struct rw_semaphore close_lock;
+
+    // Has the close lock been acquired via down_write()?
+    bool   close_lock_write;
 
     // All the instances. Must hold global sockinst_lock to access.
     struct list_head    list_all;
@@ -468,6 +471,8 @@ static int
 mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
                        IN bool                  WaitForResponse );
 
+static void
+mwsocket_postproc_timeout( mwsocket_active_request_t * ActiveRequest );
 
 /******************************************************************************
  * Primitive Functions
@@ -594,6 +599,7 @@ static struct file_system_type mwsocket_fs_type =
 
 
 int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_fs_init( void )
 {
     int rc = 0;
@@ -631,10 +637,11 @@ ErrorExit:
  * @todo: Can we remove this and point file->private to the sockinst ?
  */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
                         IN  struct file          * File )
 {
-    int rc = -ENOENT;
+    int rc = -EBADF;
     mwsocket_instance_t * curr = NULL;
 
     MYASSERT( SockInst );
@@ -646,7 +653,7 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if ( curr->file  == File )
+        if ( curr->file == File )
         {
             *SockInst = curr;
             rc = 0;
@@ -661,10 +668,11 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
                                      IN  mw_socket_fd_t         RemoteFd )
 {
-    int rc = -ENOENT;
+    int rc = -EBADF;
 
     MYASSERT( SockInst );
 
@@ -685,7 +693,11 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
 
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
-    MYASSERT( 0 == rc );
+    if ( rc )
+    {
+        pr_info( "Failed to find requested remote FD=%lx\n",
+                 (unsigned long) RemoteFd );
+    }
 
     return rc;
 }
@@ -695,6 +707,7 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
  * @brief Supports mitigation by forcing a remote close of the given socket.
  */
 int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
                              IN bool           Wait )
 {
@@ -705,6 +718,9 @@ mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
     if ( rc ) { goto ErrorExit; }
 
     rc = mwsocket_close_remote( sockinst, Wait );
+    if ( rc ) { goto ErrorExit; }
+
+    sockinst->remote_surprise_close = true;
 
 ErrorExit:
     return rc;
@@ -716,6 +732,7 @@ ErrorExit:
  *        remote socket FD.
  */
 int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
                                     IN int            SignalNum )
 {
@@ -725,6 +742,11 @@ mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
     rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, RemoteFd );
     if ( rc ) { goto ErrorExit; }
 
+    pr_warn( "Delivering signal %d to process %d (%s) for socket %d\n",
+             SignalNum,
+             sockinst->proc->pid, sockinst->proc->comm,
+             sockinst->local_fd );
+
     send_sig( SignalNum, sockinst->proc, 0 );
 
 ErrorExit:
@@ -733,6 +755,7 @@ ErrorExit:
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_debug_dump_sockinst( void )
 {
    mwsocket_instance_t * curr = NULL;
@@ -747,6 +770,7 @@ mwsocket_debug_dump_sockinst( void )
 
 // @brief Reference the socket instance
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 {
     int val = 0;
@@ -805,6 +829,7 @@ ErrorExit:
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
                           IN  int                    Flags,
                           IN  bool                   CreateBackingFile )
@@ -944,6 +969,7 @@ ErrorExit:
  * @return 0 on success, or error, which could be either local or remote
  */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
                        IN bool                  WaitForResponse )
 {
@@ -988,8 +1014,9 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     rc = wait_for_completion_timeout( &actreq->arrived, GENERAL_RESPONSE_TIMEOUT );
     if ( 0 == rc )
     {
-        pr_warn( "Timed out while waiting for response to close\n" );
         rc = -ETIME;
+        mwsocket_postproc_timeout( actreq );
+        pr_warn( "Timed out while waiting for response to close\n" );
     }
     else
     {
@@ -997,7 +1024,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
         rc = 0;
     }
 
-    rc = rc ? rc : actreq->rr.response.base.status;
+    if ( 0 == rc ) { rc = actreq->rr.response.base.status; }
 
 ErrorExit:
     mwsocket_destroy_active_request( actreq );
@@ -1076,13 +1103,14 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
                 actreq, (unsigned long)id );
 
     *ActReq = actreq;
-    
+
 ErrorExit:
     return rc;
 }
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
                                     IN  mt_id_t                      Id )
 {
@@ -1109,6 +1137,7 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_debug_dump_actreq( void )
 {
     mwsocket_active_request_t * curr = NULL;
@@ -1131,6 +1160,7 @@ mwsocket_debug_dump_actreq( void )
 //
 // @return Returns pending error, or 0 if none
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_pending_error( mwsocket_instance_t * SockInst,
                         mt_request_type_t     RequestType )
 {
@@ -1178,9 +1208,15 @@ ErrorExit:
 }
 
 
-// @brief Prepares request and socket instance state prior to putting
-// request on ring buffer.
+/**
+ * @brief Prepares request and socket instance state prior to putting
+ *        request on ring buffer.
+ *
+ * Enforces close lock: some operations cannot be started while a close
+ * is in progress.
+ */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 {
     MYASSERT( ActiveRequest );
@@ -1203,6 +1239,9 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
     if ( MT_CLOSE_WAITS( request ) )
     {
+        pr_debug( "down_read(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
+        MYASSERT( !rwsem_is_locked( &ActiveRequest->sockinst->close_lock ) );
+
         down_read( &ActiveRequest->sockinst->close_lock );
 
         atomic64_set( &ActiveRequest->sockinst->close_blockid,
@@ -1224,8 +1263,8 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
         // Wait for completion of all in-flight IO that close must
         // wait on. This sockinst is being destroyed, so we won't
-        // release this lock. Once it is acquired, regard the socket
-        // as dead. Do not wait forever.
+        // release this lock. Once it is acquired, consider the socket
+        // dead. Do not wait forever.
 
 #if 0 // XXXX: update to this when we're on a more recent kernel
         rc = down_write_killable( &ActiveRequest->sockinst->close_lock );
@@ -1240,13 +1279,14 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
         {
             if ( down_write_trylock( &ActiveRequest->sockinst->close_lock ) )
             {
+                ActiveRequest->sockinst->close_lock_write = true;
                 acquired = true;
                 break;
             }
             mwsocket_wait( GENERAL_RESPONSE_TIMEOUT );
         }
 
-        if ( !acquired )
+        if ( !ActiveRequest->sockinst->close_lock_write )
         {
             pr_warning( "Closing socket %d [pid %d] despite outstanding IO on it (ID %lx).\n",
                         ActiveRequest->sockinst->local_fd,
@@ -1285,7 +1325,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
         }
         break;
     case MtRequestSocketBind:
-        // Assume IPv4
+        // XXXX: Assume IPv4
         ActiveRequest->sockinst->local_bind.sa_family = AF_INET;
         struct sockaddr_in * sa4 =
             (struct sockaddr_in *)(&ActiveRequest->sockinst->local_bind);
@@ -1296,7 +1336,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
     default:
         break;
     }
-    
+
     return rc;
 }
 
@@ -1428,10 +1468,52 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     nf.obs = __cpu_to_be16( (mw_obs_space_t) obs );
 
     mwsocket_populate_netflow( ActiveRequest, &nf );
-    mw_netflow_write_all( &nf, sizeof(nf) );
 
+    mw_netflow_write_all( &nf, sizeof(nf) );
+    pr_debug( "Wrote netflow info about request %lx\n",
+              (unsigned long) ActiveRequest->id );
 ErrorExit:
     return;
+}
+
+
+/**
+ * @brief Post-processing for active request whose response has timed out.
+ */
+static void
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_postproc_timeout( mwsocket_active_request_t * ActiveRequest )
+{
+    MYASSERT( ActiveRequest );
+    MYASSERT( ActiveRequest->sockinst );
+    MYASSERT( MT_IS_REQUEST( &ActiveRequest->rr.request ) );
+
+    mt_request_generic_t * req = &ActiveRequest->rr.request;
+
+    MYASSERT( !"timeout" );
+    pr_warn( "Timed out while waiting for response %lx\n",
+             (unsigned long) ActiveRequest->id );
+
+    if ( MT_CLOSE_WAITS( req ) )
+    {
+        // Clear the ID of the blocker to close, iff it is this request's
+        atomic64_cmpxchg( &ActiveRequest->sockinst->close_blockid,
+                          (unsigned long) ActiveRequest->id,
+                          (unsigned long) MT_ID_UNSET_VALUE );
+        pr_debug( "up_read(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
+        MYASSERT( rwsem_is_locked( &ActiveRequest->sockinst->close_lock ) );
+
+        up_read( &ActiveRequest->sockinst->close_lock );
+    }
+    else if ( MtRequestSocketClose == req->base.type
+              && ActiveRequest->sockinst->close_lock_write )
+    {
+        pr_debug( "up_write(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
+        MYASSERT( rwsem_is_locked( &ActiveRequest->sockinst->close_lock ) );
+
+        up_write( &ActiveRequest->sockinst->close_lock );
+        ActiveRequest->sockinst->close_lock_write = false;
+    }
 }
 
 
@@ -1458,8 +1540,19 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
         atomic64_cmpxchg( &ActiveRequest->sockinst->close_blockid,
                           (unsigned long) ActiveRequest->id,
                           (unsigned long) MT_ID_UNSET_VALUE );
+        pr_debug( "up_read(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
+        MYASSERT( rwsem_is_locked( &ActiveRequest->sockinst->close_lock ) );
 
         up_read( &ActiveRequest->sockinst->close_lock );
+    }
+    else if ( MtResponseSocketClose == Response->base.type
+              && ActiveRequest->sockinst->close_lock_write )
+    {
+        pr_debug( "up_write(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
+        MYASSERT( rwsem_is_locked( &ActiveRequest->sockinst->close_lock ) );
+
+        up_write( &ActiveRequest->sockinst->close_lock );
+        ActiveRequest->sockinst->close_lock_write = false;
     }
 
     if ( MtResponseSocketSend == Response->base.type )
@@ -1673,7 +1766,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
             goto ErrorExit;
         }
 
-        // Wait and try again...
+        // Wait and try again. N.B. we hold request_lock here.
         mwsocket_wait( RING_FULL_TIMEOUT );
     } while( true );
 
@@ -1713,7 +1806,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
 #if INS_USES_EVENT_CHANNEL
     mw_xen_send_event();
 #endif
-        
+
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
 
@@ -1728,18 +1821,24 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_send_message( IN mwsocket_active_request_t * ActiveRequest,
                        IN mt_request_generic_t      * Request,
                        IN bool                        AwaitResponse )
 {
     int rc = 0;
     int remoterc = 0;
-    //mwsocket_active_request_t * actreq = NULL;
 
     MYASSERT( ActiveRequest );
     MYASSERT( Request );
 
     ActiveRequest->deliver_response = AwaitResponse;
+    if ( Request->base.size > sizeof(ActiveRequest->rr.request) )
+    {
+        rc = -EINVAL;
+        MYASSERT( !"Given request is too big" );
+        goto ErrorExit;
+    }
 
     memcpy( &ActiveRequest->rr.request, Request, Request->base.size );
 
@@ -1748,9 +1847,20 @@ mwsocket_send_message( IN mwsocket_active_request_t * ActiveRequest,
 
     if ( !AwaitResponse ) { goto ErrorExit; }
 
-    wait_for_completion_interruptible( &ActiveRequest->arrived );
+    //wait_for_completion_interruptible( &ActiveRequest->arrived );
+
+    // Wait
+    rc = wait_for_completion_timeout( &ActiveRequest->arrived, GENERAL_RESPONSE_TIMEOUT );
+    if ( 0 == rc )
+    {
+        rc = -ETIME;
+        mwsocket_postproc_timeout( ActiveRequest );
+        goto ErrorExit;
+    }
+
     pr_debug( "Response arrived: %lx\n", (unsigned long)ActiveRequest->id );
 
+    rc = 0;
     remoterc = -ActiveRequest->rr.response.base.status;
 
 ErrorExit:
@@ -1758,9 +1868,55 @@ ErrorExit:
     {
         rc = remoterc;
     }
-    
+
     return rc;
 }
+
+
+/**
+ * Public function - see mwcomms-socket.h.
+ *
+ * Uses ring buffer to fulfill given request. Waits for response and
+ * popualates it.
+ */
+int
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
+                            INOUT mt_response_generic_t * Response )
+{
+    int rc = 0;
+    mwsocket_instance_t      * sockinst = NULL;
+    mwsocket_active_request_t  * actreq = NULL;
+
+    // XXXX: wrong???? find the sockinst by the embedded domid?
+    rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, Request->base.sockfd );
+    if ( rc ) { goto ErrorExit; }
+
+    rc = mwsocket_create_active_request( sockinst, &actreq );
+    if ( rc ) { goto ErrorExit; }
+
+    rc = mwsocket_send_message( actreq, Request, true );
+    if ( rc ) { goto ErrorExit; }
+
+    // Copy the response for the caller, provided we have enough space for it.
+    if ( actreq->rr.response.base.size > Response->base.size )
+    {
+        rc = -ENOSPC;
+        MYASSERT( !"Insufficient space given for response" );
+        goto ErrorExit;
+    }
+    else
+    {
+        memcpy( (void *) Response,
+                &actreq->rr.response,
+                actreq->rr.response.base.size );
+    }
+
+ErrorExit:
+    mwsocket_destroy_active_request( actreq );
+    return rc;
+}
+
 
 /******************************************************************************
  * Main functions for worker threads. There are two: the response
@@ -1769,6 +1925,7 @@ ErrorExit:
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_response_consumer( void * Arg )
 {
     int rc = 0;
@@ -1925,6 +2082,8 @@ mwsocket_response_consumer( void * Arg )
         {
             // The caller is healthy and wants the response.
             memcpy( &actreq->rr.response, response, response->base.size );
+            pr_debug( "Response %lx: arrived\n",
+                      (unsigned long) actreq->id );
             complete_all( &actreq->arrived );
         }
 
@@ -1966,10 +2125,8 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
                                       POLL_MONITOR_RESPONSE_TIMEOUT );
     if ( 0 == rc )
     {
-        // The response did not arrive, so we cannot process it
-        pr_warn( "Timed out while waiting for response %lx\n",
-                 (unsigned long)actreq->id );
         rc = -ETIME;
+        mwsocket_postproc_timeout( actreq );
         goto ErrorExit;
     }
 
@@ -2161,6 +2318,7 @@ ErrorExit:
  * @brief Returns whether the given file descriptor is backed by an MW socket.
  */
 bool
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_verify( const struct file * File )
 {
     return (File->f_op == &mwsocket_fops);
@@ -2168,6 +2326,7 @@ mwsocket_verify( const struct file * File )
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_handle_attrib( IN struct file            * File,
                         IN mwsocket_attrib_t * SetAttribs )
 {
@@ -2201,8 +2360,8 @@ mwsocket_handle_attrib( IN struct file            * File,
     rc = wait_for_completion_timeout( &actreq->arrived, GENERAL_RESPONSE_TIMEOUT );
     if ( 0 == rc )
     {
-        pr_warn( "Timed out while waiting for response\n" );
         rc = -ETIME;
+        mwsocket_postproc_timeout( actreq );
         goto ErrorExit;
     }
     rc = 0;
@@ -2227,6 +2386,7 @@ ErrorExit:
 
 
 static ssize_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_read( struct file * File,
                char        * Bytes,
                size_t        Len,
@@ -2325,6 +2485,7 @@ ErrorExit:
 
 
 static ssize_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_write( struct file * File,
                 const char  * Bytes,
                 size_t        Len,
@@ -2492,12 +2653,17 @@ mwsocket_poll( struct file * File,
     ssize_t rc = 0;
     mwsocket_instance_t * sockinst = NULL;
     unsigned long events = 0;
-    
+
     rc = mwsocket_find_sockinst( &sockinst, File );
-    MYASSERT( 0 == rc );
-    pr_verbose( "Processing poll(), fd %d\n",
-                sockinst->local_fd );
-    
+    if ( rc )
+    {
+        // XXXX: can we recover from this state? Return events (=0)
+        MYASSERT( !"Poll on invalid file" );
+        goto ErrorExit;
+    }
+
+    pr_verbose( "Processing poll(), fd %d\n", sockinst->local_fd );
+
     poll_wait( File, &g_mwsocket_state.waitq, PollTbl );
 
     // Lock used by poll monitor during socket instance update
@@ -2513,11 +2679,13 @@ mwsocket_poll( struct file * File,
         pr_debug( "Returning events %lx, fd %d\n", events, sockinst->local_fd );
     }
 
+ErrorExit:
     return events;
 }
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_release( struct inode * Inode,
                   struct file  * File )
 {
@@ -2533,7 +2701,6 @@ mwsocket_release( struct inode * Inode,
     if ( rc )
     {
         MYASSERT( !"Failed to find associated socket instance" );
-        rc = -EBADFD;
         goto ErrorExit;
     }
 
@@ -2561,6 +2728,7 @@ ErrorExit:
  * Module-level init and fini function
  ******************************************************************************/
 int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_init( mw_region_t * SharedMem,
                IN struct sockaddr * LocalIp )
 {
@@ -2657,6 +2825,7 @@ ErrorExit:
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_fini( void )
 {
     mwsocket_active_request_t * currar = NULL;

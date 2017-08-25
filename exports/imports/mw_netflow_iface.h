@@ -70,12 +70,9 @@ typedef struct _mw_base
     ( (NULL != (_ptr) )                                                 \
       && ( (ntohs( *(mw_netflow_sig_t *) (_ptr) ) >> 8) == _MW_SIG_HI ) )
 
-#define MW_MESSAGE_SIG_NETFLOW_INFO        MW_SIG( 0x10 )
-
+#define MW_MESSAGE_SIG_NETFLOW_INFO      MW_SIG( 0x10 )
 #define MW_MESSAGE_SIG_FEATURE_REQUEST   MW_SIG( 0x20 )
-//#define MW_MESSAGE_SIG_FEATURE_REQUEST_BY_SOCKFD   MW_SIG( 0x20 )
-//#define MW_MESSAGE_SIG_FEATURE_REQUEST_BY_IP       MW_SIG( 0x21 )
-#define MW_MESSAGE_SIG_FEATURE_RESPONSE            MW_SIG( 0x2f )
+#define MW_MESSAGE_SIG_FEATURE_RESPONSE  MW_SIG( 0x2f )
 
 
 /**
@@ -234,7 +231,8 @@ typedef struct MT_STRUCT_ATTRIBS _mt_sockfeat_time_arg
 
 typedef union MT_STRUCT_ATTRIBS _mt_sockfeat_arg
 {
-    uint64_t               v;
+    uint32_t               v32;
+    uint64_t               v64;
     mt_sockfeat_time_arg_t t;
 } mt_sockfeat_arg_t;
 

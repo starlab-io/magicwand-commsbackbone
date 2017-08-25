@@ -22,13 +22,9 @@ SIG_FEA_RES = 0xd32f
 FEA_FLAG_WRITE   = 0x1
 FEA_FLAG_BY_SOCK = 0x2
 
-#SIG_MIT_REQ = 0xd320
-#SIG_MIT_RES = 0xd321
-#SIG_STA_REQ = 0xd330
-#SIG_STA_RES = 0xd331
 
 FEATURES = dict(
-    MtSockAttribNone = 0x00,
+    MtSockAttribNone          = (0, bool),
 
     # Per-socket features: name => (value, argtype)
 
@@ -38,8 +34,8 @@ FEATURES = dict(
     MtSockAttribSndBuf       = (0x0109, int), # arg: sz in bytes (uint32_t)
     MtSockAttribRcvBuf       = (0x010a, int), # arg: sz in bytes (uint32_t)
 
-    MtSockAttribSndTimeo     = (0x010b, (int,int)), # arg: (s,us) tuple
-    MtSockAttribRcvTimeo     = (0x010c, (int,int)), # arg: (s,us) tuple
+    MtSockAttribSndTimeo     = (0x010b, tuple), # arg: (s,us) tuple
+    MtSockAttribRcvTimeo     = (0x010c, tuple), # arg: (s,us) tuple
 
     MtSockAttribSndLoWat     = (0x010d, int), # arg: sz in bytes (uint32_t)
     MtSockAttribRcvLoWat     = (0x010e, int), # arg: sz in bytes (uint32_t)
@@ -47,11 +43,12 @@ FEATURES = dict(
     # INS-wide changes
 
     # Change congestion control algo, arg: see vals below
-    MtSockAttribSystemInsCongctl    = (0x20, str), # arg: mw_congctl_arg_val_t (uint32_t)
+    ###MtSockAttribSystemInsCongctl    = (0x20, str), # arg: mw_congctl_arg_val_t (uint32_t)
 
     # Change of delay ACK ticks: arg is signed tick differential
     MtSockAttribSystemDelackTicks   = (0x21, int),  # arg: tick count (uint32_t)
 )
+
 
 FLAGS = dict(
     MW_FEATURE_FLAG_WRITE   = 0x1,
@@ -85,7 +82,7 @@ ENDPOINT_FMT = ADDR_FMT + "H"
 INFO_FMT = "!HQQQQi" + ENDPOINT_FMT + ENDPOINT_FMT + "QQQ"
 
 # Feature response, post-signature
-FEATURE_RES_FMT = "i16s"
+FEATURE_RES_FMT = "!i16s"
 
 
 ##
@@ -153,8 +150,6 @@ def connect_to_netflow( server ):
 
 class Endpoint:
     def __init__( self, af, ip, port ):
-
-        #(af, ip, port) = struct.unpack( "!" + ENDPOINT_FMT, packed )
         self._af   = af
         self._port = port
 
@@ -217,11 +212,14 @@ def process_info_netflow( sock ):
            format( age, sockfd, pvm, remote, 
                    obs, inbytes, outbytes, extra ) )
 
+curr_id = random.randint( 0, MAX_ID )
 def get_next_id():
-    curr_id = random.randint( 0, MAX_ID )
+    global curr_id
+    curr_id += 1
 
     while curr_id in outstanding_requests:
-        curr_id = random.randint( 0, MAX_ID )
+        curr_id += 1
+        curr_id %= MAX_ID
 
     outstanding_requests[ curr_id ] = None
 
@@ -229,7 +227,10 @@ def get_next_id():
 
 
 def send_feature_request( conn, sockfd, name, value=None ):
-    """ value is 2-tuple """
+    """
+    value is 2-tuple. Once the request is sent, the PVM must send us a
+    response. However, we can't enforce that on this side.
+    """
     ident = get_next_id()
 
     modify = (None == value)
@@ -242,14 +243,56 @@ def send_feature_request( conn, sockfd, name, value=None ):
                                       'sockfd'  : sockfd,
                                       'name'    : name,
                                       'value'   : value }
+
+    flag = 'MW_FEATURE_FLAG_BY_SOCK'
+
     req = struct.pack( FEATURE_REQ_FMT, # everything, including signature
                        SIG_FEA_REQ, ident,
-                       FLAGS['MW_FEATURE_FLAG_BY_SOCK'], name,
+                       FLAGS[ flag ], name,
                        val[0], val[1],
                        sockfd, "" )
 
-    logging.info( "Sending {0}".format( b2h( req ) ) )
+    print( "Feature request\tid {0:x}: {1:x} name {2:x} flags {3:x} [{4:x}:{5:x}]"
+           .format( ident, sockfd, name, FLAGS[ flag ], val[0], val[1] ) )
     conn.sendall( req )
+
+def send_feature_request2( conn ):
+    """ Exercises feature request/response system with randomized requests """
+
+    ident = get_next_id()
+    modify = random.randint(0,1)
+
+    flags  = FLAGS['MW_FEATURE_FLAG_BY_SOCK']
+    feature = random.choice( FEATURES.items() )
+    #modify = 1##random.randint(0,1)
+    #feature = ( 'MtSockAttribOpen', (0x0102, bool) )
+
+    name = feature[1][0]
+    sockfd = random.choice( open_socks.keys() )
+
+    val = (0,0)
+    if modify:
+        flags |= FEA_FLAG_WRITE
+        if type(False) == feature[1][1]:
+            val = ( random.randint(0,1), 0 )
+        elif type(5) == feature[1][1]:
+            val = ( random.randint(0,0x10000), 0 )
+        elif type(()) == feature[1][1]:
+            val = ( random.randint(0,0x10000), random.randint(0,0x10000) )
+        else:
+            #logging.error( "Bad type {0}".type(features[1][1]) )
+            import pdb;pdb.set_trace()
+            return
+
+    req = struct.pack( FEATURE_REQ_FMT, # everything, including signature
+                       SIG_FEA_REQ, ident, # header
+                       flags, name, val[0], val[1], sockfd, "" )
+
+    print( "Feature request\tid {0:x}: {1:x} name {2:x} flags {3:x} [{4:x}:{5:x}]"
+           .format( ident, sockfd, name, flags, val[0], val[1] ) )
+
+    conn.sendall( req )
+
 
 def process_feature_response( sock, ident ):
     data = recvall( sock, struct.calcsize( FEATURE_RES_FMT ) )
@@ -261,7 +304,9 @@ def process_feature_response( sock, ident ):
     vals = struct.unpack( "!QQ", val )
 
     # lookup ident for more info
-    print( "Feature response\tid {0:x}: {1:x} [{2:x}:{3:x}]".format( ident, status, vals[0], vals[1] ) )
+    print( "Feature response\tid {0:x}: {1:x} [{2:x}:{3:x}]"
+           .format( ident, status, vals[0], vals[1] ) )
+
 
 def monitor_netflow( conn ):
     iters = 0
@@ -275,9 +320,9 @@ def monitor_netflow( conn ):
             # For now, PVM just reads requests and writes responses;
             # no processing is done
             if iters % 2 == 0 and len(open_socks) > 0:
-                sockfd = open_socks.keys()[0] # grab sockfd "at random"
-                send_feature_request( conn, sockfd, FEATURES[ 'MtSockAttribSndBuf' ][0], None ) 
-
+                #sockfd = open_socks.keys()[0] # grab sockfd "at random"
+                #send_feature_request( conn, sockfd, FEATURES[ 'MtSockAttribSndBuf' ][0], None )
+                send_feature_request2( conn )
         elif SIG_FEA_RES == sig:
             process_feature_response( conn, ident )
         else:

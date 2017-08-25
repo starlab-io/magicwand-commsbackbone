@@ -444,7 +444,7 @@ socket( int Domain,
     }
 
     DEBUG_PRINT( "mwsocket( %d, 0x%x, %d ) ==> %d\n",
-                 Domain, Type, Protocol, rc );
+                 Domain, Type, Protocol, create.outfd );
 
     rc = create.outfd;
 #endif
@@ -1595,9 +1595,9 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
         goto ErrorExit;
     }
 
-    attr.modify = true;
-    attr.name   = MtSockAttribNonblock;
-    attr.val.v  = (uint32_t) (bool) ( newflags & O_NONBLOCK );
+    attr.modify  = true;
+    attr.name    = MtSockAttribNonblock;
+    attr.val.v32 = (uint32_t) (bool) ( newflags & O_NONBLOCK );
 
     rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
