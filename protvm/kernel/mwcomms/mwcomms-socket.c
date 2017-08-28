@@ -1424,9 +1424,9 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                        IN bool                        WaitForRing )
 {
     int                   rc    = 0;
-    uint8_t              *dest  = NULL;
-    void                 *h    = NULL;    
-    mt_request_base_t    *base = NULL;
+    mt_request_generic_t * req  = NULL;
+    void                 * h    = NULL;
+    mt_request_base_t    * base = NULL;
 
     MYASSERT( ActiveRequest );
 
@@ -1446,24 +1446,20 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         rc = -EINVAL;
         goto ErrorExit;
     }
-
     
-    //Get a request slot
+    // Get a request slot
     rc = mw_xen_get_next_request_slot( WaitForRing,
                                        base->sockfd,
-                                       &dest,
+                                       &req,
                                        &h );
-    if( rc )
-    {
-        goto ErrorExit;
-    }
-    
+    if ( rc ) { goto ErrorExit; }
+
     // Populate the request further as needed. Do this only when we're
     // certain the send will succeed, as it modifies the sockinst
     // state such that the system will fail if a response is not
     // received.
     rc = mwsocket_pre_process_request( ActiveRequest );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     if ( DEBUG_SHOW_TYPE( ActiveRequest->rr.request.base.type ) )
     {
@@ -1475,19 +1471,17 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     }
 
     //Request pointer comes from get netxt request slot
-    memcpy( dest,
+    memcpy( (void *) req,
             &ActiveRequest->rr.request,
             ActiveRequest->rr.request.base.size );
     
     mw_xen_dispatch_request( h );
-    
+
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
 
     return rc;
 }
-
-
 
 
 /**
@@ -1535,7 +1529,6 @@ ErrorExit:
 }
 
 
-
 /******************************************************************************
  * Main functions for worker threads. There are two: the response
  * consumer, and the poll monitor.
@@ -1549,7 +1542,6 @@ mwsocket_response_consumer( void * Arg )
     mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t     * response = NULL;
     bool                        available = false;
-    
 
     // TODO
     // Wait for there to be a ring available for use
@@ -1579,19 +1571,14 @@ mwsocket_response_consumer( void * Arg )
     
     pr_debug("Entering response consumer loop\n");
 
-    while( true )
+    while ( true )
     {
-
         do
         {
-
             available = mw_xen_response_available( &h );
             if( !available )
             {
-                if( g_mwsocket_state.pending_exit )
-                {
-                    goto ErrorExit;
-                }
+                if ( g_mwsocket_state.pending_exit ) { goto ErrorExit; }
                 
                 if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
                 {
@@ -1600,13 +1587,13 @@ mwsocket_response_consumer( void * Arg )
                     goto ErrorExit;
                 }
             }
-
         } while (!available);
-        
 
+        // N.B. only fails if ring is corrupt
         rc = mw_xen_get_next_response( &response, h );
-         
-        if( g_mwsocket_state.pending_exit )
+        if ( rc ) { goto ErrorExit; }
+
+        if ( g_mwsocket_state.pending_exit )
         {
             //NULL response means pending exit was detected
             pr_debug("Pending exit detected, shutting down "
@@ -1631,14 +1618,12 @@ mwsocket_response_consumer( void * Arg )
             continue; // move on
         }
 
-        
         //
         // The active request has been found.
         //
         mwsocket_postproc_emit_netflow( actreq, response );
 
         mwsocket_postproc_no_context( actreq, response );
-
         
         // Decide the fate of the request. It is either delivered to
         // the caller or destroyed, depending on the caller's request
@@ -1677,15 +1662,11 @@ mwsocket_response_consumer( void * Arg )
 
         // We're done with this slot of the ring
         mw_xen_mark_response_consumed( h );
-
-        
-        //Post Processing
-
     } // while( true )
 
 ErrorExit:
     // Inform the cleanup function that this thread is done.
-    pr_debug("Response consumer thread exiting\n");
+    pr_debug( "Response consumer thread exiting\n" );
     complete( &g_mwsocket_state.response_reader_done );
     return rc;
 }
@@ -1758,8 +1739,8 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         for ( int i = 0; i < response->count; ++i )
         {
             // Find the associated sockinst, matching up by (remote) mwsocket
-        
-            if ( currsi->remote_fd != response->items[i].sockfd ) continue;
+
+            if ( currsi->remote_fd != response->items[i].sockfd ) { continue; }
 
             // Transfer response's events to sockinst's, notify poll()
             // N.B. MW_POLL* == linux values
@@ -2066,12 +2047,6 @@ ErrorExit:
 
     return rc;
 }
-
-
-
-
-
-
 
 
 static ssize_t
