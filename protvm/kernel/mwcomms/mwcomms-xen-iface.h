@@ -68,7 +68,8 @@ mw_xen_read_from_key( const char * Dir, const char * Node );
 
 int
 mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
-                              IN  mw_socket_fd_t          Sock,
+                              //IN  mw_socket_fd_t          Sock,
+                              IN  domid_t                 DomId,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle );
 

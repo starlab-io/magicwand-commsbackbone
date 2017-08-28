@@ -539,7 +539,7 @@ ErrorExit:
 static int
 //MWSOCKET_DEBUG_ATTRIB // XXXX: don't uncomment directive
 mw_xen_get_ins_from_xs_path( IN  const char *Path,
-                      OUT mwcomms_ins_data_t ** Ins )
+                             OUT mwcomms_ins_data_t ** Ins )
 {
     int rc = -EINVAL;
     int index = 0;
@@ -934,7 +934,7 @@ mw_xen_get_ins_from_domid( IN domid_t          Domid,
         }
     }
 
-    pr_err("Unable to get INS from domid\n");
+    MYASSERT( !"Unable to get INS from domid" );
 
 ErrorExit:
     return rc;
@@ -944,24 +944,21 @@ ErrorExit:
 int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
-                              IN  mw_socket_fd_t          Sock,
+                              //IN  mw_socket_fd_t          Sock,
+                              IN  domid_t                 DomId,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle )
 {
     int                 rc    = 0;
     mwcomms_ins_data_t *ins   = NULL;
-    domid_t             domid = 0;
+    domid_t             domid = DomId;
     
     MYASSERT( NULL != Handle );
     MYASSERT( NULL != Dest );
 
-    if( MT_INVALID_SOCKET_FD == Sock )
+    if ( DOMID_INVALID == DomId || (domid_t)-1 == DomId )
     {
         domid = mw_xen_new_socket_rr();
-    }
-    else
-    {
-        domid = MW_SOCKET_CLIENT_ID( Sock );
     }
 
     rc = mw_xen_get_ins_from_domid( domid, &ins );
@@ -1027,8 +1024,8 @@ mw_xen_dispatch_request( void *Handle )
 static void
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_xenstore_state_changed( struct xenbus_watch *W,
-                           const char **V,
-                           unsigned int L )
+                               const char **V,
+                               unsigned int L )
 {
     MYASSERT( V );
     
