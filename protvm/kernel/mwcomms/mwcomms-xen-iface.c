@@ -68,6 +68,13 @@
 // How long to wait if we want to write a request but the ring is full
 #define RING_FULL_TIMEOUT (HZ >> 6)
 
+// Defines:
+// union mwevent_sring_entry
+// struct mwevent_sring_t
+// struct mwevent_front_ring_t
+// struct mwevent_back_ring_t
+DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
+
 
 // Per-INS data
 typedef struct _mwcomms_ins_data
@@ -111,6 +118,7 @@ typedef struct _mwcomms_xen_globals
 } mwcomms_xen_globals_t;
 
 static mwcomms_xen_globals_t g_mwxen_state = {0};
+
 
 
 static int

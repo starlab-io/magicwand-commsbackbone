@@ -26,12 +26,7 @@ typedef void
 mw_xen_event_handler_cb_t( void );
 
 
-// Defines:
-// union mwevent_sring_entry
-// struct mwevent_sring_t
-// struct mwevent_front_ring_t
-// struct mwevent_back_ring_t
-DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
+
 
 
 /// @brief Initializes the Xen subsystem and initiates handshake with client
