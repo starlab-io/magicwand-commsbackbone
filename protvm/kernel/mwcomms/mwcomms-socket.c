@@ -1495,9 +1495,11 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     // Perform minimal base field prep. Only clobber an unset sockfd.
     base->sig    = MT_SIGNATURE_REQUEST;
     base->id     = ActiveRequest->id;
-    if ( 0 == base->sockfd )
+    if ( !MW_SOCKET_IS_FD( base->sockfd ) )
     {
-        DEBUG_BREAK();
+        pr_debug( "Updating sockfd: %lx => %lx\n",
+                  (unsigned long) base->sockfd,
+                  (unsigned long) ActiveRequest->sockinst->remote_fd );
         base->sockfd = ActiveRequest->sockinst->remote_fd;
     }
 
@@ -1741,15 +1743,16 @@ MWSOCKET_DEBUG_ATTRIB
 mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
 {
     int rc = 0;
-//    mwsocket_active_request_t     * actreq = NULL;
 
+    // For tracking INSs and the pollset requests we send to them
+    typedef struct _mwsocket_ins_desc
+    {
+        domid_t domid; // 0 ==> invalid
+        mwsocket_active_request_t * actreq;
+    } mwsocket_ins_desc_t;
 
-    //mw_socket_fd_t                sockfds[ MAX_INS_COUNT ] = {0};
-    domid_t                         domids[ MAX_INS_COUNT ] = {0};
-    mwsocket_active_request_t     * actreqs [ MAX_INS_COUNT ] = {0};
-
-    SockInst->remote_fd = MT_INVALID_SOCKET_FD;
-
+    mwsocket_ins_desc_t ins[ MAX_INS_COUNT ] = {0};
+    
     mutex_lock( &g_mwsocket_state.sockinst_lock );
 
     // Look at all socket instances. If one's backing domid is not in
@@ -1757,60 +1760,58 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        DEBUG_BREAK();
         if ( SockInst == curr ) { continue; }
         for( int i = 0; i < MAX_INS_COUNT; ++i )
         {
-            if ( domids[i] == MW_SOCKET_CLIENT_ID( curr->remote_fd ) )
+            if ( ins[i].domid == MW_SOCKET_CLIENT_ID( curr->remote_fd ) )
             {
                 // Already accounting for this domid
                 continue;
             }
-
-            domids[i] = MW_SOCKET_CLIENT_ID( curr->remote_fd );
+            ins[i].domid = MW_SOCKET_CLIENT_ID( curr->remote_fd );
         }
     }
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
     for( int i = 0; i < MAX_INS_COUNT; ++i )
     {
-        if ( 0 == domids[i] ) { continue; }
+        if ( 0 == ins[i].domid ) { continue; }
 
-        rc = mwsocket_create_active_request( SockInst, &actreqs[i] );
+        rc = mwsocket_create_active_request( SockInst, &ins[i].actreq );
         if ( rc ) { goto ErrorExit; }
 
-        mt_request_pollset_query_t * request = &actreqs[i]->rr.request.pollset_query;
-        request->base.type = MtRequestPollsetQuery;
-        request->base.size = MT_REQUEST_POLLSET_QUERY_SIZE;
+        mt_request_pollset_query_t * request = &ins[i].actreq->rr.request.pollset_query;
+        request->base.type   = MtRequestPollsetQuery;
+        request->base.size   = MT_REQUEST_POLLSET_QUERY_SIZE;
+        request->base.sockfd = MW_SOCKET_CREATE( ins[i].domid, 0 );
 
         // Sent the request. We will wait for response.
-        actreqs[i]->deliver_response = true;
+        ins[i].actreq->deliver_response = true;
+        rc = mwsocket_send_request( ins[i].actreq, true );
 
-        // XXXX: FIXME
-        SockInst->remote_fd = MW_SOCKET_CREATE( domids[i], 0 );
-        rc = mwsocket_send_request( actreqs[i], true );
         if ( rc ) goto ErrorExit;
     }
 
-    // Wait
+    // Wait for each response and process it
     for( int i = 0; i < MAX_INS_COUNT; ++i )
     {
-        if ( 0 == domids[i] ) { continue; }
+        if ( 0 == ins[i].domid ) { continue; }
 
-        rc = wait_for_completion_timeout( &actreqs[i]->arrived,
+        rc = wait_for_completion_timeout( &ins[i].actreq->arrived,
                                           POLL_MONITOR_RESPONSE_TIMEOUT );
         if ( 0 == rc )
         {
             // The response did not arrive, so we cannot process
             // it. WARNING: dropping error.
             pr_warn( "Timed out while waiting for response %lx\n",
-                     (unsigned long)actreqs[i]->id );
+                     //(unsigned long)actreqs[i]->id );
+                     (unsigned long)ins[i].actreq->id );
             continue;
         }
 
         rc = 0;
         mt_response_pollset_query_t * response =
-            &actreqs[i]->rr.response.pollset_query;
+               &ins[i].actreq->rr.response.pollset_query;
         if ( response->base.status < 0 )
         {
             // WARNING: dropping error
@@ -1844,7 +1845,6 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
 
                 if ( currsi->remote_fd != response->items[i].sockfd ) { continue; }
 
-                MYASSERT( 0 == response->items[i].events ); // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                 // Transfer response's events to sockinst's, notify poll()
                 // N.B. MW_POLL* == linux values
                 currsi->primary->poll_events |= response->items[i].events;
@@ -1863,11 +1863,9 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     wake_up_interruptible( &g_mwsocket_state.waitq );
 
 ErrorExit:
-    SockInst->remote_fd = MT_INVALID_SOCKET_FD;
-
     for( int i = 0; i < MAX_INS_COUNT; ++i )
     {
-        mwsocket_destroy_active_request( actreqs[i] );
+        mwsocket_destroy_active_request( ins[i].actreq );
     }
     return rc;
 }
@@ -1911,9 +1909,9 @@ mwsocket_poll_monitor( void * Arg )
         // If there are any open mwsockets at all, complete a poll
         // query exchange. The socket instance from this function
         // doesn't count, since it's only for poll monitoring.
-        DEBUG_BREAK();
+
         // If there are any ready sockets, poll them
-        if ( atomic_read( &g_mwsocket_state.poll_sock_count ) <= 1 )
+        if ( atomic_read( &g_mwsocket_state.poll_sock_count ) < 1 )
         {
             continue;
         }
@@ -2227,7 +2225,7 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    request->base.sockfd = sockinst->remote_fd;
+//    request->base.sockfd = sockinst->remote_fd;
 
     // Is there a pending error on this socket? If so, deliver it.
     rc = mwsocket_pending_error( sockinst, request->base.type );
@@ -2333,8 +2331,7 @@ mwsocket_poll( struct file * File,
     
     rc = mwsocket_find_sockinst( &sockinst, File );
     MYASSERT( 0 == rc );
-    pr_verbose( "Processing poll(), fd %d\n",
-                sockinst->local_fd );
+    pr_verbose( "Processing poll(), fd %d\n", sockinst->local_fd );
     
     poll_wait( File, &g_mwsocket_state.waitq, PollTbl );
 
