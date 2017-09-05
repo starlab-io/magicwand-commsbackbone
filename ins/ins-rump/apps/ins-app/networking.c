@@ -125,7 +125,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_sndbuf )
     {
         len = sizeof( g_state.so_sndbuf );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF, &g_state.so_sndbuf, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF,
+                         &g_state.so_sndbuf, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -135,7 +136,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_rcvbuf )
     {
         len = sizeof( g_state.so_rcvbuf );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF, &g_state.so_rcvbuf, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF,
+                         &g_state.so_rcvbuf, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -145,7 +147,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_sndtimeo.tv_sec || g_state.so_sndtimeo.tv_usec )
     {
         len = sizeof( g_state.so_sndtimeo );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO, &g_state.so_sndtimeo, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO,
+                         &g_state.so_sndtimeo, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -155,7 +158,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_rcvtimeo.tv_sec || g_state.so_rcvtimeo.tv_usec )
     {
         len = sizeof( g_state.so_rcvtimeo );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO, &g_state.so_rcvtimeo, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO,
+                         &g_state.so_rcvtimeo, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );

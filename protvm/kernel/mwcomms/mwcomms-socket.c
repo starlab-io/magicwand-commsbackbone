@@ -666,8 +666,22 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 
     val = atomic_inc_return( &SockInst->refct );
 
-    pr_debug( "Referenced socket instance %p fd=%d, refct=%d\n",
-              SockInst, SockInst->local_fd, val );
+#if defined( DEBUG ) || defined( VERBOSE )
+    
+    if( SockInst->local_fd < 0 )
+    {
+        //Print poll references
+        pr_verbose( "Referenced socket instance %p fd=%d, refct=%d\n",
+                  SockInst, SockInst->local_fd, val );
+    }
+    else
+    {
+        pr_debug( "Referenced socket instance %p fd=%d, refct=%d\n",
+                    SockInst, SockInst->local_fd, val );
+    }
+        
+#endif
+
 
     // XXXX should this check be performed somewhere else?
     // removed for multiple INS change
@@ -696,8 +710,22 @@ mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
     val = atomic_dec_return( &SockInst->refct );
     if ( val )
     {
-        pr_debug( "Dereferenced socket instance %p fd=%d, refct=%d\n",
-                  SockInst, SockInst->local_fd, val );
+
+#if defined( DEBUG ) || defined( VERBOSE )
+
+        if(SockInst->local_fd < 0 )
+        {
+            pr_verbose( "Dereferenced socket instance %p fd=%d, refct=%d\n",
+                        SockInst, SockInst->local_fd, val );
+        }
+        else
+        {
+            pr_debug( "Dereferenced socket instance %p fd=%d, refct=%d\n",
+                      SockInst, SockInst->local_fd, val );
+        }
+
+#endif /* defined( DEBUG ) || defined( VERBOSE ) */
+
         goto ErrorExit;
     }
     
@@ -719,6 +747,7 @@ ErrorExit:
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
                           IN  int                    Flags,
                           IN  bool                   CreateBackingFile )
@@ -925,7 +954,7 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
         return;
     }
 
-    pr_debug( "Destroyed active request %p id=%lx\n",
+    pr_verbose( "Destroyed active request %p id=%lx\n",
               Request, (unsigned long) Request->id );
 
     // Clear the ID of the blocker to close, iff it is this request's
@@ -986,7 +1015,7 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 
     pr_verbose( "Created active request %p id=%lx\n",
-                actreq, (unsigned long)id );
+                actreq, (unsigned long)actreq->id );
 
     *ActReq = actreq;
 
@@ -1355,6 +1384,7 @@ ErrorExit:
 // @brief Prepares request and socket instance state prior to putting
 // request on ring buffer.
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 {
     MYASSERT( ActiveRequest );
@@ -1557,6 +1587,7 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
                        IN mt_request_generic_t * Request,
                        IN bool                   AwaitResponse )
@@ -1601,6 +1632,7 @@ ErrorExit:
  ******************************************************************************/
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_response_consumer( void * Arg )
 {
     int                         rc = 0;
@@ -1674,7 +1706,7 @@ mwsocket_response_consumer( void * Arg )
         if ( rc )
         {
             // Active requests should *never* just "disappear". They
-            // are destroyed in an orderly fashion either hxere (below)
+            // are destroyed in an orderly fashion either here (below)
             // or in mwsocket_read(). This state can be reached if a
             // requestor times out on the response arrival.
             pr_warn( "Couldn't find active request with ID %lx\n",
@@ -1780,7 +1812,9 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         rc = mwsocket_create_active_request( SockInst, &ins[i].actreq );
         if ( rc ) { goto ErrorExit; }
 
-        mt_request_pollset_query_t * request = &ins[i].actreq->rr.request.pollset_query;
+        mt_request_pollset_query_t * request =
+            &ins[i].actreq->rr.request.pollset_query;
+
         request->base.type   = MtRequestPollsetQuery;
         request->base.size   = MT_REQUEST_POLLSET_QUERY_SIZE;
         request->base.sockfd = MW_SOCKET_CREATE( ins[i].domid, 0 );
@@ -1936,6 +1970,7 @@ ErrorExit:
  * @brief Processes an mwsocket creation request. Reachable via IOCTL.
  */
 int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_create( OUT mwsocket_t * SockFd,
                  IN  int          Domain,
                  IN  int          Type,
@@ -2061,6 +2096,7 @@ ErrorExit:
 
 
 static ssize_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_read( struct file * File,
                char        * Bytes,
                size_t        Len,

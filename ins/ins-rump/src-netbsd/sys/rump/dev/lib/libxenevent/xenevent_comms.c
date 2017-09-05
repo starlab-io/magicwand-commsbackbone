@@ -124,8 +124,9 @@ xe_comms_write_str_to_key( const char * Path,
     int                     res = 0;
     bool             started = false;
 
+#ifdef VERBOSE
     DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
-    
+#endif
     err = xenbus_transaction_start(&txn);
     if (err)
     {

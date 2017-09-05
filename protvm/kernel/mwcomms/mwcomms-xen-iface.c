@@ -1028,8 +1028,9 @@ mw_xen_xenstore_state_changed( struct xenbus_watch *W,
                                unsigned int L )
 {
     MYASSERT( V );
-    
-    pr_debug( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
+
+
+    pr_verbose( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 
     if ( strstr( V[ XS_WATCH_PATH ], INS_ID_KEY ) )
     {
