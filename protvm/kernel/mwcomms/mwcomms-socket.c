@@ -1051,6 +1051,7 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
 
 
 void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_debug_dump_actreq( void )
 {
     mwsocket_active_request_t * curr = NULL;
@@ -1784,6 +1785,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     } mwsocket_ins_desc_t;
 
     mwsocket_ins_desc_t ins[ MAX_INS_COUNT ] = {0};
+    int count = 0;
     
     mutex_lock( &g_mwsocket_state.sockinst_lock );
 
@@ -1793,15 +1795,25 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
         if ( SockInst == curr ) { continue; }
+        if ( count == MAX_INS_COUNT ) { break; }
+        
         for( int i = 0; i < MAX_INS_COUNT; ++i )
         {
+            //If domid exists in array continue
             if ( ins[i].domid == MW_SOCKET_CLIENT_ID( curr->remote_fd ) )
             {
                 // Already accounting for this domid
-                continue;
+                break;
             }
-            ins[i].domid = MW_SOCKET_CLIENT_ID( curr->remote_fd );
+            
+            if ( ins[i].domid == 0 )
+            {
+                count++;
+                ins[i].domid = MW_SOCKET_CLIENT_ID( curr->remote_fd );
+                break;
+            }
         }
+        
     }
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
