@@ -918,7 +918,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     {
         // Processed in current thread without a worker
     case MtRequestPollsetQuery:
-        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        MYASSERT( MW_SOCKET_IS_FD( request->base.sockfd ) );
         *AssignedThread = NULL;
         process_now = true;
         break;

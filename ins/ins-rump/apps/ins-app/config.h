@@ -10,7 +10,7 @@
 //
 //#define MAX_THREAD_COUNT 100
 
-#define MAX_THREAD_COUNT 3
+#define MAX_THREAD_COUNT 24
 
 //
 // Number of buffer items. This is the number of requests (from the
