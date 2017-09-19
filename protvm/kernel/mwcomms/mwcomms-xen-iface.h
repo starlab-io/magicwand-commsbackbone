@@ -20,7 +20,7 @@
 
 
 typedef int
-mw_xen_init_complete_cb_t( void );
+mw_xen_init_complete_cb_t( domid_t Domid );
 
 typedef void
 mw_xen_event_handler_cb_t( void );
@@ -88,6 +88,9 @@ mw_xen_iface_ready( void );
 
 bool
 mw_xen_response_available( void ** Handle );
+
+int
+mw_xen_get_active_ins_domids( domid_t Domids[] );
 
 
 #endif // mwcomms_xen_iface_h

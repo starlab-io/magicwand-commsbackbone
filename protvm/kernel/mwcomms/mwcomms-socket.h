@@ -39,7 +39,7 @@ int
 mwsocket_init( mw_region_t * SharedMem );
 
 void
-mwsocket_notify_ring_ready( void );
+mwsocket_notify_ring_ready( domid_t Domid );
 
 void
 mwsocket_fini( void );

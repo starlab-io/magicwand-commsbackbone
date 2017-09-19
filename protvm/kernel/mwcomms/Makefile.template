@@ -30,6 +30,7 @@ ccflags-y += -ggdb
 # know what you're doing.
 
 #ccflags-y += -DMYTRAP
+#ccflags-y += -DMYDEBUG
 #ccflags-y += -DDEBUG # enable pr_debug
 #ccflags-y += -DMYVERBOSE # enable our custom "pr_verbose"
 

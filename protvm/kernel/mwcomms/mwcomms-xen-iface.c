@@ -387,7 +387,7 @@ void
 mw_xen_send_event( void *Handle )
 {
    struct evtchn_send send;
-   mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
+      mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
 
    send.port = ins->common_evtchn;
    
@@ -752,7 +752,7 @@ mw_xen_ins_found( const char *Path )
     curr->is_ring_ready = true;
 
     atomic64_inc( &g_mwxen_state.ins_count );
-    g_mwxen_state.completion_cb();
+    g_mwxen_state.completion_cb( curr->domid );
 
 ErrorExit:
     if ( NULL != client_id_str )
@@ -1001,6 +1001,37 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
 ErrorExit:
     return rc;
 }
+
+
+int
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
+{
+
+    int rc = 0;
+    mwcomms_ins_data_t * curr = NULL;
+
+    for( int i = 0; i < MAX_INS_COUNT; i++ )
+    {
+        curr = &g_mwxen_state.ins[i];
+
+        if( atomic64_read ( &curr->in_use ) == 0 )
+        {
+            continue;
+        }
+
+        if ( !curr->is_ring_ready )
+        {
+            continue;
+        }
+        
+        Domids[i] = curr->domid;
+        rc++;
+    }
+
+    return rc;
+}
+
 
 
 int

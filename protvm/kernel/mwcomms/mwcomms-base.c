@@ -268,9 +268,9 @@ module_exit(mwbase_dev_fini);
 static mw_xen_init_complete_cb_t mwbase_client_ready_cb;
 
 static int
-mwbase_client_ready_cb( void )
+mwbase_client_ready_cb( domid_t Domid )
 {
-    mwsocket_notify_ring_ready();
+    mwsocket_notify_ring_ready( Domid );
     complete( &g_mwcomms_state.ring_shared );
     return 0;
 }
