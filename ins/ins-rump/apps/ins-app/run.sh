@@ -2,6 +2,7 @@
 
 ##
 ## Refer to setup_net.sh 
+## Use debug.sh for a debug run
 ##
 
 if [ -z $RUMP_IP ]; then
@@ -19,5 +20,5 @@ echo "IP address: $RUMP_IP"
 
 rumprun -S xen -di -M 256 -N mw-ins-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$RUMP_IP/24,$_GW \
+        -W xen0,inet,static,$RUMP_IP/8,$_GW \
         ins-rump.run

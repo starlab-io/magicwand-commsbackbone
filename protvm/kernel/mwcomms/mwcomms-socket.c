@@ -172,9 +172,10 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ * 2 ) // >= 1 sec
 
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 2 ) // 4x/sec
-#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 8x/sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 8x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 4 ) // 16x/sec
-//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
+#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 6 ) // 64x/sec
 
 #if (!PVM_USES_EVENT_CHANNEL)
 #  define RING_BUFFER_POLL_INTERVAL (HZ >> 6) // 64x / sec
@@ -1499,19 +1500,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
             ActiveRequest->rr.request.base.size );
 
     ++g_mwsocket_state.front_ring.req_prod_pvt;
+    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    bool notify = false;
-    RING_PUSH_REQUESTS_AND_CHECK_NOTIFY( &g_mwsocket_state.front_ring, notify );
-    if ( notify )
-        // ( notify || !notify )
-    {
-        mw_xen_send_event();
-    }
-#else
-    RING_PUSH_REQUESTS( &g_mwsocket_state.front_ring );
+    mw_xen_send_event();
 #endif
-    
+        
 ErrorExit:
     mutex_unlock( &g_mwsocket_state.request_lock );
 
@@ -1577,10 +1571,8 @@ mwsocket_response_consumer( void * Arg )
     mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t * response = NULL;
 
-#define RING_CONSUME_RESPONSE()                                         \
-    ++g_mwsocket_state.front_ring.rsp_cons;                             \
-    RING_FINAL_CHECK_FOR_RESPONSES( &g_mwsocket_state.front_ring, available )
-
+#define RING_CONSUME_RESPONSE()   ++g_mwsocket_state.front_ring.rsp_cons;
+    
     pr_info( "Ring buffer is 0x%lx bytes (0x%x pages). "
              "0x%lx entries x 0x%lx bytes each\n",
              XENEVENT_GRANT_REF_COUNT * PAGE_SIZE,
@@ -1609,8 +1601,7 @@ mwsocket_response_consumer( void * Arg )
     //
     // Consume responses until the module is unloaded. When it is
     // unloaded, consume whatever is still on the ring, then
-    // quit. Only leave this loop on a requested exit or a fatal
-    // error.
+    // quit. Only leave this loop upon requested exit or fatal error.
     //
     // Policy: continue upon error.
     // Policy: in case of pending exit, keep consuming the requests
@@ -1637,7 +1628,7 @@ mwsocket_response_consumer( void * Arg )
 #if PVM_USES_EVENT_CHANNEL
                 if ( down_interruptible( &g_mwsocket_state.event_channel_sem ) )
                 {
-                    pr_info( "Received interrupt in worker thread\n" );
+                    pr_info( "Received interrupt in response consumer thread\n" );
                     goto ErrorExit;
                 }
 #else

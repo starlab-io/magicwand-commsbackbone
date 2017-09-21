@@ -42,6 +42,8 @@
 
 #include <sys/time.h>
 
+#include "ins-ioctls.h"
+
 // Function prototypes 
 
 // src-netbsd/sys/sys/conf.h
@@ -49,6 +51,7 @@ static dev_type_open ( xe_dev_open  );
 static dev_type_close( xe_dev_close );
 static dev_type_read ( xe_dev_read  );
 static dev_type_write( xe_dev_write );
+static dev_type_ioctl( xe_dev_ioctl );
 
 
 // Character device entry points 
@@ -58,8 +61,8 @@ xe_cdevsw = {
     .d_close   = xe_dev_close,
     .d_read    = xe_dev_read,
     .d_write   = xe_dev_write,
+    .d_ioctl   = xe_dev_ioctl,
 
-    .d_ioctl   = noioctl,
     .d_stop    = nostop,
     .d_tty     = notty,
     .d_poll    = nopoll,
@@ -141,6 +144,7 @@ ErrorExit:
     return rc;
 }
 
+
 int
 xe_dev_fini( void )
 {
@@ -151,6 +155,53 @@ xe_dev_fini( void )
     return rc;
 }
     
+
+int
+xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
+{
+    int rc = -1;
+    
+    domid_t *outbound = (domid_t*)Data;
+
+    switch ( Cmd ){
+    
+    case INSHEARTBEATIOCTL:
+
+        rc = xe_comms_heartbeat();
+
+        if ( 0 != rc )
+        {
+            rc = EPASSTHROUGH;
+            goto ErrorExit;
+        }
+
+        break;
+
+    case DOMIDIOCTL:
+
+        
+        rc =  xe_comms_get_domid();
+
+        if( rc <= 0 )
+        {
+            rc = EPASSTHROUGH;
+            goto ErrorExit;
+        }
+
+        *outbound = (domid_t)rc;
+        DEBUG_PRINT( "xe_dev_ioctl returning domid: %u\n", *outbound );
+        rc = 0;
+
+        break;
+
+    default:
+        DEBUG_PRINT( "xe_dev_ioctl called, but command not found\n" );
+    }
+
+ErrorExit:
+    return rc;
+}
+
 
 static int
 xe_dev_open( dev_t Dev,

@@ -23,8 +23,8 @@ COMMENT = Magicwand support for communication with xenevents device via /dev/xe
 
 IOCONF = XENEVENT.ioconf
 
-SRCS = xenevent.c \
-       xenevent_comms.c \
+SRCS = xenevent.c        \
+       xenevent_comms.c  \
        xenevent_device.c \
        xenevent_netbsd.c \
        xenevent_minios.c

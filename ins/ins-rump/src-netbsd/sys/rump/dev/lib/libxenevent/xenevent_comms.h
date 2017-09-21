@@ -41,4 +41,9 @@ xe_comms_write_item( void * Memory,
                      size_t Size,
                      size_t * BytesRead );
 
+int
+xe_comms_get_domid( void );
+
+int
+xe_comms_heartbeat( void );
 #endif //xenevent_comms_h

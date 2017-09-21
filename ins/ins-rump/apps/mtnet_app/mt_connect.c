@@ -22,10 +22,10 @@
 #include <sys/time.h>
 
 
-#include "app_common.h"
+#include "user_common.h"
 
 // Observe differing behaviors when this is or is not defined
-//#define SLEEP 1
+#define SLEEP 1
 
 //////////////////////////////////////////////////////////
 // UPDATE THESE VALUES
@@ -36,8 +36,8 @@
 
 // Update run.sh so the unikernel and the listener are on the same
 // subnet.
-const char * g_remote_host = "192.168.0.12";
-const char * g_remote_port = "21845";
+const char * g_remote_host = "10.30.30.19";
+const char * g_remote_port = "5555";
 
 #define TEST_MESSAGE "Hello from multi-threaded Rump app!\n"
 
@@ -85,12 +85,10 @@ worker_thread_connect( void * Arg )
     // Loop through all the results and connect to the first we can
     for (serverIter = serverInfo; serverIter != NULL; serverIter = serverIter->ai_next)
     {
-        DEBUG_BREAK();
         DEBUG_PRINT( "calling connect()\n" );
         rc = connect( sockfd, serverIter->ai_addr, serverIter->ai_addrlen);
         g_connect_returned = 1;
         DEBUG_PRINT( "connect() ==> %d\n", rc );
-        DEBUG_BREAK();
         if ( rc < 0 )
         {
             continue; // Silently continue
@@ -104,7 +102,6 @@ worker_thread_connect( void * Arg )
     {
         // Looped off the end of the list with no connection.
         DEBUG_PRINT( "Couldn't connect() to %s:%s\n", g_remote_host, g_remote_port );
-        DEBUG_BREAK();
         rc = EINVAL;
         goto ErrorExit;
     }
@@ -124,7 +121,7 @@ int main(void)
 {
     int rc = 0;
     int sockfd = 0;
-    pthread_t threads[4];
+    pthread_t threads[1];
     
     // 1. Create a socket
     sockfd = socket( AF_INET, SOCK_STREAM, 0 );
@@ -148,7 +145,7 @@ int main(void)
     } else {
         DEBUG_PRINT( "Bad: Connect has NOT completed before join()\n" );
     }
-    
+
     for ( int i = 0; i < NUMBER_OF(threads); i++ )
     {
         pthread_join( threads[i], (void *)&rc );

@@ -45,7 +45,6 @@
 #include <mini-os/mm.h>
 #include <mini-os/gnttab.h>
 #include <mini-os/gntmap.h>
-#include <mini-os/semaphore.h>
 
 #include <bmk-core/string.h>
 #include <bmk-core/printf.h>
@@ -389,6 +388,7 @@ xe_comms_read_item( void * Memory,
                 xenevent_kpause("Semaphore poll", true, 1, NULL);
             }
 */
+
 #else
             xenevent_kpause("Poll ring buffer", true, 1, NULL);
 #endif
@@ -463,19 +463,12 @@ xe_comms_write_item( void * Memory,
 
     // We're producing a response
     ++g_state.back_ring.rsp_prod_pvt;
+    RING_PUSH_RESPONSES( &g_state.back_ring );
 
 #if PVM_USES_EVENT_CHANNEL
-    bool notify = false;
-    RING_PUSH_RESPONSES_AND_CHECK_NOTIFY( &g_state.back_ring, notify );
-    if ( notify )
-        //( notify || !notify )
-    {
-        (void) send_event( g_state.local_event_port );
-    }
-#else
-    RING_PUSH_RESPONSES( &g_state.back_ring );
+    (void) send_event( g_state.local_event_port );
 #endif
-
+    
     DEBUG_PRINT("g_state.back_ring.rsp_prod_pvt: %u\n", g_state.back_ring.rsp_prod_pvt);
 
     return rc;
@@ -501,7 +494,6 @@ receive_grant_references( domid_t RemoteId )
     char * refstr = NULL;
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
 
-    
     xenbus_event_queue_init(&events);
 
     bmk_snprintf( path,
@@ -640,6 +632,56 @@ ErrorExit:
     return err;
 }
 
+int
+xe_comms_heartbeat()
+{
+    int heartbeat = 0;
+    int err = 0;
+    char path[XENEVENT_PATH_STR_LEN] = {0};
+
+    bmk_snprintf( path, 
+             sizeof( path ),
+             "%s/%d/%s",
+             XENEVENT_XENSTORE_ROOT,
+             g_state.localId,
+             HEARTBEAT_KEY );
+
+    err = xe_comms_read_int_from_key( path, &heartbeat );
+    if( 0 != err )
+    {
+        DEBUG_PRINT( "Failed to read heartbeat from xenstore" );
+        goto ErrorExit;
+    }
+
+    heartbeat++;
+
+    err = xe_comms_write_int_to_key( path, heartbeat );
+    if( 0 != err )
+    {
+        DEBUG_PRINT( "Failed to write updated heartbeat to xenstore" );
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return err;
+}
+
+
+int
+xe_comms_get_domid()
+{
+    int rc = 0;
+    int ret = 0;
+
+    rc = xe_comms_read_int_from_key( PRIVATE_ID_PATH, &ret );
+    if( rc )
+    {
+        //if rc is anything but 0, return the value
+        ret = rc;
+    }
+
+    return ret;
+}
 
 ////////////////////////////////////////////////////
 //
@@ -726,6 +768,20 @@ xe_comms_init( void ) //IN xenevent_semaphore_t MsgAvailableSemaphore )
 
     rc = xe_comms_bind_to_interdom_chn( remoteId, vm_evt_chn_prt_nmbr );
     if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    //Initialize heartbeat
+    bmk_snprintf( path,
+              sizeof( path ),
+              "%s/%d/%s",
+              XENEVENT_XENSTORE_ROOT,
+              g_state.localId,
+              HEARTBEAT_KEY );
+
+    rc = xe_comms_write_int_to_key( path, 0 );
+    if( 0 != rc )
     {
         goto ErrorExit;
     }

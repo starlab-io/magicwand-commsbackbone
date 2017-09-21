@@ -95,10 +95,20 @@ export -f debugrump
 echo "Command debugrump <app> is available"
 
 
-buildtags() {
+buildapitags() {
     # Build etags for available API
     rm -f TAGS
     find -L apps include platform/xen/xen src-netbsd/sys/sys src-netbsd/include \
+        -name "*.[ch]" -type f -print \
+        | etags --output=TAGS --declarations --language=c --members --append -
+}
+export -f buildapitags
+echo "Command buildapitags is available"
+
+buildtags() {
+    # Build etags for available API
+    rm -f TAGS
+    find -L apps include platform src-netbsd lib \
         -name "*.[ch]" -type f -print \
         | etags --output=TAGS --declarations --language=c --members --append -
 }

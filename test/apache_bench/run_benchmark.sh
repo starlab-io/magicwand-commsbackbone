@@ -3,7 +3,7 @@
 INDEXDIR=/tmp
 FILEDIR=$PWD/files
 RESULTSDIR=$PWD/results
-ATTEMPTS=1
+ATTEMPTS=10
 
 if [ ! -d "$FILEDIR" ]; then
     echo ""
@@ -20,6 +20,14 @@ fi
 if [ -z $RUMP_IP ]; then
    echo "Failure: RUMP_IP must be defined in env"
    exit 1
+fi
+
+if [ -z $1 ]; then
+    echo
+    echo "Do you want to test the raw server times or the rump server times?"
+    echo "usage: run_benchmark.sh <rump|raw>"
+    echo
+    exit 0
 fi
 
 if [ "$1" = "rump" ]; then

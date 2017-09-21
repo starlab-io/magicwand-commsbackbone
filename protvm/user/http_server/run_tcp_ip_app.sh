@@ -6,4 +6,4 @@ echo ""
 
 cp index.html /tmp
 
-sudo LD_PRELOAD=$PWD/../wrapper/tcp_ip_wrapper.so ./server -r /tmp
+sudo LD_PRELOAD=$PWD/../wrapper/tcp_ip_wrapper.so ./server
