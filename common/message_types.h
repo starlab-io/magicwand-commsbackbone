@@ -86,15 +86,10 @@ typedef uint64_t mt_id_t;
 
 // PVM-initiated close() will not execute while this operation is in-process
 #define _MT_TYPE_MASK_CLOSE_WAITS 0x0400
-
-//#define _MT_TYPE_MASK_INS_MAIN    0x1000 // INS should process in main thread
+#define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
-
-#define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
-
-// The INS should process this request in its main thread - there is no thread assignment
 
 typedef enum
 {

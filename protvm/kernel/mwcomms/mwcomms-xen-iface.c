@@ -375,9 +375,14 @@ ErrorExit:
 }
 
 
+/**
+ * @brief Notifies the mwsocket system that an item is available on an
+ * unspecified INS.
+ */
 static irqreturn_t
 mw_xen_irq_event_handler( int Port, void * Data )
 {
+    pr_verbose( "Event arrived ==> INS data available, Port=%d\n", Port );
     g_mwxen_state.event_cb();
     return IRQ_HANDLED;
 }
@@ -390,8 +395,6 @@ mw_xen_send_event( void *Handle )
       mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
 
    send.port = ins->common_evtchn;
-   
-   //xen_clear_irq_pending(irq);
 
    if ( HYPERVISOR_event_channel_op(EVTCHNOP_send, &send) )
    {
@@ -711,7 +714,6 @@ mw_xen_ins_found( const char *Path )
     //
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
-
         // atomic64_cmpexchng returns the original value
         // of the atomic64_t
         if( 0 == atomic64_cmpxchg( &g_mwxen_state.ins[i].in_use, 0, 1 ) )
@@ -829,19 +831,20 @@ mw_xen_response_available(OUT void ** Handle)
     {
         ins_index = mw_xen_get_next_index_rr();
         
-        if ( g_mwxen_state.ins[ins_index].is_ring_ready )
-        {
-            available =
-                RING_HAS_UNCONSUMED_RESPONSES( &g_mwxen_state.ins[ins_index].front_ring );
-            if ( available )
-            {
-                *Handle = (void *) &g_mwxen_state.ins[ins_index];
-                goto ErrorExit;
-            }
-        }
+        if ( !g_mwxen_state.ins[ins_index].is_ring_ready ) { continue; }
+            
+        available =
+            RING_HAS_UNCONSUMED_RESPONSES( &g_mwxen_state.ins[ins_index].front_ring );
+
+        if ( !available ) { continue; }
+
+        *Handle = (void *) &g_mwxen_state.ins[ins_index];
+        pr_verbose( "Response available on INS %d (0x%x)\n",
+                    g_mwxen_state.ins[ins_index].domid,
+                    g_mwxen_state.ins[ins_index].domid );
+        break;
     }
 
-ErrorExit:
     return available;
 }
 
@@ -944,7 +947,6 @@ ErrorExit:
 int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
-                              //IN  mw_socket_fd_t          Sock,
                               IN  domid_t                 DomId,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle )
@@ -1015,7 +1017,7 @@ mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
     {
         curr = &g_mwxen_state.ins[i];
 
-        if( atomic64_read ( &curr->in_use ) == 0 )
+        if( atomic64_read( &curr->in_use ) == 0 )
         {
             continue;
         }
@@ -1038,10 +1040,10 @@ int
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_dispatch_request( void *Handle )
 {
-    mwcomms_ins_data_t *ins = ( mwcomms_ins_data_t * ) Handle;
+    mwcomms_ins_data_t * ins = (mwcomms_ins_data_t *) Handle;
 
     MYASSERT( NULL != Handle );
-    
+
     ++ins->front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &ins->front_ring );
 
@@ -1051,7 +1053,7 @@ mw_xen_dispatch_request( void *Handle )
     return 0;
 }
 
-    
+
 static void
 MWSOCKET_DEBUG_ATTRIB
 mw_xen_xenstore_state_changed( struct xenbus_watch *W,
@@ -1059,7 +1061,6 @@ mw_xen_xenstore_state_changed( struct xenbus_watch *W,
                                unsigned int L )
 {
     MYASSERT( V );
-
 
     pr_verbose( "XenStore path %s changed\n", V[ XS_WATCH_PATH ] );
 

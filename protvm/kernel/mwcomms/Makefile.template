@@ -23,6 +23,9 @@ ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
 ccflags-y += -DBACKCHANNEL # support the netflow side-channel
 #ccflags-y += -DDEBUG_BACKCHANNEL
 
+# Support polling. You probably want this.
+ccflags-y += -DENABLE_POLLING
+
 # For debugging
 ccflags-y += -ggdb
 

@@ -197,9 +197,9 @@ typedef struct _mwcomms_base_globals
     struct device * dev_device;
 
     // Pointer to entire shared memory block
-    mw_region_t     xen_shmem;
+//    mw_region_t     xen_shmem;
     // Indicates that the memory has been shared
-    struct completion ring_shared;
+//    struct completion ring_shared;
 
     // XXXX: list later (?)
     domid_t         client_domid;
@@ -271,7 +271,7 @@ static int
 mwbase_client_ready_cb( domid_t Domid )
 {
     mwsocket_notify_ring_ready( Domid );
-    complete( &g_mwcomms_state.ring_shared );
+//    complete( &g_mwcomms_state.ring_shared );
     return 0;
 }
 
@@ -339,11 +339,11 @@ mwbase_dev_init( void )
     }
 
 
-    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
+//    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
 
     // The socket iface is invoked when the ring sharing is
     // complete. Therefore, init it before the Xen iface.
-    rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
+    rc = mwsocket_init();
     if ( rc )
     {
         goto ErrorExit;
@@ -352,7 +352,7 @@ mwbase_dev_init( void )
     // Init the Xen interface. The callback will be invoked when client
     // handshake is complete.
 
-    init_completion( &g_mwcomms_state.ring_shared );
+//    init_completion( &g_mwcomms_state.ring_shared );
    
     rc = mw_xen_init( mwbase_client_ready_cb,
                       mwsocket_event_cb );
@@ -384,10 +384,10 @@ MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
-
+    DEBUG_BREAK();
     // Tear down open mwsockets and mwsocket subsystem
     mwsocket_fini();
-
+    DEBUG_BREAK();
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
 
@@ -395,12 +395,13 @@ mwbase_dev_fini( void )
     mw_backchannel_fini();
 #endif
 
+#if 0
     if ( NULL != g_mwcomms_state.xen_shmem.ptr )
     {
         free_pages( (unsigned long) g_mwcomms_state.xen_shmem.ptr,
                     XENEVENT_GRANT_REF_ORDER );
     }
-    
+#endif
     // Tear down device
     if ( g_mwcomms_state.dev_major_num >= 0 )
     {
@@ -420,6 +421,7 @@ mwbase_dev_fini( void )
     }
 
     pr_info( "Cleanup is complete\n" );
+    DEBUG_BREAK();    
 }
 
 

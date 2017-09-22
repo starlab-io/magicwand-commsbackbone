@@ -36,7 +36,7 @@
 #include "mwcomms-xen-iface.h"
 
 int
-mwsocket_init( mw_region_t * SharedMem );
+mwsocket_init( void );
 
 void
 mwsocket_notify_ring_ready( domid_t Domid );

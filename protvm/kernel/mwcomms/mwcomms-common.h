@@ -39,6 +39,10 @@ typedef struct _mw_region
 #  define bzero(p, sz) memset( (p), 0, (sz) )
 #endif // bzero
 
+#ifndef CHECK_FREE
+#  define CHECK_FREE(_p) { if(_p) { kfree(_p); } }
+#endif
+
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")
 
