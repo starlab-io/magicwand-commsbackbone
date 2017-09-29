@@ -12,6 +12,7 @@
 #include <linux/in.h>
 #include <linux/list.h>
 #include <linux/kthread.h>
+#include <linux/version.h>
 
 #include <linux/kallsyms.h>
 
@@ -137,15 +138,14 @@ mw_backchannel_read( IN    mwcomms_backchannel_info_t * Channel,
         goto ErrorExit;
     }
 
-    // The prototype is one of these:
-    //
-    // sock_recvmsg( struct socket * soc, struct msghdr * m,
-    //               size_t total_len, int flags);
-    //
-    // sock_recvmsg( struct socket * soc, struct msghdr * m, int flags);
 
+#if ( LINUX_VERSION_CODE <= KERNEL_VERSION(4,4,70) )
     rc = sock_recvmsg( Channel->conn, &hdr, *Len, 0 );
     //rc = sock_recvmsg( Channel->conn, &hdr, 0 );
+
+#else
+    rc = sock_recvmsg( Channel->conn, &hdr, 0 );
+#endif
 
     pr_debug( "Read %d bytes from socket", rc );
     // Returns number of bytes (>=0) or error (<0)
