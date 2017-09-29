@@ -857,7 +857,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
 
     if ( SockInst->remote_close_requested )
     {
-        pr_info( "Socket %x/%d was already closed on the INS. "
+        pr_info( "Socket %llx/%d was already closed on the INS. "
                   "Not requesting a remote close.\n",
                   SockInst->remote_fd, SockInst->local_fd );
         goto ErrorExit;
@@ -868,7 +868,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     rc = mwsocket_create_active_request( SockInst, &actreq );
     if ( rc ) goto ErrorExit;
 
-    pr_debug( "Request %lx is closing socket %x/%d and %s wait\n",
+    pr_debug( "Request %lx is closing socket %llx/%d and %s wait\n",
               (unsigned long)actreq->id, SockInst->remote_fd, SockInst->local_fd,
               WaitForResponse ? "will" : "won't" );
 
@@ -1351,7 +1351,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
     switch( Response->base.type )
     {
     case MtResponseSocketCreate:
-        pr_debug( "Create in %d [%s]: fd %d ==> %x\n",
+        pr_debug( "Create in %d [%s]: fd %d ==> %llx\n",
                   ActiveRequest->sockinst->proc->pid,
                   ActiveRequest->sockinst->proc->comm,
                   ActiveRequest->sockinst->local_fd,
@@ -1408,7 +1408,7 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         // failed. We cannot clean up the remote side because we don't
         // have the backing sockinst to send the close request.
         pr_err( "Failed to create local socket instance. "
-                "Leaking remote socket %x; local error %d\n",
+                "Leaking remote socket %llx; local error %d\n",
                 Response->base.sockfd, rc );
         goto ErrorExit;
     }
@@ -1421,7 +1421,7 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         = Response->base.status
         = acceptinst->local_fd;
 
-    pr_debug( "Accept in %d [%s]: fd %d ==> %x\n",
+    pr_debug( "Accept in %d [%s]: fd %d ==> %llx\n",
               acceptinst->proc->pid, acceptinst->proc->comm,
               acceptinst->local_fd, acceptinst->remote_fd );
 ErrorExit:
