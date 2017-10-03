@@ -20,10 +20,6 @@
 
 #define WORK_QUEUE_ITEM_COUNT BUFFER_ITEM_COUNT
 
-
-#define HEARTBEAT_INTERVAL_SEC 30
-
-
 //
 // Xen event device
 //

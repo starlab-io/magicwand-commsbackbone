@@ -1247,7 +1247,7 @@ mwsocket_pending_error( mwsocket_instance_t * SockInst,
             send_sig( SIGPIPE, current, 0 );
         }
     }
-    else if(SockInst->pending_errno )
+    else if( SockInst->pending_errno )
     {
         rc = SockInst->pending_errno;
 
@@ -1934,6 +1934,16 @@ mwsocket_response_consumer( void * Arg )
         rc = mw_xen_get_next_response( &response, h );
         if( rc ) { goto ErrorExit; }
 
+        if ( DEBUG_SHOW_TYPE( response->base.type ) )
+        {
+            pr_debug( "Response ID %lx size %x type %x status %d "
+                      "on ring at idx %x\n",
+                      (unsigned long)response->base.id,
+                      response->base.size, response->base.type,
+                      response->base.status,
+                      ins->front_ring.rsp_cons );
+        }
+        
         if( g_mwsocket_state.pending_exit )
         {
             //NULL response means pending exit was detected
@@ -2222,9 +2232,15 @@ mwsocket_poll_monitor( void * Arg )
 
         // Sleep
         mwsocket_wait( POLL_MONITOR_QUERY_INTERVAL );
-        
-        // If there are any open mwsockets at all, complete a poll
-        // query exchange. The socket instance from this function
+
+        // Reap dead INS's, using this thread. TODO: track dead INSes
+        // and destroy their associated sockets.
+        rc = mw_xen_reap_dead_ins();
+        MYASSERT( 0 == rc );
+        rc = 0;
+
+        // If there are any "real" open mwsockets at all, complete a
+        // poll query exchange. The socket instance from this function
         // doesn't count, since it's only for poll monitoring.
 
         if( atomic_read( &g_mwsocket_state.poll_sock_count ) < 1 )

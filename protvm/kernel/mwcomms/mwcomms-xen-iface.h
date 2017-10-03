@@ -26,9 +26,6 @@ typedef void
 mw_xen_event_handler_cb_t( void );
 
 
-
-
-
 /// @brief Initializes the Xen subsystem and initiates handshake with client
 ///
 /// When CompletionCallback is invoked, the handshake has completed
@@ -53,22 +50,15 @@ mw_xen_fini( void );
 domid_t
 mw_xen_get_local_domid( void );
 
-
 // @brief Sends an event on the common event channel.
 void
 mw_xen_send_event( void *Handle );
 
-
 int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value );
 
-
-char *
-mw_xen_read_from_key( const char * Dir, const char * Node );
-
 int
 mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
-                              //IN  mw_socket_fd_t          Sock,
                               IN  domid_t                 DomId,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle );
@@ -86,11 +76,18 @@ mw_xen_mark_response_consumed( void * Handle );
 bool
 mw_xen_iface_ready( void );
 
+int
+mw_xen_read_old_ins( void );
+
+
 bool
 mw_xen_response_available( void ** Handle );
 
 int
 mw_xen_get_active_ins_domids( domid_t Domids[] );
+
+int
+mw_xen_reap_dead_ins( void );
 
 
 #endif // mwcomms_xen_iface_h
