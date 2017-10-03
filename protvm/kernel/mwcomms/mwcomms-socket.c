@@ -2407,7 +2407,7 @@ mwsocket_init( mw_region_t * SharedMem )
 
     g_mwsocket_state.sockinst_cache =
         kmem_cache_create( "mw_socket_instances",
-                           sizeof( mt_request_generic_t ),
+                           sizeof( mwsocket_instance_t ),
                            0, 0, NULL );
 
     if ( NULL == g_mwsocket_state.sockinst_cache )
