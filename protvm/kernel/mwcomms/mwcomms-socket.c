@@ -319,11 +319,10 @@ typedef struct _mwsocket_instance
     struct mutex          inbound_lock; // to protect inbound_list
     struct semaphore      inbound_sem;  // to notify of pending inbound
 
-    // There is a primary mwsocket, which the protected process
-    // knows. Every time the process creates an mwsocket, that results
-    // in a primary mwsocket. There are secondary ones which this
-    // driver has registered on behalf of the process, although the
-    // process doesn't know about them.
+    // Every time the process creates an mwsocket, that results in a
+    // primary mwsocket. There are secondary ones which this driver
+    // has registered on behalf of the process, although the process
+    // doesn't know about them.
 
     // Pointer to the primary mwsocket. If this is the primary this value is NULL.
     struct _mwsocket_instance * primary;
@@ -336,14 +335,6 @@ typedef struct _mwsocket_instance
     // List of the fellow listening mwsockets; needed for destruction.
     struct list_head            sibling_listener_list;
     
-    // Used by primary instance to indicate an active secondary
-    // instance. NULL on secondary instances. Only meaningful on
-    // listening socket.
-//    struct _mwsocket_instance * primary; // created by user
-//    struct _mwsocket_instance * active; // created upon new INS registration
-    // should probably hold global sockinst lock to modify...
-//    struct list_head            active_list;
-
     // poll() support: the latest events on this socket
     unsigned long       poll_events;
 
@@ -434,13 +425,9 @@ typedef struct _mwsocket_active_request
     // The backing socket instance
     mwsocket_instance_t * sockinst;
 
-    // For multi-INS support: when sending a secondary accept(), this
-    // points to the primary active request that the user knows
-    // about. Valid only while accept() is outstanding.
-//    struct _mwsocket_active_request * accept_peer;
-
-
+    // Multi-INS support
     struct list_head list_inbound;
+
     struct list_head list_all;
 
 } mwsocket_active_request_t;
@@ -496,11 +483,6 @@ typedef struct _mwsocket_globals
 mwsocket_globals_t g_mwsocket_state;
 
 // Data/forward decls needed for socket replication work upon new INS discovery
-
-//static void
-//mwsocket_replicate_listening_port_worker( void * Arg );
-//mwsocket_replicate_listening_port_worker( struct work_struct * Work );
-
 
 typedef struct _mwsocket_replication_work
 {
@@ -1659,7 +1641,6 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
         break;
 
     case MtRequestSocketBind:
-//        ActiveRequest->sockinst->bound_port    = request->socket_bind.sockaddr.sin_port;
         ActiveRequest->sockinst->bind_sockaddr = request->socket_bind.sockaddr;
         break;
 
@@ -1853,7 +1834,6 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
 
     if( !AwaitResponse ) { goto ErrorExit; }
 
-//    wait_for_completion_interruptible( &actreq->arrived );
     rc = wait_for_completion_interruptible_timeout( &actreq->arrived,
                                                     GENERAL_RESPONSE_TIMEOUT );
     if( 0 == rc )
@@ -3180,13 +3160,6 @@ mwsocket_fini( void )
     list_for_each_entry_safe( currsi, nextsi,
                               &g_mwsocket_state.sockinst_list, list_all )
     {
-#if 0
-        list_for_each_entry_safe( curra, nexta,
-                                  &curra->sibling_listener_list, sibling_listener_list )
-        {
-            list_del( &curra->sibling_listener_list );
-        }
-#endif
         pr_err( "Harvesting leaked socket instance for FD %d\n",
                 currsi->local_fd );
 
