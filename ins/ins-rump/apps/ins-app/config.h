@@ -12,8 +12,8 @@
 //
 
 // Hard max: 62
-#define MAX_THREAD_COUNT 62   // for production
-//#define MAX_THREAD_COUNT 2  // for testing
+//#define MAX_THREAD_COUNT 62   // for production
+#define MAX_THREAD_COUNT 24  // for testing
 
 //
 // Number of buffer items. This is the number of requests (from the
