@@ -384,10 +384,10 @@ MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
-    DEBUG_BREAK();
+
     // Tear down open mwsockets and mwsocket subsystem
     mwsocket_fini();
-    DEBUG_BREAK();
+
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
 
@@ -421,7 +421,6 @@ mwbase_dev_fini( void )
     }
 
     pr_info( "Cleanup is complete\n" );
-    DEBUG_BREAK();    
 }
 
 
