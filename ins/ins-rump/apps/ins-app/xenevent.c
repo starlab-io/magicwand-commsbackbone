@@ -658,16 +658,14 @@ update_listening_ports( void )
             char port[6];
             snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
 
-            if (sizeof(listening_ports) - strlen(listening_ports) - 1 < 0)
+            if ( strlen( listening_ports ) > sizeof( listening_ports ) - strlen( port ) - 1 )
             {
-                rc = 1;
-                MYASSERT( !"Error: listening_ports is overflowing\n" );
+                rc = -EOVERFLOW;
+                MYASSERT( !"Error: Too much data for string listening_ports" );
                 goto ErrorExit;
             }
-            else
-            {
-                strncat( listening_ports, port, sizeof(listening_ports) - strlen(listening_ports) - 1 );
-            }
+            
+            strncat( listening_ports, port, sizeof( listening_ports ) - strlen( listening_ports ) - 1 );
         }
     }
 
