@@ -655,9 +655,19 @@ update_listening_ports( void )
         // Only add the port if it is nonzero
         if ( 0 != curr->bound_port_num )
         {
-            char port[5];
+            char port[6];
             snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
-            strncat( listening_ports, port, sizeof(listening_ports) );
+
+            if (sizeof(listening_ports) - strlen(listening_ports) - 1 < 0)
+            {
+                rc = 1;
+                MYASSERT( !"Error: listening_ports is overflowing\n" );
+                goto ErrorExit;
+            }
+            else
+            {
+                strncat( listening_ports, port, sizeof(listening_ports) - strlen(listening_ports) - 1 );
+            }
         }
     }
 
