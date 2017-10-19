@@ -9,7 +9,7 @@
 // of the stats is: "socket_ct:bytes_recv:bytes_sent", where all
 // numbers are base 16. See xen_keystore_defs.h also
 #define INS_NETWORK_STATS_MAX_LEN 64
-#define INS_LISTENING_PORTS_MAX_LEN INS_NETWORK_STATS_MAX_LEN 
+#define INS_LISTENING_PORTS_MAX_LEN 4096
 
 #define INS_SOCK_PARAMS_MAX_LEN 512
 
@@ -20,7 +20,7 @@
     _IOW( 'i', 72, const char[INS_NETWORK_STATS_MAX_LEN] )
 
 #define INS_PUBLISH_LISTENERS_IOCTL                             \
-    _IOW( 'i', 73, const char[INS_NETWORK_STATS_MAX_LEN] )
+    _IOW( 'i', 73, const char[INS_LISTENING_PORTS_MAX_LEN] )
 
 // User must define domid_t
 #define INS_DOMID_IOCTL                         \
