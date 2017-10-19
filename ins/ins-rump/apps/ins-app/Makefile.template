@@ -24,6 +24,7 @@ CFLAGS += -I../../rump-common
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
+#CFLAGS += -DMYVERBOSE
 
 # Experimental feature: breaks protected app
 CFLAGS += -DMODIFY_NETWORK_PARAMETERS=0

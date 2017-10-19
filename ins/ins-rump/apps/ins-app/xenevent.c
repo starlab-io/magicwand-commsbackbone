@@ -75,6 +75,8 @@
 #include <unistd.h>
 #include <string.h>
 
+#include <sys/resource.h>
+
 #include <errno.h>
 
 #include <sched.h>
@@ -326,7 +328,7 @@ debug_print_state( void )
         
         (void) sem_getvalue( &curr->awaiting_work_sem, &pending );
         
-        printf("  %d: used %d sock %x/%d, pending items %d\n",
+        printf("  %d: used %d sock %lx/%d, pending items %d\n",
                curr->idx, curr->in_use,
                curr->public_fd, curr->local_fd,
                pending );
@@ -421,7 +423,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 
         if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
         {
-            DEBUG_PRINT( "Reserving unused buffer %d\n", curr->idx );
+            VERBOSE_PRINT( "Reserving unused buffer %d\n", curr->idx );
             // Value was 0 (now it's 1), so it was available and we
             // have acquired it
             MYASSERT( 1 == curr->in_use );
@@ -431,7 +433,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
         }
         else
         {
-            DEBUG_PRINT( "NOT reserving used buffer %d\n", curr->idx );
+            VERBOSE_PRINT( "NOT reserving used buffer %d\n", curr->idx );
         }
     }
 
@@ -461,7 +463,7 @@ release_buffer_item( buffer_item_t * BufferItem )
     if ( prev )
     {
         BufferItem->assigned_thread = NULL;
-        DEBUG_PRINT( "Released buffer %d\n", BufferItem->idx );
+        VERBOSE_PRINT( "Released buffer %d\n", BufferItem->idx );
     }
 }
 
@@ -483,7 +485,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Fd );
+    DEBUG_PRINT( "Looking for worker thread for socket %lx\n", Fd );
 
     if ( MT_INVALID_SOCKET_FD == Fd )
     {
@@ -491,7 +493,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
         {
             curr = &g_state.worker_threads[i];
 
-            DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
+            DEBUG_PRINT( "Worker thread %d: busy %d sock %lx\n",
                          i, curr->in_use, curr->public_fd );
 
             // Look for any available thread and secure ownership of it.
@@ -747,7 +749,7 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     bzero( &response.base, sizeof(response.base) );
     
-    DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
+    VERBOSE_PRINT( "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
@@ -843,7 +845,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     // How to handle failure?
     (void) post_process_response( request, &response, worker );
 
-    DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
+    VERBOSE_PRINT( "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
 
     size_t written = write( g_state.output_fd,
@@ -871,7 +873,7 @@ process_buffer_item( buffer_item_t * BufferItem )
         release_worker_thread( worker );
     }
 
-    DEBUG_PRINT( "Done with response %lx\n", response.base.id );
+    VERBOSE_PRINT( "Done with response %lx\n", response.base.id );
     //debug_print_state();
 
     return rc;
@@ -905,7 +907,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // this is false we release the buffer item.
     *ProcessFurther = true;
     
-    DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
+    VERBOSE_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
 
@@ -1039,9 +1041,7 @@ worker_thread_func( void * Arg )
     thread_item_t * myitem = (thread_item_t *) Arg;
     buffer_item_t * currbuf;
     bool empty = false;
-    
-    DEBUG_PRINT( "Thread %d is executing\n", myitem->idx );
-    
+
 
     while ( true )
     {
@@ -1154,8 +1154,21 @@ init_state( void )
             goto ErrorExit;
         }
 
-        sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
-        sem_init( &curr->oplock, 0, 1 );
+        rc = sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
+        if( rc )
+        {
+            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            fflush(stdout);
+            sched_yield();
+        }
+
+        rc = sem_init( &curr->oplock, 0, 1 );
+        if( rc )
+        {
+            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            fflush(stdout);
+            sched_yield();
+        }
         curr->oplock_acquired = false;
     }
 
@@ -1199,6 +1212,10 @@ init_state( void )
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
+        DEBUG_PRINT( "creating thread %d\n", i );
+        DEBUG_PRINT( "worker_threads[%d].idx = %d", i,
+                     g_state.worker_threads[i].idx );
+        
         rc = pthread_create( &g_state.worker_threads[ i ].self,
                              NULL,//&g_state.attr,
                              worker_thread_func,
@@ -1208,6 +1225,7 @@ init_state( void )
             MYASSERT( !"pthread_create" );
             goto ErrorExit;
         }
+        sched_yield();
     }
 
     //
@@ -1226,6 +1244,7 @@ init_state( void )
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
     //xe_yield();
+
     sched_yield();
     
 ErrorExit:
@@ -1299,9 +1318,9 @@ message_dispatcher( void )
         mt_request_type_t request_type;
 
         // Always allow other threads to run in case there's work.
-        //xe_yield();
+        xe_yield();
 
-        DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
+        VERBOSE_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
         rc = reserve_available_buffer_item( &myitem );
         if ( rc )
@@ -1316,7 +1335,7 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n",
+        VERBOSE_PRINT( "Attempting to read %ld bytes from input FD\n",
                      ONE_REQUEST_REGION_SIZE );
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
@@ -1339,7 +1358,7 @@ message_dispatcher( void )
             goto ErrorExit;
         }
 
-        DEBUG_PRINT( "Read request %lx type %x size %x off ring\n",
+        VERBOSE_PRINT( "Read request %lx type %x size %x off ring\n",
                      (unsigned long) myitem->request->base.id,
                      myitem->request->base.type,
                      myitem->request->base.size );
@@ -1381,10 +1400,54 @@ ErrorExit:
 } // message_dispatcher
 
 
+static int
+setlimit( void )
+{
+    int rc = 0;
+    struct rlimit lim = { 0 };
+
+    lim.rlim_max = RLIM_INFINITY;
+    lim.rlim_cur = lim.rlim_max;
+    rc = setrlimit( RLIMIT_NTHR, &lim );
+    if ( rc )
+    {
+        perror( "setrlimit" );
+    }
+
+
+    lim.rlim_max = RLIM_INFINITY;
+    lim.rlim_cur = lim.rlim_max;
+    rc = setrlimit( RLIMIT_NOFILE, &lim );
+    if ( rc )
+    {
+        perror( "setrlimit" );
+    }
+
+    rc = getrlimit( RLIMIT_STACK, &lim );
+    if ( rc )
+    {
+        perror( "getrlimit" );
+    }
+
+//    lim.rlim_cur = lim.rlim_cur/2;
+    lim.rlim_max = lim.rlim_max/2;
+    rc = setrlimit( RLIMIT_STACK, &lim );
+    if( rc )
+    {
+        perror("setrlimit\n");
+    }
+    
+    return 0;
+
+}
+
+
+
 int main(void)
 {
     int rc = 0;
 
+    setlimit();
       
     rc = init_state();
     if ( rc )

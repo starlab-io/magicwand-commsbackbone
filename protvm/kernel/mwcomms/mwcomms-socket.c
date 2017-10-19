@@ -189,7 +189,7 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 #define POLL_DEBUG_MESSAGES 0
 
 #if POLL_DEBUG_MESSAGES
-#  define pr_verbose_poll(...) pr_debug(__VA_ARGS)
+#  define pr_verbose_poll(...) pr_debug(__VA_ARGS__)
 #else
 #  define pr_verbose_poll(...) ((void)0)
 #endif
