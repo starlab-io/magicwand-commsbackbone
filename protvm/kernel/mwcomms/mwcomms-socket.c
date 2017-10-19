@@ -1936,12 +1936,10 @@ mwsocket_response_consumer( void * Arg )
 
         if ( DEBUG_SHOW_TYPE( response->base.type ) )
         {
-            pr_debug( "Response ID %lx size %x type %x status %d "
-                      "on ring at idx %x\n",
+            pr_debug( "Response ID %lx size %x type %x status %d\n",
                       (unsigned long)response->base.id,
                       response->base.size, response->base.type,
-                      response->base.status,
-                      ins->front_ring.rsp_cons );
+                      response->base.status );
         }
         
         if( g_mwsocket_state.pending_exit )
