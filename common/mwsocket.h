@@ -11,9 +11,9 @@
  *    56(7) |    48(6) |    40(5) |    32(4) |   24(3) |   16(2) |    8(1) |    0(0) |
  * 76543210 | 76543210 | 76543210 | 76543210 | 7654321 | 7654321 | 7654321 | 7654321 |
  * -----------------------------------------------------------------------------------
- * 01100111 | (     rump ID     ) |            (       sock ID        )              |
+ * 01010011 | (     rump ID     ) | xxxxxxxx |     (            sock ID        )     |
  *
- * The MSB evaluates to 'C' in ascii, its hex value is 0x67.
+ * The MSB evaluates to 'S' in ASCII, its hex value is 0x53.
  *
  * Note that the mwsock is a 64 bit value that evaluates as a positive
  * signed value. The protected VM and each Rump instance muust
@@ -32,7 +32,7 @@ typedef  mw_socket_fd_t mw_fd_t; // alias
 #define MW_SOCKET_CLIENT_SHIFT  40
 #define MW_SOCKET_CLIENT_MASK   0x00ffff0000000000
 
-#define MW_SOCKET_LOCAL_ID_MASK 0x000000ffffffffff
+#define MW_SOCKET_LOCAL_ID_MASK 0x00000000ffffffff
 
 // A value is deemed an MW socket fd if it is positive and it has the
 // right prefix
@@ -47,22 +47,5 @@ typedef  mw_socket_fd_t mw_fd_t; // alias
 
 #define MW_SOCKET_GET_ID(x)                                     \
     ((x) & MW_SOCKET_LOCAL_ID_MASK )
-
-//
-// Pseudo-socket FDs for epoll_wait() support. Format same as
-// MW_SOCKET, but the prefix is different.
-//
-
-#define _MW_EPOLL_PREFIX (uint8_t)'E' // 0x45 = 0n69
-#define MW_EPOLL_PREFIX_SHIFT MW_SOCKET_PREFIX_SHIFT
-#define MW_EPOLL_PREFIX_VAL (((uint64_t)_MW_EPOLL_PREFIX) << MW_EPOLL_PREFIX_SHIFT)
-
-#define MW_EPOLL_IS_FD(x)                                       \
-    ( ( ((uint64_t)x) >> MW_EPOLL_PREFIX_SHIFT ) == _MW_EPOLL_PREFIX )
-
-#define MW_EPOLL_CREATE_FD(clientid, x)                                 \
-    (uint64_t) ( MW_EPOLL_PREFIX_VAL |                                  \
-                 ( ((uint64_t))clientid << MW_SOCKET_CLIENT_SHIFT ) |   \
-                 (x) )
 
 #endif // mwsockets_h

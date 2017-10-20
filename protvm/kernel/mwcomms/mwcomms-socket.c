@@ -725,14 +725,15 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     *SockInst = NULL;
 
     sockinst = (mwsocket_instance_t *)
-        kmem_cache_alloc( g_mwsocket_state.sockinst_cache,
-                          GFP_KERNEL | __GFP_ZERO );
+        kmem_cache_alloc( g_mwsocket_state.sockinst_cache, GFP_KERNEL );
     if ( NULL == sockinst )
     {
         MYASSERT( !"kmem_cache_alloc failed\n" );
         rc = -ENOMEM;
         goto ErrorExit;
     }
+
+    bzero( sockinst, sizeof( *sockinst ) );
 
     // Must be in the list whether or not we're creating the backing file
     mutex_lock( &g_mwsocket_state.sockinst_lock );
@@ -1443,6 +1444,11 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     base->sockfd = ActiveRequest->sockinst->remote_fd;
     base->id     = ActiveRequest->id;
 
+    // Either we don't have a backing remote socket, or else the remote FD is valid
+    MYASSERT( MtRequestSocketCreate == base->type ||
+              MtRequestPollsetQuery == base->type ||
+              MW_SOCKET_IS_FD( base->sockfd ) );
+
     // Hold this for duration of the operation. 
     mutex_lock( &g_mwsocket_state.request_lock );
 
@@ -1492,7 +1498,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     // state such that the system will fail if a response is not
     // received.
     rc = mwsocket_pre_process_request( ActiveRequest );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     if ( DEBUG_SHOW_TYPE( ActiveRequest->rr.request.base.type ) )
     {
@@ -1538,14 +1544,14 @@ mwsocket_send_message( IN mwsocket_instance_t * SockInst,
     mwsocket_active_request_t * actreq = NULL;
     
     rc = mwsocket_create_active_request( SockInst, &actreq );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     actreq->deliver_response = AwaitResponse;
 
     memcpy( &actreq->rr.request, Request, Request->base.size );
 
     rc = mwsocket_send_request( actreq, true );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     if ( !AwaitResponse ) goto ErrorExit;
 
@@ -1905,7 +1911,7 @@ mwsocket_create( OUT mwsocket_t * SockFd,
     int rc = 0;
     mwsocket_active_request_t  * actreq = NULL;
     mwsocket_instance_t        * sockinst = NULL;
-    mt_request_socket_create_t   create;
+    mt_request_socket_create_t   create = {0};
 
     MYASSERT( SockFd );
     *SockFd = (mwsocket_t)-1;
@@ -1922,11 +1928,11 @@ mwsocket_create( OUT mwsocket_t * SockFd,
 
     // (1) Local tasks first
     rc = mwsocket_create_sockinst( &sockinst, 0, true );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
     
     // (2) Register the new socket on the client
     rc = mwsocket_create_active_request( sockinst, &actreq );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     create.base.type     = MtRequestSocketCreate;
     create.base.size     = MT_REQUEST_SOCKET_CREATE_SIZE;
@@ -1938,7 +1944,7 @@ mwsocket_create( OUT mwsocket_t * SockFd,
     rc = mwsocket_send_message( sockinst,
                                 (mt_request_generic_t *)&create,
                                 true );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
 ErrorExit:
 
@@ -1968,17 +1974,17 @@ mwsocket_handle_attrib( IN struct file            * File,
                         IN mwsocket_attrib_t * SetAttribs )
 {
     int rc = 0;
-    mwsocket_instance_t * sockinst = NULL;
+    mwsocket_instance_t   * sockinst = NULL;
     mwsocket_active_request_t * actreq = NULL;
     mt_request_socket_attrib_t * request = NULL;
     mt_response_socket_attrib_t * response = NULL;
 
     rc = mwsocket_find_sockinst( &sockinst, File );
-    if ( rc )   goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     // Create a new active request
     rc = mwsocket_create_active_request( sockinst, &actreq );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     // Populate the request. Do not validate request->attrib here.
     actreq->deliver_response = true; // we'll wait
@@ -1991,7 +1997,7 @@ mwsocket_handle_attrib( IN struct file            * File,
     request->value  = SetAttribs->value;
 
     rc = mwsocket_send_request( actreq, true );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     // Wait
     rc = wait_for_completion_timeout( &actreq->arrived, GENERAL_RESPONSE_TIMEOUT );
@@ -2023,6 +2029,7 @@ ErrorExit:
 
 
 static ssize_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_read( struct file * File,
                char        * Bytes,
                size_t        Len,
@@ -2062,15 +2069,16 @@ mwsocket_read( struct file * File,
 
     if ( !actreq->deliver_response )
     {
-        MYASSERT( !"Request was marked as non-blocking. No data is available." );
+        MYASSERT( !"Request was marked as fire-and-forget. No data is available." );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
     if ( wait_for_completion_interruptible( &actreq->arrived ) )
     {
-        // Keep the request alive. The user might try again.
+        // Keep the request alive and stage for another read attempt.
         pr_warn( "read() was interrupted\n" );
+        sockinst->read_expected = true;
         rc = -EINTR;
         goto ErrorExit;
     }
@@ -2087,7 +2095,7 @@ mwsocket_read( struct file * File,
     // If this is from accept(), install a new file descriptor in the
     // calling process and report it to the user via the response.
     rc = mwsocket_postproc_in_task( actreq, response );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     // Is there a pending error on this socket? If so, return it.
     rc = mwsocket_pending_error( sockinst, response->base.type & MT_TYPE_MASK );
@@ -2121,6 +2129,7 @@ ErrorExit:
 
 
 static ssize_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_write( struct file * File,
                 const char  * Bytes,
                 size_t        Len,
@@ -2151,18 +2160,20 @@ mwsocket_write( struct file * File,
     }
 
     rc = mwsocket_find_sockinst( &sockinst, File );
-    if ( rc )   goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     if ( sockinst->read_expected )
     {
-        MYASSERT( !"Calling write() but read() expected" );
-        rc = -EINVAL;
+        MYASSERT( !"write() called but read() expected" );
+        rc = -EIO;
         goto ErrorExit;
     }
 
+    MYASSERT( MW_SOCKET_IS_FD( sockinst->remote_fd ) );
+
     // Create a new active request
     rc = mwsocket_create_active_request( sockinst, &actreq );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     actreq->from_user = true;
 
@@ -2199,13 +2210,13 @@ mwsocket_write( struct file * File,
     // behalf of the user. This is noticably faster (~100ms/MB) than
     // having the caller wait and try again later.
     rc = mwsocket_send_request( actreq, true );
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     sent = true;
 
 ErrorExit:
-    // We're returning an error - don't expect a read
-    if ( rc )
+    // We're returning an error - expect another write, not a read.
+    if ( rc && -EIO != rc )
     {
         sockinst->read_expected = false;
     }
@@ -2389,9 +2400,9 @@ mwsocket_init( mw_region_t * SharedMem )
         rc = -ENXIO;
         goto ErrorExit;
     }
-    
+
     rc = mwsocket_fs_init();
-    if ( rc ) goto ErrorExit;
+    if ( rc ) { goto ErrorExit; }
 
     g_mwsocket_state.active_request_cache =
         kmem_cache_create( "mw_active_requests",

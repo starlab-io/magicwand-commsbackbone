@@ -417,8 +417,8 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
                                   addrlen );
     if ( Response->base.status < 0 )
     {
-        perror("Bind FAILED \n");
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror("Bind FAILED \n");
         MYASSERT ( !"bind" );
     }
     else
