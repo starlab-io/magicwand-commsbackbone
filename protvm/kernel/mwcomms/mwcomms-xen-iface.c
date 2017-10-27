@@ -34,7 +34,6 @@
  * does not provide the thread for the reaper.
  */
 
-
 #include "mwcomms-common.h"
 
 #include <linux/init.h>           
@@ -62,7 +61,7 @@
 #include <xen/interface/callback.h>
 #include <xen/interface/io/ring.h>
 
-#include "mwcomms-common.h"
+
 #include "mwcomms-xen-iface.h"
 
 // How long to wait if we want to write a request but the ring is full?
@@ -381,10 +380,6 @@ ErrorExit:
 }
 
 
-/**
- * @brief Notifies the mwsocket system that an item is available on an
- * unspecified INS.
- */
 static void
 mw_xen_ins_alive( mwcomms_ins_data_t * Ins )
 {
@@ -398,6 +393,10 @@ mw_xen_ins_alive( mwcomms_ins_data_t * Ins )
 }
 
 
+/**
+ * @brief Notifies the mwsocket system that an item is available on an
+ * unspecified INS.
+ */
 static irqreturn_t
 mw_xen_irq_event_handler( int Port, void * Data )
 {
@@ -407,18 +406,22 @@ mw_xen_irq_event_handler( int Port, void * Data )
 }
 
 
-void
-mw_xen_send_event( void *Handle )
+static int
+mw_xen_send_event( void * Handle )
 {
    struct evtchn_send send;
    mwcomms_ins_data_t * ins = ( mwcomms_ins_data_t * ) Handle;
+   int rc = 0;
 
    send.port = ins->common_evtchn;
 
-   if ( HYPERVISOR_event_channel_op(EVTCHNOP_send, &send) )
+   rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+   if ( rc )
    {
        pr_err("Failed to send event\n");
    }
+
+   return rc;
 }
 
 
@@ -477,7 +480,7 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_offer_grant( mwcomms_ins_data_t *Ins )
+mw_xen_offer_grant( mwcomms_ins_data_t * Ins )
 {
    int rc = 0;
 
@@ -515,7 +518,7 @@ ErrorExit:
 
 
 static int
-mw_xen_write_grant_refs_to_key( mwcomms_ins_data_t *Ins )
+mw_xen_write_grant_refs_to_key( mwcomms_ins_data_t * Ins )
 {
     int rc = 0;
 
@@ -560,7 +563,7 @@ ErrorExit:
 
 static int
 //MWSOCKET_DEBUG_ATTRIB // XXXX: don't uncomment directive
-mw_xen_get_ins_from_xs_path( IN  const char *Path,
+mw_xen_get_ins_from_xs_path( IN  const char         *  Path,
                              OUT mwcomms_ins_data_t ** Ins )
 {
     int rc = -EINVAL;
@@ -586,9 +589,12 @@ mw_xen_get_ins_from_xs_path( IN  const char *Path,
     rc = kstrtoint( &copy[index], 10, &domid );
     if ( rc )
     {
-        pr_err( "Could not get domid from path\n" );
+        pr_err( "Could not get domid from path %s\n", Path );
         goto ErrorExit;
     }
+
+    // Set to error in case INS not found
+    rc = -ENOENT;
 
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
@@ -600,6 +606,11 @@ mw_xen_get_ins_from_xs_path( IN  const char *Path,
         }
     }
 
+    if ( rc )
+    {
+        pr_err( "No backing INS entry found for XenStore path %s\n", Path );
+    }
+    
 ErrorExit:
     CHECK_FREE( copy );
     return rc;
@@ -609,7 +620,7 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_vm_port_is_bound( const char *Path )
+mw_xen_vm_port_is_bound( const char * Path )
 {
     char * is_bound_str = NULL;
     mwcomms_ins_data_t * ins = NULL;
@@ -668,7 +679,6 @@ mw_xen_ins_heartbeat( const char * Path )
     rc = mw_xen_get_ins_from_xs_path( Path, &ins );
     if ( rc )
     {
-        pr_err( "No ins found for vm_port_is_bound\n" );
         goto ErrorExit;
     }
 
@@ -889,6 +899,8 @@ mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 
 ErrorExit:
     atomic64_set( &Ins->in_use, 0 );
+    Ins->is_ring_ready = false;
+
     return;
 }
 
@@ -929,7 +941,7 @@ mw_xen_reap_dead_ins( void )
         }
     }
 
-ErrorExit:
+//ErrorExit:
     return 0;
 
 }
@@ -1089,7 +1101,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
     
     if ( !ins->is_ring_ready )
     {
-        MYASSERT( !"Received request too early - ring not ready.\n" );
+        MYASSERT( !"Received request against unprepared/dead INS.\n" );
         rc = -EIO;
         goto ErrorExit;
     }
@@ -1156,30 +1168,65 @@ mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
 }
 
 
+int
+mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
+                          IN void *              Arg )
+{
+    int rc = 0;
+    mwcomms_ins_data_t * curr = NULL;
+
+    for( int i = 0; i < MAX_INS_COUNT; i++ )
+    {
+        curr = &g_mwxen_state.ins[i];
+
+        if ( !curr->is_ring_ready )
+        {
+            continue;
+        }
+
+        int rc2 = Callback( curr->domid, Arg );
+        if( rc2 )
+        {
+            MYASSERT( !"Callback failed" );
+            rc = rc2;
+        }
+    }
+
+    return rc;
+}
+
 
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_dispatch_request( void *Handle )
+mw_xen_dispatch_request( void * Handle )
 {
+    int rc = 0;
     mwcomms_ins_data_t * ins = (mwcomms_ins_data_t *) Handle;
 
-    MYASSERT( NULL != Handle );
+    if ( NULL == Handle )
+    {
+        rc = -EINVAL;
+        MYASSERT( !"NULL Handle given" );
+        goto ErrorExit;
+    }
 
     ++ins->front_ring.req_prod_pvt;
     RING_PUSH_REQUESTS( &ins->front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    mw_xen_send_event( ins );
+    rc = mw_xen_send_event( ins );
 #endif
-    return 0;
+
+ErrorExit:
+    return rc;
 }
 
 
 static void
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_xenstore_state_changed( struct xenbus_watch *W,
-                               const char **V,
-                               unsigned int L )
+mw_xen_xenstore_state_changed( struct xenbus_watch * W,
+                               const char         ** V,
+                               unsigned int          L )
 {
     MYASSERT( V );
     int rc = 0;

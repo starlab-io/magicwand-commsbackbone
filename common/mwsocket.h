@@ -37,7 +37,7 @@ typedef  mw_socket_fd_t mw_fd_t; // alias
     ( ((x) >> MW_SOCKET_PREFIX_SHIFT) == _MW_SOCKET_PREFIX )
 
 #define MW_SOCKET_CREATE(clientid, sockfd)                                \
-    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)clientid) << 8) | (sockfd) )
+    ( MW_SOCKET_PREFIX_VAL | (((uint16_t)clientid) << 8) | (sockfd & MW_SOCKET_LOCAL_ID_MASK) )
 
 #define MW_SOCKET_GET_ID(x)                     \
     ((x) & MW_SOCKET_LOCAL_ID_MASK )

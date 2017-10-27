@@ -439,7 +439,8 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
     //MYASSERT( 0 == rc );
     if ( rc )
     {
-        DEBUG_PRINT( "All buffers are in use!!\n" );
+        MYASSERT( !"All buffers are in use" );
+        //DEBUG_PRINT( "All buffers are in use!!\n" );
     }
 
     return rc;

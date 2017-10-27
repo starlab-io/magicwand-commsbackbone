@@ -67,32 +67,31 @@ static void
 print_backchannel_state(void)
 {
 
-        mwcomms_backchannel_info_t * curr = NULL;
-        int i = 0;
-        struct sockaddr_in addr;
-        int addrlen = sizeof(struct sockaddr_in);
+    mwcomms_backchannel_info_t * curr = NULL;
+    int i = 0;
+    struct sockaddr_in addr;
+    int addrlen = sizeof(struct sockaddr_in);
 
         
-        pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
-        pr_debug("connection count:    %d\n", g_mwbc_state.connection_ct.counter );
-        pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
+    pr_debug("initialized:         %d\n", g_mwbc_state.initialized );
+    pr_debug("connection count:    %d\n", g_mwbc_state.connection_ct.counter );
+    pr_debug("listen port:         %d\n", g_mwbc_state.listen_port );
 
-        pr_debug("\nsocket list: \n");
-        list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
-        {
+    pr_debug("\nsocket list: \n");
+    list_for_each_entry( curr, &g_mwbc_state.connection_list, list )
+    {
 
-                 curr->conn->ops->getname( curr->conn,
-                                     (struct sockaddr *) &addr,
-                                     &addrlen,
-                                     1 ); // get peer name
-             pr_debug( "Connection %d connection from %pI4:%hu\n", i,
-             &addr.sin_addr, ntohs( addr.sin_port ) );
+        curr->conn->ops->getname( curr->conn,
+                                  (struct sockaddr *) &addr,
+                                  &addrlen,
+                                  1 ); // get peer name
+        pr_debug( "Connection %d connection from %pI4:%hu\n", i,
+                  &addr.sin_addr, ntohs( addr.sin_port ) );
 
-             i++;
-        }
+        i++;
+    }
 }
 #endif
-
 
 
 #if 0

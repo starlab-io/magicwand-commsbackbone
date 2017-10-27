@@ -7,6 +7,8 @@
 #ifndef mwcomms_xen_iface_h
 #define mwcomms_xen_iface_h
 
+#include "mwcomms-common.h"
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -14,7 +16,6 @@
 #include <xen/interface/callback.h>
 #include <xen/interface/io/ring.h>
 
-#include "mwcomms-common.h"
 #include <message_types.h>
 #include <xen_keystore_defs.h>
 
@@ -25,6 +26,9 @@ mw_xen_init_complete_cb_t( domid_t Domid );
 typedef void
 mw_xen_event_handler_cb_t( void );
 
+
+typedef int
+mw_xen_per_ins_cb_t( IN domid_t Domid, IN void * Arg );
 
 /// @brief Initializes the Xen subsystem and initiates handshake with client
 ///
@@ -50,9 +54,16 @@ mw_xen_fini( void );
 domid_t
 mw_xen_get_local_domid( void );
 
+/*
 // @brief Sends an event on the common event channel.
 void
-mw_xen_send_event( void *Handle );
+mw_xen_send_event( void * Handle );
+*/
+
+int
+mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
+                          IN void *              Arg );
+
 
 int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value );
@@ -64,7 +75,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               OUT void                 ** Handle );
 
 int
-mw_xen_dispatch_request( void *Handle );    
+mw_xen_dispatch_request( void * Handle );    
 
 int
 mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
