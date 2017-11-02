@@ -36,19 +36,19 @@
 
 #include "mwcomms-common.h"
 
-#include <linux/init.h>           
-#include <linux/module.h>         
-#include <linux/device.h>         
-#include <linux/kernel.h>         
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/device.h>
+#include <linux/kernel.h>
 #include <linux/err.h>
-#include <linux/fs.h>             
+#include <linux/fs.h>
 #include <linux/semaphore.h>
 #include <linux/mutex.h>
 #include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/kthread.h>
 
-#include <asm/uaccess.h>          
+#include <asm/uaccess.h>
 #include <linux/time.h>
 #include <asm/atomic.h>
 
@@ -1187,7 +1187,7 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
         int rc2 = Callback( curr->domid, Arg );
         if( rc2 )
         {
-            MYASSERT( !"Callback failed" );
+            MYASSERT( !"Callback failed. Continuing." );
             rc = rc2;
         }
     }

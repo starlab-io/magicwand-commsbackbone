@@ -313,7 +313,7 @@ typedef struct _mwsocket_instance
 
     // accept()
     int                   accept_flags; // XXXX: unused
-    struct _mwsocket_active_request * accept_actreq; // XXXXXXXXXXXXx
+//    struct _mwsocket_active_request * accept_actreq; // XXXXXXXXXXXXx
 
     // For management of queue of inbound connections
     struct list_head      inbound_list; // anchor for list of active requests
@@ -416,6 +416,9 @@ typedef struct _mwsocket_active_request
     // variable. Requestor can be user or kernel.
     bool   deliver_response;
 
+    // Has the response been copied into this structure (rr field)?
+    bool   response_populated;
+
     bool   from_user;
 
     // Signaled when the response arrives and is available in the
@@ -507,6 +510,12 @@ typedef struct _mwsocket_sticky_accept_work
 } mwsocket_sticky_accept_work_t;
 
 
+typedef struct _mwsocket_sock_replicate_args
+{
+    mwsocket_instance_t * sockinst;
+    mt_request_generic_t * reqbase; // only the request_base can be assumed valid
+} mwsocket_sock_replicate_args_t;
+
 //DECLARE_WORK( mwsocket_replication_workq, mwsocket_replicate_listening_port_worker );
 
 
@@ -545,9 +554,15 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
 static int
 mwsocket_new_ins( domid_t Domid );
 
+#if 0
 static void
 mwsocket_sticky_accept_worker( IN struct work_struct * Work );
+#endif
 
+static int
+mwsocket_propogate_listeners( struct work_struct * Work );
+
+static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
 
 /******************************************************************************
  * Primitive Functions
@@ -875,6 +890,7 @@ ErrorExit:
 }
 
 
+// XXXX: update to accept optional INS (domid) as parameter
 static int
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
@@ -1474,8 +1490,29 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
     if ( MtResponseSocketAccept == Response->base.type )
     {
-        // No longer accepting
+        // No longer accepting on this sockinst
         ActiveRequest->sockinst->mwflags &= ~MWSOCKET_FLAG_ACCEPT;
+
+        MYASSERT( ActiveRequest->deliver_response );
+
+        // Put this AR in the inbound queue. Copy in the response now.
+        DEBUG_BREAK();
+        memcpy( &ActiveRequest->rr.response, Response, Response->base.size );
+        ActiveRequest->response_populated = true;
+//        ActiveRequest->deliver_response = true;
+
+        mwsocket_instance_t * primary = ActiveRequest->sockinst->usersock;
+        MYASSERT( primary->mwflags & MWSOCKET_FLAG_USER );
+//        MYASSERT( primary->accept_actreq->deliver_response );
+
+        mutex_lock( &primary->inbound_lock );
+        list_add_tail( &ActiveRequest->list_inbound, &primary->inbound_list );
+        mutex_unlock( &primary->inbound_lock );
+
+        MYASSERT( !"Enqueued inbound conn" );
+        // XXXX: could re-use ActiveRequest->arrived, but it would
+        // have to be reset after each usage.
+        up( &primary->inbound_sem ); 
     }
 
     // N.B. Do not use ActiveRequest->response -- it might not be valid yet.
@@ -1589,6 +1626,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
     MYASSERT( MT_IS_REQUEST( request ) );
 
+    MYASSERT( ActiveRequest->rr.request.base.type != MtRequestSocketAccept );
     // Will the user wait for the response to this request? If so, update state
     if( MT_REQUEST_CALLER_WAITS( request ) )
     {
@@ -1680,12 +1718,12 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 #endif // ENABLE_STICKY_ACCEPT
         ActiveRequest->sockinst->accept_flags = request->socket_accept.flags;
         // Point this sockinst's accept_actreq to this AR for the multi-INS support
-        ActiveRequest->sockinst->accept_actreq = ActiveRequest;
-
+//        ActiveRequest->sockinst->accept_actreq = ActiveRequest;
+        DEBUG_BREAK();
         // If we're accepting and a sibling socket is active, then
         // route the accept() to the INS that's waiting
-        if( ActiveRequest->sockinst->poll_active
-             && (ActiveRequest->sockinst->poll_events & POLLIN) )
+        if( ActiveRequest->sockinst->poll_active &&
+            (ActiveRequest->sockinst->poll_events & POLLIN) )
         {
             request->base.sockfd =
                 ActiveRequest->sockinst->poll_active->remote_fd;
@@ -1738,12 +1776,15 @@ mwsocket_await_inbound_connection( IN mwsocket_active_request_t   * ActiveReques
     MYASSERT( sockinst );
     MYASSERT( sockinst->mwflags & MWSOCKET_FLAG_USER );
 
-    if ( down_interruptible( &sockinst->inbound_sem ) )
+    MYASSERT( !"Awaiting" );
+    if( down_interruptible( &sockinst->inbound_sem ) )
     {
+        DEBUG_BREAK();
         rc = -EINTR;
         pr_info( "Received interrupt while awaiting inbound connection\n" );
         goto ErrorExit;
     }
+    DEBUG_BREAK();
 
     // Get the first inbound connection.
     mutex_lock( &sockinst->inbound_lock );
@@ -2027,6 +2068,7 @@ mwsocket_response_consumer( void * Arg )
             mw_xen_mark_response_consumed( h );
             continue; // move on
         }
+    MYASSERT( response->base.type != MtResponseSocketAccept );
 
         //
         // The active request has been found.
@@ -2063,9 +2105,11 @@ mwsocket_response_consumer( void * Arg )
             }
             mwsocket_destroy_active_request( actreq );
         }
+#if 0
         else if( MtResponseSocketAccept == response->base.type &&
                  actreq->sockinst->usersock->accept_actreq )
         {
+
             // Deliver the response to the primary, which must be
             // waiting. This AR itself could be the primary.
 
@@ -2108,10 +2152,16 @@ mwsocket_response_consumer( void * Arg )
             }
 #endif // 0
         }
+#endif
         else 
         {
-            // The caller is healthy and wants the response.
-            memcpy( &actreq->rr.response, response, response->base.size );
+            // The caller is healthy and wants the response. Copy
+            // response if needed then notify any waiter.
+            if ( !actreq->response_populated )
+            {
+                memcpy( &actreq->rr.response, response, response->base.size );
+                actreq->response_populated = true;
+            }
             complete_all( &actreq->arrived );
         }
 
@@ -2487,7 +2537,7 @@ mwsocket_read( struct file * File,
     mwsocket_active_request_t   * actreq = NULL;
     mt_response_generic_t     * response = NULL;
     mwsocket_instance_t       * sockinst = NULL;
-    bool                         inbound = false;
+//    bool                         inbound = false;
     pr_debug( "Processing read()\n" );
 
     rc = mwsocket_find_sockinst( &sockinst, File );
@@ -2518,8 +2568,7 @@ mwsocket_read( struct file * File,
         goto ErrorExit;
     }
 
-//    if( actreq->sockinst->mwflags & MWSOCKET_FLAG_ACCEPT )
-    if ( !list_empty( &actreq->sockinst->inbound_list ) )
+    if( actreq->sockinst->mwflags & MWSOCKET_FLAG_ACCEPT )
     {
         // For accept(), swap out the known active request for the
         // inbound one that arrived first.
@@ -2528,10 +2577,13 @@ mwsocket_read( struct file * File,
         if ( rc ) { goto ErrorExit; }
 
         // Replace the active request with its inbound surrogate
-        DEBUG_BREAK();
         actreq = new;
         sockinst = actreq->sockinst;
-        inbound = true;
+
+        // Although there may still be an outstanding accept() on the
+        // user socket, it should expect a write next since we're
+        // returning against a read. Change its state underneath it.
+        sockinst->usersock->read_expected = false;
     }
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
@@ -2619,6 +2671,8 @@ mwsocket_write( struct file * File,
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
 
+    MYASSERT( MWSOCKET_FLAG_USER & sockinst->mwflags );
+
     if( sockinst->read_expected )
     {
         MYASSERT( !"Calling write() but read() expected" );
@@ -2626,7 +2680,20 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    // Create a new active request
+    if ( MtRequestSocketAccept == base.type )
+    {
+        // Distribute accept() to all INSs
+        mwsocket_sock_replicate_args_t args =
+            { .sockinst = sockinst,
+              .reqbase = (mt_request_generic_t *) &base };
+        rc = mw_xen_for_each_live_ins( mwsocket_ins_sock_replicator, &args );
+        MYASSERT( 0 == rc );
+        sockinst->read_expected = true;
+        DEBUG_BREAK();
+        goto ErrorExit;
+    }
+    
+    // Otherwise... Create a new active request
     rc = mwsocket_create_active_request( sockinst, &actreq );
     if( rc ) { goto ErrorExit; }
 
@@ -2663,7 +2730,7 @@ mwsocket_write( struct file * File,
 
     // Write to the ring. If the ring is full, we will wait here on
     // behalf of the user. This is noticably faster (~100ms/MB) than
-    // having the caller wait and try again later.
+    // having the caller wait in usermode and try again later.
     rc = mwsocket_send_request( actreq, true );
     if( rc ) { goto ErrorExit; }
 
@@ -2954,6 +3021,7 @@ ErrorExit:
 }
 
 
+#if 0
 static void
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_sticky_accept_worker( IN struct work_struct * Work )
@@ -2999,9 +3067,10 @@ ErrorExit:
     CHECK_FREE( Work );
     return;
 }
+#endif // 0
 
 
-
+#if 0
 static void
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_replicate_listening_port_worker( IN struct work_struct * Work )
@@ -3139,20 +3208,26 @@ ErrorExit:
     CHECK_FREE( Work );
 } // mwsocket_replicate_listening_port_worker
 
+#endif // 0
 
-
-static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
 
 /**
  * @brief Replicate the given exemplar socket onto the given INS.
+ *
+ * Valid in case where given binding has not occured on the given INS,
+ * or in the case where the socket is already bound but accept() has
+ * returned.
  */
 static int
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_ins_sock_replicator( IN domid_t Domid,
                               IN void *  Arg )
 {
+    MYASSERT( Arg );
+
     int rc = 0;
-    mwsocket_instance_t * usersock = (mwsocket_instance_t *) Arg;
+    mwsocket_sock_replicate_args_t * args = (mwsocket_sock_replicate_args_t *) Arg;
+    mwsocket_instance_t * usersock = (mwsocket_instance_t *) args->sockinst;
     mwsocket_instance_t * newsock = NULL;
     bool found = false;
 
@@ -3167,55 +3242,66 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         goto ErrorExit;
     }
 
-    DEBUG_BREAK();
-    // Find the existing listener paired with the given INS, or else
-    // create one. If its an existing listener, it *should* just need
-    // to be put back into accept() state.
-    list_for_each_entry( newsock, &usersock->sibling_listener_list,
-                         sibling_listener_list )
+    // N.B. This function is called for every user socket and every
+    // INS. It has to figure out whether the user socket or one of its
+    // siblings is bound/accepting on the given INS. Each user socket
+    // is associated with a unique socket type/bind address.
+
+    // First, see if the user socket itself is the reason we were
+    // called.
+    if( MW_SOCKET_CLIENT_ID( usersock->remote_fd ) == Domid )
     {
-        if( newsock->sock_fam == usersock->sock_fam            &&
-            newsock->sock_type == usersock->sock_type          &&
-            MW_SOCKET_CLIENT_ID( newsock->remote_fd ) == Domid &&
-            0 == memcmp( &newsock->bind_sockaddr,
-                         &usersock->bind_sockaddr,
-                         sizeof(mt_sockaddr_in_t) )           )
+        newsock = usersock;
+    }
+    else
+    {
+        // Look for a sibling listener that's associated with this
+        // INS.
+        list_for_each_entry( newsock, &usersock->sibling_listener_list,
+                             sibling_listener_list )
         {
             DEBUG_BREAK();
-            found = true;
-            break;
+            if( MW_SOCKET_CLIENT_ID( newsock->remote_fd ) == Domid )
+            {
+                found = true;
+                break;
+            }
         }
-    }
-    DEBUG_BREAK();
-    // Create if needed
-    if( !found )
-    {
-        // Create pollable sockinst without a backing file locally
-        rc = mwsocket_create_sockinst( &newsock, 0, true, false );
-        if( rc ) { goto ErrorExit; }
 
-        mt_request_socket_create_t create =
-            { .base.type     = MtRequestSocketCreate,
-              .base.size     = MT_REQUEST_SOCKET_CREATE_SIZE,
-              .base.sockfd   = MW_SOCKET_CREATE( Domid, MT_INVALID_SOCKET_FD ),
-              .sock_fam      = usersock->sock_fam, // family == domain
-              .sock_type     = usersock->sock_type,
-              .sock_protocol = usersock->sock_protocol };
-
-        // Send request, wait for response
+        // There is no sockinst for this INS. Create one that's
+        // pollable but has no backing file object.
         DEBUG_BREAK();
-        rc = mwsocket_send_message( newsock,
-                                    (mt_request_generic_t *)&create,
-                                    true );
-        if( rc )
+        if( !found )
         {
-            pr_err( "Socket replication: creation failed, domid=%d\n", Domid );
-            goto ErrorExit;
+            rc = mwsocket_create_sockinst( &newsock, 0, true, false );
+            if( rc ) { goto ErrorExit; }
+
+            mt_request_socket_create_t create =
+                { .base.type     = MtRequestSocketCreate,
+                  .base.size     = MT_REQUEST_SOCKET_CREATE_SIZE,
+                  .base.sockfd   = MW_SOCKET_CREATE( Domid, MT_INVALID_SOCKET_FD ),
+                  .sock_fam      = usersock->sock_fam, // family == domain
+                  .sock_type     = usersock->sock_type,
+                  .sock_protocol = usersock->sock_protocol };
+
+            // Send request, wait for response
+            DEBUG_BREAK();
+            rc = mwsocket_send_message( newsock,
+                                        (mt_request_generic_t *)&create,
+                                        true );
+            if( rc )
+            {
+                pr_err( "Socket replication: creation failed, domid=%d\n", Domid );
+                goto ErrorExit;
+            }
         }
     }
 
-    // Bind, wait
-    if( !(newsock->mwflags & MWSOCKET_FLAG_BOUND) )
+    MYASSERT( NULL != newsock );
+
+    // Either we found it, or we created it. Now bind, waiting for completion.
+    if( (usersock->mwflags & MWSOCKET_FLAG_BOUND) &&
+        !(newsock->mwflags & MWSOCKET_FLAG_BOUND) )
     {
         mt_request_socket_bind_t bind =
             { .base.type      = MtRequestSocketBind,
@@ -3234,7 +3320,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
     }
 
     // Listen, wait
-    if( !(newsock->mwflags & MWSOCKET_FLAG_LISTENING) )
+    if( (usersock->mwflags & MWSOCKET_FLAG_LISTENING) &&
+        !(newsock->mwflags & MWSOCKET_FLAG_LISTENING) )
     {
         mt_request_socket_listen_t listen =
             { .base.type    = MtRequestSocketListen,
@@ -3265,6 +3352,20 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         rc = mwsocket_create_active_request( newsock, &actreq );
         if( rc ) { goto ErrorExit; }
 
+        // If the originator wants to await the response then set the
+        // flag accordingly.
+        bool dowait = false;
+        if( newsock == usersock &&
+            NULL != args->reqbase &&
+            MT_REQUEST_CALLER_WAITS( args->reqbase ) )
+        {
+            dowait = true;
+            MT_REQUEST_SET_CALLER_WAITS( &accept );
+        }
+
+        // Unconditionally deliver the response for correct processing
+        // in the response consumer (??)
+        actreq->deliver_response = true;
         memcpy( &actreq->rr.request, &accept, accept.base.size );
         DEBUG_BREAK();
         rc = mwsocket_send_request( actreq, true );
@@ -3276,8 +3377,14 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         }
     }
 
-    list_add( &newsock->sibling_listener_list,
-              &usersock->sibling_listener_list );
+    if( newsock != usersock )
+    {
+        list_add( &newsock->sibling_listener_list,
+                  &usersock->sibling_listener_list );
+        // Map newsock to its primary socket for polling support
+        newsock->usersock = usersock;
+    }
+
 ErrorExit:
     if( rc )
     {
@@ -3296,13 +3403,24 @@ mwsocket_propogate_listeners( struct work_struct * Work )
 {
     int rc = 0;
 
+    // XXXX: we need to iterate over socket list, and we may need to add new sockets.
+
+    // Don't lock but use safe method and block user during process?
+
 //    mutex_lock( &g_mwsocket_state.sockinst_lock );
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if( !(curr->mwflags & MWSOCKET_FLAG_USER) ) { continue; }
+        // Socket must be primary AND ready (bound and listening, at least)
+        if( (MWSOCKET_FLAG_USER | MWSOCKET_FLAG_READY) !=
+            (curr->mwflags & (MWSOCKET_FLAG_USER | MWSOCKET_FLAG_READY) ) )
+        {
+            continue;
+        }
 
-        rc = mw_xen_for_each_live_ins( mwsocket_ins_sock_replicator, curr );
+        mwsocket_sock_replicate_args_t args = { .sockinst = curr, .reqbase = NULL };
+        DEBUG_BREAK();
+        rc = mw_xen_for_each_live_ins( mwsocket_ins_sock_replicator, &args );
         if( rc )
         {
             pr_err( "An INS listener propogation failed, rc = %d. Continuing.\n", rc );
@@ -3320,9 +3438,10 @@ static int
 mwsocket_new_ins( domid_t Domid )
 {
     int rc = 0;
+#if 0
     mwsocket_instance_t * curr = NULL;
 //    mwsocket_replication_work_t * work = NULL;
-#if 0
+
     // Find all primary instances and open a duplicate socket on the
     // new INS them to the new INS
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
@@ -3330,8 +3449,9 @@ mwsocket_new_ins( domid_t Domid )
         // Skip secondary instances
 //        if( curr->usersock != curr ) { continue; }
 
-        // Socket must be primary and ready (bound and listening, at least)
-        if( !(curr->mwflags & (MWSOCKET_FLAG_USER | MWSOCKET_FLAG_READY) ) )
+        // Socket must be primary AND ready (bound and listening, at least)
+        if( (MWSOCKET_FLAG_USER | MWSOCKET_FLAG_READY) !=
+            (curr->mwflags & (MWSOCKET_FLAG_USER | MWSOCKET_FLAG_READY) ) )
         {
             continue;
         }
@@ -3435,7 +3555,7 @@ mwsocket_fini( void )
         kmem_cache_free( g_mwsocket_state.active_request_cache, currar );
     }
     mutex_unlock( &g_mwsocket_state.active_request_lock );
-    
+
     if( NULL != g_mwsocket_state.active_request_cache )
     {
         kmem_cache_destroy( g_mwsocket_state.active_request_cache );

@@ -135,7 +135,7 @@ typedef enum
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
     MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
-} mt_response_id_t;
+} mt_response_type_t;
 
 typedef uint32_t mt_addrlen_t;
 
@@ -290,7 +290,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
     mt_sig_t            sig;
 
     // MtResponse*
-    mt_response_id_t    type;
+    mt_response_type_t  type;
 
     // Size of the payload only - after this header
     mt_size_t           size;
