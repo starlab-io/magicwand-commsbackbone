@@ -533,9 +533,9 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd,
                       inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
-    }
 
-    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
+        populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
