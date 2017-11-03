@@ -276,23 +276,23 @@ mw_xen_read_from_key( const char * Dir, const char * Node )
     char                       *str = NULL;
     int                         err = 0;
 
-   pr_debug( "Reading value in dir:%s node:%s\n", Dir, Node );
+    pr_debug( "Reading value in dir:%s node:%s\n", Dir, Node );
 
-   err = xenbus_transaction_start(&txn);
-   if (err) {
-      pr_err("Error starting xenbus transaction\n");
-      return NULL;
-   }
+    err = xenbus_transaction_start(&txn);
+    if (err) {
+        pr_err("Error starting xenbus transaction\n");
+        return NULL;
+    }
 
-   str = (char *)xenbus_read(txn, Dir, Node, NULL);
-   if (XENBUS_IS_ERR_READ(str))
-   {
-      pr_err("Could not read XenStore Key: %s/%s\n", Dir, Node );
-      xenbus_transaction_end(txn,1);
-      return NULL;
-   }
+    str = (char *)xenbus_read(txn, Dir, Node, NULL);
+    if (XENBUS_IS_ERR_READ(str))
+    {
+        pr_err("Could not read XenStore Key: %s/%s\n", Dir, Node );
+        xenbus_transaction_end(txn,1);
+        return NULL;
+    }
 
-   err = xenbus_transaction_end(txn, 0);
+    err = xenbus_transaction_end(txn, 0);
 
    return str;
 }
@@ -502,14 +502,14 @@ mw_xen_offer_grant( mwcomms_ins_data_t * Ins )
        }
 
        Ins->grant_refs[ i ] = rc;
-       pr_debug( "VA: %p MFN: %p grant 0x%x\n",
+       pr_verbose( "VA: %p MFN: %p grant 0x%x\n",
                  (void *) ((unsigned long)Ins->ring.ptr +
                            i * PAGE_SIZE),
                  (void *)(mfn+i),
                  rc );
    }
 
-   //Success
+   // Success
    rc = 0;
 
 ErrorExit:
@@ -645,8 +645,6 @@ mw_xen_vm_port_is_bound( const char * Path )
         goto ErrorExit;
     }
 
-    pr_debug( "The remote event channel is bound\n" );
-
     rc =  bind_evtchn_to_irqhandler( ins->common_evtchn,
                                      mw_xen_irq_event_handler,
                                      0, NULL, NULL );
@@ -771,8 +769,8 @@ mw_xen_ins_found( IN const char * Path )
         {
             g_mwxen_state.ins[i].domid = simple_strtol( client_id_str, NULL, 10 );
             curr = &g_mwxen_state.ins[i];
-            pr_debug("Discovered client, domid %d added to ins_data[] pos: %d\n",
-                     g_mwxen_state.ins[i].domid, i );
+            pr_debug( "Discovered client, domid %d added to ins_data[ %d ]\n",
+                      g_mwxen_state.ins[i].domid, i );
             err = 0;
             break;
         }
@@ -882,7 +880,7 @@ mw_xen_release_ins( mwcomms_ins_data_t * Ins )
     {
         if ( 0 != Ins->grant_refs[ i ] )
         {
-            pr_debug("Ending access to grant ref 0x%x\n", Ins->grant_refs[i]);
+            pr_verbose( "Ending access to grant ref 0x%x\n", Ins->grant_refs[i] );
             gnttab_end_foreign_access_ref( Ins->grant_refs[i], 0 );
         }
     }

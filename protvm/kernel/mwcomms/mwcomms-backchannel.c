@@ -24,8 +24,11 @@
 #define LISTENER_MONITOR_INTERVAL (HZ * 1)
 
 // XXXX: When this is 1, we hit a deadlock upon receiving incoming
-// data and later unloading
+// data and later unloading ???????????
 #define HANDLE_INCOMING_DATA 1
+
+
+#define MWCOMMS_NETFLOW_THREAD "mw_netflow"
 
 
 typedef int
@@ -635,8 +638,7 @@ mw_backchannel_init( void )
     g_mwbc_state.listen_thread =
         kthread_run( &mw_backchannel_monitor,
                      NULL,
-                     "MwNetflowHandler" );
-
+                     MWCOMMS_NETFLOW_THREAD );
     if ( NULL == g_mwbc_state.listen_thread )
     {
         MYASSERT( !"kthread_run() failed" );
