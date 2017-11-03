@@ -3082,6 +3082,9 @@ ErrorExit:
 } // mwsocket_ins_sock_replicator
 
 
+/**
+ * @brief Replicates all listening sockets onto all live INSs. Called via work item.
+ */
 static int
 mwsocket_propogate_listeners( struct work_struct * Work )
 {
