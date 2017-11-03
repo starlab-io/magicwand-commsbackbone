@@ -171,10 +171,10 @@ DEFINE_RING_TYPES( mwevent, mt_request_generic_t, mt_response_generic_t );
 
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ * 2 ) // >= 1 sec
 
-//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 2 ) // 4x/sec
+#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 2 ) // 4x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 3 ) // 8x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 4 ) // 16x/sec
-#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
+//#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 5 ) // 32x/sec
 //#define POLL_MONITOR_QUERY_INTERVAL   ( HZ >> 6 ) // 64x/sec
 
 #if (!PVM_USES_EVENT_CHANNEL)
@@ -457,6 +457,7 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
  * Caller must hold the global active_request_lock.
  */
 static mt_id_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_get_next_id( void )
 {
     static atomic64_t counter = ATOMIC64_INIT( 0 );
@@ -478,6 +479,7 @@ mwsocket_get_next_id( void )
 
         list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
         {
+            MYASSERT( curr->id );
             if ( curr->id == id )
             {
                 pr_debug( "Not using ID %lx because it is currently in use\n",
@@ -911,6 +913,10 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
     {
         return;
     }
+
+    MYASSERT( Request->sockinst );
+    MYASSERT( &Request->sockinst->close_blockid );
+    MYASSERT( Request->id );
 
     pr_debug( "Destroyed active request %p id=%lx\n",
               Request, (unsigned long) Request->id );
@@ -1535,6 +1541,7 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_send_message( IN mwsocket_instance_t * SockInst,
                        IN mt_request_generic_t * Request,
                        IN bool                   AwaitResponse )
@@ -1663,6 +1670,9 @@ mwsocket_response_consumer( void * Arg )
             RING_GET_RESPONSE( &g_mwsocket_state.front_ring,
                                g_mwsocket_state.front_ring.rsp_cons );
 
+
+        MYASSERT( ! ( response->base.size > MESSAGE_TARGET_MAX_SIZE ) );
+        
         if ( DEBUG_SHOW_TYPE( response->base.type ) )
         {
             pr_debug( "Response ID %lx size %x type %x status %d on ring at idx %x\n",
@@ -1785,6 +1795,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
 
     rc = 0;
     response = &actreq->rr.response.pollset_query;
+    
 
     if ( response->base.status < 0 )
     {
@@ -2440,6 +2451,8 @@ mwsocket_init( mw_region_t * SharedMem )
         goto ErrorExit;
     }
 
+#ifndef DISABLE_POLLING
+    
     // Poll monitor thread
     g_mwsocket_state.poll_monitor_thread =
         kthread_run( &mwsocket_poll_monitor,
@@ -2451,7 +2464,8 @@ mwsocket_init( mw_region_t * SharedMem )
         rc = -ESRCH;
         goto ErrorExit;
     }
-
+#endif
+    
     g_mwsocket_state.ring = *SharedMem;
     g_mwsocket_state.sring = (struct mwevent_sring *) SharedMem->ptr;
 

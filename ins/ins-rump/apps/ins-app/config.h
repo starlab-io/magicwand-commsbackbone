@@ -13,14 +13,14 @@
 
 // Hard max: 62
 #define MAX_THREAD_COUNT 4000   // for production
-//#define MAX_THREAD_COUNT 24  // for testing
+//#define MAX_THREAD_COUNT 20// for testing
 
 //
 // Number of buffer items. This is the number of requests (from the
 // protected VM) that we can queue. Accounts for each thread blocking
 // plus one buffer item to handle poll requests
 //
-#define BUFFER_ITEM_COUNT ( MAX_THREAD_COUNT + 1 )
+#define BUFFER_ITEM_COUNT ( MAX_THREAD_COUNT + 50 )
 
 #define WORK_QUEUE_ITEM_COUNT 4
 
