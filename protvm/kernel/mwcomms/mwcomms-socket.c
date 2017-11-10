@@ -3166,14 +3166,7 @@ mwsocket_fini( void )
     
     mwsocket_instance_t * currsi = NULL;
     mwsocket_instance_t * nextsi = NULL;
-/*
-    // Destroy work queue
-    if( g_mwsocket_state.workq )
-    {
-        flush_workqueue( g_mwsocket_state.workq );
-        destroy_workqueue( g_mwsocket_state.workq );
-    }
-*/
+
     // Destroy response consumer -- kick it. It might be waiting for
     // the ring to become ready, or it might be waiting for responses
     // to arrive on the ring. Wait for it to complete so shared
@@ -3187,7 +3180,6 @@ mwsocket_fini( void )
     {
         wait_for_completion( &g_mwsocket_state.response_reader_done );
     }
-
 
     // Similarly, destroy the poll notification thread. It regularly
     // checks pending_exit, so kicking isn't necessary.
