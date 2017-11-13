@@ -434,7 +434,8 @@ typedef struct _mwsocket_active_request
     mwsocket_instance_t * sockinst;
 
     // Multi-INS support. If list is non-empty then this request has
-    // been added to an inbound queue associated with an mwsocket.
+    // been added to an inbound queue associated with an mwsocket. If
+    // it's invalid then it has been consumed.
     struct list_head list_inbound;
 
     struct list_head list_all;
@@ -464,13 +465,9 @@ typedef struct _mwsocket_globals
     struct mutex        sockinst_lock;
     atomic_t            sockinst_count;
     atomic_t            poll_sock_count;
-/*
-    // Listening port replication workq
-//    struct workqueue_struct * workq;
-    
-*/
+
     // Indicates response(s) available
-    struct semaphore event_channel_sem;
+    struct semaphore    event_channel_sem;
 
     // Filesystem data
     struct vfsmount * fs_mount;
@@ -486,7 +483,7 @@ typedef struct _mwsocket_globals
 
     // Support for poll(): to inform waiters of data
     wait_queue_head_t   waitq;
-    
+
     bool   pending_exit;
 } mwsocket_globals_t;
 
@@ -777,8 +774,7 @@ mwsocket_debug_dump_sockinst( void )
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) )
-        { continue; }
+        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) ) { continue; }
 
 //        printk( "%s\n", curr->proc->comm );
         pr_info( "%p refct %d file %p proc %d[%s]\n",
@@ -1126,7 +1122,8 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
     atomic64_cmpxchg( &Request->sockinst->close_blockid,
                       Request->id, MT_ID_UNSET_VALUE );
 
-    MYASSERT( list_empty( &Request->list_inbound ) );
+    // Request->list_inbound should be empty or invalidated. How to
+    // check for either of these?
 
     mwsocket_put_sockinst( Request->sockinst );
 
@@ -1625,13 +1622,13 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
         // release this lock. Once it is acquired, regard the socket
         // as dead. Do not wait forever.
 
-#if 0 // XXXX: update to this when we're on a more recent kernel
+#if 0 // XXXX: update to this when we're on a more recent kernel ( > 4.4.0-87 )
         rc = down_write_killable( &ActiveRequest->sockinst->close_lock );
         if( -EINTR == rc )
         {
             pr_info( "Wait for in-flight ID %lx was killed\n", (unsigned long)id );
         }
-#endif
+#else
         int ct = 0;
         bool acquired = false;
         while( ct++ < 2 )
@@ -1652,7 +1649,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
                         ActiveRequest->sockinst->proc->pid,
                         (unsigned long)id );
         }
-
+#endif
         atomic64_set( &ActiveRequest->sockinst->close_blockid,
                       MT_ID_UNSET_VALUE );
     }
@@ -2118,7 +2115,11 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         if( 0 == ins[i].domid ) { continue; }
 
         rc = mwsocket_create_active_request( SockInst, &ins[i].actreq );
-        if( rc ) { goto ErrorExit; }
+        if( rc )
+        {
+            MYASSERT( !"mwsocket_create_active_request" );
+            goto ErrorExit;
+        }
 
         mt_request_pollset_query_t * request =
             &ins[i].actreq->rr.request.pollset_query;
@@ -2146,6 +2147,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         {
             // The response did not arrive, so we cannot process
             // it. WARNING: dropping error.
+            MYASSERT( !"wait_for_completion_timeout" );
             pr_warn( "Timed out while waiting for response %lx\n",
                      (unsigned long)ins[i].actreq->id );
             continue;
@@ -2215,6 +2217,7 @@ ErrorExit:
 }
 #endif // ENABLE_POLLING
 
+
 /**
  * @brief Thread function that monitors for local changes in pollset
  * and for remote IO events.
@@ -2257,6 +2260,7 @@ mwsocket_monitor( void * Arg )
         MYASSERT( 0 == rc );
         rc = 0;
 
+#ifdef ENABLE_POLLING
         // If there are any "real" open mwsockets at all, complete a
         // poll query exchange. The socket instance from this function
         // doesn't count, since it's only for poll monitoring.
@@ -2265,7 +2269,7 @@ mwsocket_monitor( void * Arg )
         {
             continue;
         }
-#ifdef ENABLE_POLLING
+
         rc = mwsocket_poll_handle_notifications( sockinst );
         if( rc )
         {
@@ -2444,17 +2448,14 @@ mwsocket_read( struct file * File,
     rc = mwsocket_find_active_request_by_id( &actreq, sockinst->blockid );
     if( rc )
     {
-        MYASSERT( !"Couldn't find outstanding request with ID." );
         goto ErrorExit;
     }
 
     if( !actreq->deliver_response )
     {
-        MYASSERT( !"Request was marked as non-blocking. No data is available." );
         rc = -EINVAL;
         goto ErrorExit;
     }
-
 
     if( sockinst->user_outstanding_accept )
     {
@@ -2755,8 +2756,8 @@ mwsocket_release( struct inode * Inode,
 
     sockinst->mwflags |= MWSOCKET_FLAG_RELEASED;
 
-    pr_info( "Processing release() on fd=%d remote=%llx\n",
-             sockinst->local_fd, (unsigned long long) sockinst->remote_fd );
+    pr_debug( "Processing release() on fd=%d remote=%llx\n",
+              sockinst->local_fd, (unsigned long long) sockinst->remote_fd );
 
     // Close the remote socket only if it exists. It won't exist in
     // the case where accept() was called but hasn't returned yet. In
@@ -2981,6 +2982,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         if( rc )
         {
             pr_err( "Socket replication: creation failed, domid=%d\n", Domid );
+            MYASSERT( !"mwsocket_send_message() / create" );
             goto ErrorExit;
         }
 
@@ -3008,6 +3010,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
                                     true );
         if( rc )
         {
+            MYASSERT( !"mwsocket_send_message() / bind" );
             pr_err( "Socket replication: bind failed, domid=%d\n", Domid );
             goto ErrorExit;
         }
@@ -3028,6 +3031,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         if( rc )
         {
             pr_err( "Socket replication: listen failed, domid=%d\n", Domid );
+            MYASSERT( !"mwsocket_send_message() / listen" );
             goto ErrorExit;
         }
     }
@@ -3064,6 +3068,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         {
             pr_err( "Socket replication: accept send failed, domid=%d\n",
                     Domid );
+            MYASSERT( !"mwsocket_send_message() / accept" );
             goto ErrorExit;
         }
     }
@@ -3090,11 +3095,12 @@ mwsocket_propogate_listeners( struct work_struct * Work )
 {
     int rc = 0;
 
-    // XXXX: we need to iterate over socket list, and we may need to add new sockets.
+    // We need to iterate over socket list, and we may need to add new
+    // sockets. However, we cannot lock sockinst_lock here because
+    // we're adding to the list too. Since we're adding only at the
+    // head, we'll be OK.
 
-    // Don't lock but use safe method and block user during process?
-
-//    mutex_lock( &g_mwsocket_state.sockinst_lock );
+    // mutex_lock( &g_mwsocket_state.sockinst_lock );
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
@@ -3116,7 +3122,7 @@ mwsocket_propogate_listeners( struct work_struct * Work )
         }
     }
 
-//    mutex_unlock( &g_mwsocket_state.sockinst_lock );
+    // mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
     CHECK_FREE( Work );
     return rc;
@@ -3167,8 +3173,8 @@ mwsocket_fini( void )
     mwsocket_instance_t * currsi = NULL;
     mwsocket_instance_t * nextsi = NULL;
 
-    // Destroy response consumer -- kick it. It might be waiting for
-    // the ring to become ready, or it might be waiting for responses
+    // Destroy response consumer -- kick it. It could be waiting for
+    // the ring to become ready, or for responses
     // to arrive on the ring. Wait for it to complete so shared
     // resources can be safely destroyed below.
     g_mwsocket_state.pending_exit = true;
