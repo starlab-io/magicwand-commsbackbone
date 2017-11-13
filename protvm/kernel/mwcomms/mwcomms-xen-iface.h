@@ -100,5 +100,4 @@ mw_xen_get_active_ins_domids( domid_t Domids[] );
 int
 mw_xen_reap_dead_ins( void );
 
-
 #endif // mwcomms_xen_iface_h

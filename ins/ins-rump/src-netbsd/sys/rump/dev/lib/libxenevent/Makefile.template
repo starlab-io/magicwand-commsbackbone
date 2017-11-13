@@ -1,10 +1,17 @@
 # This is run from the build directory, like:
 #  <RUMPRUNROOT>/obj-amd64-xen/buildrump.sh/sys/rump/dev/lib/libxenevent$
 # Therefore we actually have to go up the directory tree this far.
-CPPFLAGS += -I../../../../../../../platform/xen/xen/include
-CPPFLAGS += -I../../../../../../../include
-CPPFLAGS += -I../../../../../../../../../common
-CPPFLAGS += -I../../../../../../../../../ins/ins-rump/rump-common
+
+RUMPROOT = ../../../../../../..
+MWROOT   = $(RUMPROOT)/../..
+
+CPPFLAGS += -I$(RUMPROOT)/platform/xen/xen/include
+CPPFLAGS += -I$(RUMPROOT)/include
+
+CPPFLAGS += -I$(MWROOT)/common
+CPPFLAGS += -I$(MWROOT)/exports/imports
+CPPFLAGS += -I$(MWROOT)/ins/ins-rump/rump-common
+
 
 # Search host xen includes, such that <xen/xen.h> can be included
 CPPFLAGS += -Ixen

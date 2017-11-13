@@ -11,9 +11,9 @@
 ##
 ## Environmental requirements:
 ##
-##   This script is run in an environment that is configured for Rump
-##   (i.e. rumprun is in the PATH; one way to achieve this is to
-##         source in RUMP_ENV.sh)
+##   This script is run as root in an environment that is configured
+##   for Rump, i.e. rumprun is in the PATH; one way to achieve this is
+##   to source in RUMP_ENV.sh)
 ##
 ##   xend is installed and accessible via TCP on localhost
 ##      On Ubuntu 14.04 / Xen 4.4, change /etc/xen/xend-config.sxp so
@@ -271,6 +271,21 @@ class PortForwarder:
 
         self._enable_rule( chain, rule )
 
+        # Prerequisite iptables rule
+        # iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
+
+        rule = iptc.Rule()
+        rule.protocol = "tcp"
+
+        match = rule.create_match("conntrack")
+        match.ctstate = "RELATED,ESTABLISHED"
+
+        rule.target = iptc.Target(rule, "ACCEPT")
+
+        self._enable_rule(chain, rule)
+
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)
         for table in ( iptc.Table.FILTER, iptc.Table.NAT, 
@@ -416,6 +431,7 @@ class Ins:
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
+        #cmd += '-p -D 1234 ' # DEBUGGING ONLY **********************
         cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
         cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
 

@@ -47,7 +47,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
 
 // Using gettid() would be better, but it's only available on Linux
-#define _DEBUG_EMIT_META() \
+#define _DEBUG_EMIT_META()                                              \
     DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "%d [%s:%d] ", getpid(), SHORT_FILE, __LINE__ )
 
 #define _DEBUG_EMIT_BREAKPOINT()                \
@@ -118,7 +118,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_PRINT(...)                                              \
     pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__ );             \
     DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
     pthread_mutex_unlock( &__debug_mutex )
 

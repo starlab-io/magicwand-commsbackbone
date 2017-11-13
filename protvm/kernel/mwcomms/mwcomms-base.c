@@ -160,6 +160,10 @@
 
 #include <linux/file.h>
 
+#include <linux/netdevice.h>
+#include <linux/inetdevice.h>
+#include <net/if_inet6.h>
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -172,7 +176,7 @@
 
 #include "mwcomms-xen-iface.h"
 #include "mwcomms-socket.h"
-#include "mwcomms-backchannel.h"
+#include "mwcomms-netflow.h"
 
 #include "mwcomms-ioctls.h"
 
@@ -196,10 +200,7 @@ typedef struct _mwcomms_base_globals
     struct class  * dev_class;
     struct device * dev_device;
 
-    // Pointer to entire shared memory block
-//    mw_region_t     xen_shmem;
-    // Indicates that the memory has been shared
-//    struct completion ring_shared;
+    struct sockaddr   local_ip;
 
     // XXXX: list later (?)
     domid_t         client_domid;
@@ -256,10 +257,6 @@ module_init(mwbase_dev_init);
 module_exit(mwbase_dev_fini);
 
 
-//static int
-//mwbase_dev_client_ready_cb( domid_t ClientId );
-
-
 /******************************************************************************
  * Function definitions
  *****************************************************************************/
@@ -276,13 +273,106 @@ mwbase_client_ready_cb( domid_t Domid )
 }
 
 
+/**
+ * @brief Find the external-facing IP address. First look for an IPv4
+ * address, then look for IPv6.
+ */
+static int
+mwbase_find_extern_ip( void )
+{
+    int rc = -ENOENT;
+    bool found = false;
+
+    bzero( &g_mwcomms_state.local_ip, sizeof( g_mwcomms_state.local_ip ) );
+
+    read_lock(&dev_base_lock);
+
+    struct net_device * dev = first_net_device( &init_net );
+    while( NULL != dev )
+    {
+        if ( 0 != strcmp( dev->name, EXT_IFACE ) ||
+             (NULL == dev->ip_ptr ) )
+        {
+            dev = next_net_device( dev );
+            continue;
+        }
+
+        struct in_ifaddr * ifa = NULL;
+        for ( ifa = dev->ip_ptr->ifa_list; NULL != ifa; ifa = ifa->ifa_next )
+        {
+            pr_info( "Found address %pI4 on interface %s\n",
+                     &ifa->ifa_address, dev->name );
+            if ( found )
+            {
+                MYASSERT( !"External interface has multiple addresses" );
+                rc = -EADDRINUSE;
+                goto ErrorExit;
+            }
+
+            found = true;
+            rc = 0;
+            //Addr->sin_addr.s_addr = ifa->ifa_address;
+            g_mwcomms_state.local_ip.sa_family = AF_INET;
+            ((struct sockaddr_in *) &g_mwcomms_state.local_ip)->sin_port = 0;
+            ((struct sockaddr_in *) &g_mwcomms_state.local_ip)->sin_addr.s_addr
+                = ifa->ifa_address;
+        }
+        dev = next_net_device( dev );
+    } // while
+
+    if ( found ) { goto ErrorExit; }
+
+    // No IPv4 addresses found. Move on to IPv6. UNTESTED!!!
+    dev = first_net_device( &init_net );
+    while( NULL != dev )
+    {
+        struct inet6_dev * indev = dev->ip6_ptr;
+        if ( 0 != strcmp( dev->name, EXT_IFACE ) ||
+             (NULL == indev) )
+        {
+            dev = next_net_device( dev );
+            continue;
+        }
+
+        struct inet6_ifaddr * ifa = NULL;
+        list_for_each_entry(ifa, &indev->addr_list, if_list)
+        {
+            pr_info( "Found address %pI6c on interface %s\n",
+                     &ifa->addr, dev->name );
+            if ( found )
+            {
+                MYASSERT( !"External interface has multiple addresses" );
+                rc = -EADDRINUSE;
+                goto ErrorExit;
+            }
+
+            found = true;
+            rc = 0;
+            g_mwcomms_state.local_ip.sa_family = AF_INET6;
+            ((struct sockaddr_in6 *) &g_mwcomms_state.local_ip)->sin6_port = 0;
+            ((struct sockaddr_in6 *) &g_mwcomms_state.local_ip)->sin6_addr
+                = ifa->addr;
+        }
+        dev = next_net_device( dev );
+    } // while
+
+ErrorExit:
+    if ( !found )
+    {
+        MYASSERT( !"Failed to find IP address" );
+    }
+    read_unlock(&dev_base_lock);
+    return rc;
+}
+
+
 static int
 MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_init( void )
 {
     int rc = 0;
     struct module * mod = (struct module *) THIS_MODULE;
-    
+
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
              "################################\n",
@@ -339,11 +429,17 @@ mwbase_dev_init( void )
     }
 
 
-//    g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
+   rc = mwbase_find_extern_ip();
+   if ( rc )
+   {
+       pr_warn( "Failed to find external IP address. "
+                "Some functionality will be limited\n" );
+       rc = 0;
+   }
 
     // The socket iface is invoked when the ring sharing is
     // complete. Therefore, init it before the Xen iface.
-    rc = mwsocket_init();
+    rc = mwsocket_init( &g_mwcomms_state.local_ip );
     if ( rc )
     {
         goto ErrorExit;
@@ -369,6 +465,12 @@ mwbase_dev_init( void )
     }
 #endif
 
+   rc = mw_netflow_init( &g_mwcomms_state.local_ip );
+   if ( rc )
+   {
+       goto ErrorExit;
+   }
+
 ErrorExit:
     if ( rc )
     {
@@ -391,9 +493,7 @@ mwbase_dev_fini( void )
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
 
-#ifdef BACKCHANNEL
-    mw_backchannel_fini();
-#endif
+    mw_netflow_fini();
 
 #if 0
     if ( NULL != g_mwcomms_state.xen_shmem.ptr )

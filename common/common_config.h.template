@@ -134,4 +134,10 @@
 //
 #define PVM_USES_EVENT_CHANNEL 1
 
+//
+// What's a good value for this?
+//
+#define HEARTBEAT_INTERVAL_SEC 15
+
+
 #endif //common_config_h

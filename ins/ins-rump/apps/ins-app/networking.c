@@ -30,7 +30,6 @@
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp.h>
 
 #include <sys/param.h>
 #include <sys/sysctl.h>
@@ -48,8 +47,8 @@
 #include "translate.h"
 #include "mwerrno.h"
 #include "ins-ioctls.h"
-
 #include "pollset.h"
+#include <mw_netflow_iface.h>
 
 #define XE_NET_NETWORK_PARAM_WIDTH 30
 
@@ -210,13 +209,19 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     MYASSERT( SOCK_STREAM == native_type );
 
     Response->base.status = 0;
+
+    do
+    {
+        sockfd = socket( native_fam,
+                         native_type,
+                         native_proto );
+        // XXXX: handle occasional error from socket()
+    } while ( sockfd < 0 && ENOBUFS == errno );
     
-    sockfd = socket( native_fam,
-                     native_type,
-                     native_proto );
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"socket" );
     }
     else
     {
@@ -253,92 +258,147 @@ ErrorExit:
 }
 
 
+static int
+xe_net_sock_fcntl( IN  mt_request_socket_attrib_t  * Request,
+                   OUT mt_response_socket_attrib_t * Response,
+                   IN  thread_item_t               * WorkerThread )
+{
+    MYASSERT( MtSockAttribNonblock == Request->name );
+
+    int rc = 0;
+    int err = 0;
+    int flags = fcntl( WorkerThread->local_fd, F_GETFL );
+
+    if ( Request->modify )
+    {
+        if ( Request->val.v32 ) { flags |= O_NONBLOCK; }
+        else                    { flags &= ~O_NONBLOCK; }
+
+        rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
+        err = errno;
+        MYASSERT( 0 == rc );
+    }
+    else
+    {
+        Response->val.v32 = (uint32_t) (flags & O_NONBLOCK);
+    }
+
+    errno = err;
+    Response->base.status = rc ? XE_GET_NEG_ERRNO_VAL( err ) : 0;
+    return rc;
+}
+
+
 int
 xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
                     OUT mt_response_socket_attrib_t * Response,
                     IN  thread_item_t               * WorkerThread )
 {
-    int flags = 0;
-    int rc    = 0;
-    int level = 0;
-    int name  = 0;
-    int err   = 0;
-
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
     MYASSERT( 1 == WorkerThread->in_use );
     MYASSERT( WorkerThread->idx >= 0 );
 
-    if ( MtSockAttribNonblock == Request->attrib )
+    int rc    = 0;
+    int level = SOL_SOCKET; // good for most cases
+    int name  = 0;
+    int err   = 0;
+    // We have to manage the input/output buffer. If input, point to
+    // Request; if output, point to response.
+
+    bool timeval = false;
+    // Unconditionally stuff the optval into this struct....
+    struct timeval t = {0};
+    // set to reasonable default values
+    //mt_sockfeat_arg_t * optval = &Request->val.v32;
+    socklen_t len = sizeof( Request->val.v32 );
+    *(uint32_t *) &t = Request->val.v32;
+
+    if ( MtSockAttribNonblock == Request->name )
     {
-        flags = fcntl( WorkerThread->local_fd, F_GETFL );
-        if ( Request->modify )
-        {
-            if ( Request->value )
-            {
-                flags |= O_NONBLOCK;
-            }
-            else
-            {
-                flags &= ~O_NONBLOCK;
-            }
-            rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
-            err = errno;
-            MYASSERT( 0 == rc );
-        }
-        else
-        {
-            Response->outval = (uint32_t) (flags & O_NONBLOCK);
-        }
+        rc = xe_net_sock_fcntl( Request, Response, WorkerThread );
         goto ErrorExit;
     }
 
-    switch( Request->attrib )
+    switch( Request->name )
     {
     case MtSockAttribReuseaddr:
-        level = SOL_SOCKET;
         name = SO_REUSEADDR;
         break;
+    case MtSockAttribReuseport:
+        name = SO_REUSEPORT;
+        break;
     case MtSockAttribKeepalive:
-        level = SOL_SOCKET;
         name = SO_KEEPALIVE;
         break;
-    case MtSockAttribNodelay:
-        level = IPPROTO_TCP; //SOL_TCP;
-        name  = TCP_NODELAY;
     case MtSockAttribDeferAccept:
         //level = SOL_TCP;
         // This option is not supported on Rump. We'll drop it.
-        rc = 0;
         goto ErrorExit;
-    case MtSockAttribReuseport:
-        level = SOL_SOCKET;
-        name = SO_REUSEPORT;
+    case MtSockAttribNodelay:
+        level = IPPROTO_TCP; //SOL_TCP;
+        name  = TCP_NODELAY;
         break;
+    case MtSockAttribSndBuf:
+        name = SO_SNDBUF;
+        break;
+    case MtSockAttribRcvBuf:
+        name = SO_RCVBUF;
+        break;
+    case MtSockAttribSndTimeo:
+    case MtSockAttribRcvTimeo:
+        timeval = true;
+        name = (Request->name == MtSockAttribSndTimeo
+                ? SO_SNDTIMEO : SO_RCVTIMEO );
+        // Point arg to timeval; set t whether or not we modify
+        t.tv_sec  = Request->val.t.s;
+        t.tv_usec = Request->val.t.us;
+        //optval = (void *) &t;
+        len = sizeof( t );
+        break;
+    case MtSockAttribSndLoWat:
+        name = SO_SNDLOWAT;
+        break;
+    case MtSockAttribRcvLoWat:
+        name = SO_RCVLOWAT;
+        break;
+    case MtSockAttribGlobalCongctl:
+    case MtSockAttribGlobalDelackTicks:
+        // globals [ via sysctl() ]
+        goto ErrorExit;
     default:
         MYASSERT( !"Unrecognized attribute given" );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  level, name, Request->value );
+    DEBUG_PRINT( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
+                 WorkerThread->idx,
+                 WorkerThread->public_fd, WorkerThread->local_fd,
+                 level, name, Request->val );
 
-    socklen_t len = sizeof(Request->value);
-    if ( Request->modify )
+    if ( Request->modify ) // Set the feature's value
     {
         rc = setsockopt( WorkerThread->local_fd,
                          level, name,
-                         &Request->value, len );
+                         (void *) &t, len );
     }
-    else
+    else // Get the feature's value, put it into t
     {
         rc = getsockopt( WorkerThread->local_fd,
                          level, name,
-                         &Request->value, &len );
+                         (void *) &t, &len );
+        if ( timeval )
+        {
+            Response->val.t.s  = t.tv_sec;
+            Response->val.t.us = t.tv_usec;
+        }
+        else
+        {
+            bzero( &Response->val, sizeof(Response->val) );
+            Response->val.v32 = *(uint32_t *) &t;
+        }
     }
 
     if ( rc )
@@ -356,6 +416,7 @@ ErrorExit:
 
     return 0;
 }
+
 
 int
 xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
@@ -533,13 +594,13 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
         ++g_state.network_stats_socket_ct;
 
+        populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
+
         DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd,
                       inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
     }
-
-    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
