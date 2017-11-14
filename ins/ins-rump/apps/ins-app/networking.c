@@ -251,7 +251,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     ++g_state.network_stats_socket_ct;
 
-    DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
+    DEBUG_PRINT ( "**** Thread %d <== socket %lx / %d\n",
                   WorkerThread->idx, WorkerThread->public_fd, sockfd );
 ErrorExit:
     return rc;
@@ -373,10 +373,10 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         goto ErrorExit;
     }
 
-    DEBUG_PRINT( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
-                 WorkerThread->idx,
-                 WorkerThread->public_fd, WorkerThread->local_fd,
-                 level, name, Request->val );
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is calling get/setsockopt %d/%d/%d\n",
+                  WorkerThread->idx,
+                  WorkerThread->public_fd, WorkerThread->local_fd,
+                  level, name, Request->value );
 
     if ( Request->modify ) // Set the feature's value
     {
@@ -437,7 +437,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is connecting to %s:%d\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is connecting to %s:%d\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
@@ -473,7 +473,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding on %s:%d\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is binding on %s:%d\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
@@ -484,6 +484,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
     if ( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror( "bind" );
         MYASSERT ( !"bind" );
     }
     else
@@ -507,7 +508,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     MYASSERT( Request->base.sockfd == WorkerThread->public_fd );
     MYASSERT( 1 == WorkerThread->in_use );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is listening\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is listening\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd );
 
@@ -516,6 +517,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     if( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror( "listen" );
         MYASSERT( !"listen" );
     }
     
@@ -541,7 +543,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     
     bzero( &sockaddr, addrlen );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is accepting.\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx/%d) is accepting.\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd );
 
@@ -561,6 +563,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror( "accept" );
         Response->base.sockfd = -1;
         // This happens frequently in non-blocking IO. Don't assert.
     }
@@ -596,7 +599,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
         populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
 
-        DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
+        DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) accepted from %s:%d\n",
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd,
                       inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
@@ -631,7 +634,7 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     Response->count       = 0;
     Response->base.status = 0;
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is recvfrom() 0x%x bytes\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is recvfrom() 0x%x bytes\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   Request->requested );
@@ -731,7 +734,7 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving 0x%x bytes\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is receiving 0x%x bytes\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   Request->requested );
@@ -831,7 +834,7 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 
     if ( MT_INVALID_SOCKET_FD != WorkerThread->local_fd )
     {
-        DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
+        DEBUG_PRINT ( "Worker thread %d (socket %lx/%d) is closing\n",
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd );
 
@@ -898,7 +901,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     // Pass flags back to the PVM for processing
     Response->flags       = Request->flags;
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is sending %ld bytes\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is sending %ld bytes\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
                   maxExpected );

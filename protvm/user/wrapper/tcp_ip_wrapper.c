@@ -249,12 +249,13 @@ mwcomms_write_request( IN  int                     MwFd,
     do
     {
         ct = libc_write( MwFd, Request, Request->base.size );
-        if ( !( ct < 0 && EAGAIN == errno ) )
+        if ( !( ct < 0 &&
+                ( EINTR == errno || EAGAIN == errno ) ) )
         {
             break;
         }
 
-        // rc == -1, errno == EAGAIN. So, try again...
+        // rc == -1, errno == EAGAIN or errno == EINTR. So, try again...
         DEBUG_PRINT( "write() failed, trying again.\n" );
 #if EAGAIN_TRIGGERS_SLEEP
         // The cost of this failing is negligible, so ignore return code.
@@ -264,6 +265,7 @@ mwcomms_write_request( IN  int                     MwFd,
     } while ( true );
 
     err = errno;
+    MYASSERT( 0 == err );
 
     if ( ct < 0 )
     {

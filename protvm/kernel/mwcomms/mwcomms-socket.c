@@ -195,7 +195,7 @@ struct thread_info ti; // DEBUG ONLY
 #define POLL_DEBUG_MESSAGES 0
 
 #if POLL_DEBUG_MESSAGES
-#  define pr_verbose_poll(...) pr_debug(__VA_ARGS)
+#  define pr_verbose_poll(...) pr_debug(__VA_ARGS__)
 #else
 #  define pr_verbose_poll(...) ((void)0)
 #endif
@@ -341,15 +341,12 @@ typedef struct _mwsocket_instance
     // List of the fellow listening mwsockets; needed for destruction.
     struct list_head            sibling_listener_list;
 
-//  =======
-
     // Who is on the other end of the INS?
     struct sockaddr      peer;
 
     // Is this socket listening?
     uint16_t             listen_port;
     struct sockaddr      local_bind;
-//>>>>>>> comms_channel
 
     // poll() support: the latest events on this socket
     unsigned long        poll_events;
@@ -1165,8 +1162,8 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
 
     if( SockInst->remote_close_requested )
     {
-        pr_info( "Socket %x/%d was already closed on the INS. "
-                  "Not requesting another remote close.\n",
+        pr_info( "Socket %llx/%d was already closed on the INS. "
+                  "Not requesting a remote close.\n",
                   SockInst->remote_fd, SockInst->local_fd );
         goto ErrorExit;
     }
@@ -1178,7 +1175,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     rc = mwsocket_create_active_request( SockInst, &actreq );
     if( rc ) { goto ErrorExit; }
 
-    pr_debug( "Request %lx is closing socket %x/%d and %s wait\n",
+    pr_debug( "Request %lx is closing socket %llx/%d and %s wait\n",
               (unsigned long)actreq->id, SockInst->remote_fd, SockInst->local_fd,
               WaitForResponse ? "will" : "won't" );
 
@@ -1669,7 +1666,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
     {
     // case MtResponseSocketAccept: //-- handled in mwsocket_postproc_in_task()
     case MtResponseSocketCreate:
-        pr_debug( "Create in %d [%s]: fd %d ==> %x\n",
+        pr_debug( "Create in %d [%s]: fd %d ==> %llx\n",
                   ActiveRequest->sockinst->proc->pid,
                   ActiveRequest->sockinst->proc->comm,
                   ActiveRequest->sockinst->local_fd,
@@ -1741,7 +1738,7 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         // failed. We cannot clean up the remote side because we don't
         // have the backing sockinst to send the close request.
         pr_err( "Failed to create local socket instance. "
-                "Leaking remote socket %x; local error %d\n",
+                "Leaking remote socket %llx; local error %d\n",
                 Response->base.sockfd, rc );
         goto ErrorExit;
     }
@@ -1773,7 +1770,7 @@ mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
         = Response->base.status
         = acceptinst->local_fd;
 
-    pr_debug( "Accept in %d [%s]: fd %d ==> %x\n",
+    pr_debug( "Accept in %d [%s]: fd %d ==> %llx\n",
               acceptinst->proc->pid, acceptinst->proc->comm,
               acceptinst->local_fd, acceptinst->remote_fd );
 ErrorExit:
@@ -1987,6 +1984,11 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   (unsigned long) ActiveRequest->sockinst->remote_fd );
         base->sockfd = ActiveRequest->sockinst->remote_fd;
     }
+
+    // Either we don't have a backing remote socket, or else the remote FD is valid
+    MYASSERT( MtRequestSocketCreate == base->type ||
+              MtRequestPollsetQuery == base->type ||
+              MW_SOCKET_IS_FD( base->sockfd ) );
 
     // Hold this for duration of the operation. 
     mutex_lock( &g_mwsocket_state.request_lock );
@@ -2210,7 +2212,7 @@ mwsocket_response_consumer( void * Arg )
     //         until there are no more
     //
     
-    pr_debug("Entering response consumer loop\n");
+    pr_debug( "Entering response consumer loop\n" );
 
     while( true )
     {
@@ -2632,7 +2634,7 @@ mwsocket_handle_attrib( IN struct file       * File,
                         IN mwsocket_attrib_t * SetAttribs )
 {
     int rc = 0;
-    mwsocket_instance_t * sockinst = NULL;
+    mwsocket_instance_t   * sockinst = NULL;
     mwsocket_active_request_t * actreq = NULL;
     mt_request_socket_attrib_t * request = NULL;
     mt_response_socket_attrib_t * response = NULL;
@@ -2748,8 +2750,9 @@ mwsocket_read( struct file * File,
     }
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
-        // Keep the request alive. The user might try again.
+        // Keep the request alive and stage for another read attempt.
         pr_warn( "read() was interrupted\n" );
+        sockinst->read_expected = true;
         rc = -EINTR;
         goto ErrorExit;
     }
@@ -2836,8 +2839,8 @@ mwsocket_write( struct file * File,
 
     if( sockinst->read_expected )
     {
-        MYASSERT( !"Calling write() but read() expected" );
-        rc = -EINVAL;
+        MYASSERT( !"write() called but read() expected" );
+        rc = -EIO;
         goto ErrorExit;
     }
 
@@ -2900,6 +2903,7 @@ mwsocket_write( struct file * File,
     sent = true;
 
 ErrorExit:
+
     // We're returning an error - don't expect a read
     if( rc )
     {
@@ -3055,6 +3059,8 @@ mwsocket_release( struct inode * Inode,
         rc = mwsocket_close_remote( sockinst, true );
         // fall-through
     }
+
+    MYASSERT( 1 == atomic_read( &sockinst->refct ) );
     mwsocket_put_sockinst( sockinst );
 
 ErrorExit:

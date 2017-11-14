@@ -79,7 +79,7 @@ ENDPOINT_FMT = ADDR_FMT + "H"
 ##
 
 # mw_netflow_info_t, post-signature
-INFO_FMT = "!HQQQQi" + ENDPOINT_FMT + ENDPOINT_FMT + "QQQ"
+INFO_FMT = "!HQQQQQ" + ENDPOINT_FMT + ENDPOINT_FMT + "QQQ"
 
 # Feature response, post-signature
 FEATURE_RES_FMT = "!i16s"
@@ -158,6 +158,7 @@ class Endpoint:
         elif 6 == af:
             self._ip = ip
         else:
+            import pdb;pdb.set_trace()
             raise RuntimeError( "Invalid IP address family" )
 
     def __str__ ( self ):

@@ -71,6 +71,8 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_EMIT_BREAKPOINT() ((void)0)
 #endif
 
+#define MWCOMMS_DEBUG_ATTRIB  __attribute__((optimize("O0")))
+
 // Unconditionally emits breakpoint
 #define BARE_DEBUG_BREAK() _DEBUG_EMIT_BREAKPOINT()
 
@@ -127,6 +129,16 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG
+
+
+#ifdef MYVERBOSE
+
+#  define VERBOSE_PRINT( ... )                                       \
+        DEBUG_PRINT( __VA_ARGS__ )
+#else
+#   define VERBOSE_PRINT( ... ) ((void)0)
+
+#endif //MYVERBOSE
 
 
 #ifndef MIN

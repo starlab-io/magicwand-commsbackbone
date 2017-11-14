@@ -6,8 +6,10 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 
-#define NUM_SOCKS 1
+#define NUM_SOCKS 60
+
 #define BUFF_SIZE 32
 #define START_PORT 2000
 
@@ -31,9 +33,11 @@ thread_func( void *arg )
     listen_fd = socket( AF_INET, SOCK_STREAM, 0 );
     if( listen_fd < 0 ) 
     { 
-        printf("Socket Error\n"); 
+        printf("Socket Error: Thread: %d\n", t_info->t_num ); 
         goto ErrorExit;
     }
+
+    printf( "Created socket for thread %d\n", t_info->t_num);
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl( INADDR_ANY );
@@ -42,12 +46,12 @@ thread_func( void *arg )
     err = bind( listen_fd, ( struct sockaddr* ) &serv_addr, sizeof( serv_addr ) );
     if( err ) 
     { 
-        perror("BIND ERROR"); 
+        perror("BIND ERROR");
+        printf("Errno: %d\n", errno );
+        printf( "thread: %d, local_fd: %d\n", t_info->t_num, listen_fd ); 
         goto ErrorExit;
     }
-
-    printf("Thread %d listening on port %d fd: %d \n",
-           t_info->t_num, t_info->port, listen_fd );
+    printf( "Bind succeded for thread %d\n", t_info->t_num );
 
     err = listen( listen_fd, 3 );
     if( err ) 
@@ -55,7 +59,6 @@ thread_func( void *arg )
         perror("LISTEN ERROR");
         goto ErrorExit;
     }
-
     conn_fd = accept( listen_fd, ( struct sockaddr* ) &conn_addr, &addrlen );
     if( conn_fd < 0 ) 
     { 
@@ -103,6 +106,7 @@ main()
         t_info[i].port = i + START_PORT;
         pthread_create( &t_info[i].thread_id, NULL,
                         &thread_func, (void *) &t_info[i] );
+        sleep(1);
     }
 
     for( int i = 0; i < NUM_SOCKS; i++ )

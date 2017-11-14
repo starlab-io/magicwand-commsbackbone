@@ -23,7 +23,7 @@ fi
 #$cpu_arg="vcpu-set 1,2"
 #$cpu_arg="vcpus=2"
 
-rumprun -S xen -dip -D $port -M 512 -N mw-ins-rump \
+rumprun -S xen -dip -D 1234 -M 5120 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/8,$_GW \
         $target

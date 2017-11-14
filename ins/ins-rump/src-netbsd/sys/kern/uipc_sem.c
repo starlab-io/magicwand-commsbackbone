@@ -87,7 +87,7 @@ MODULE(MODULE_CLASS_MISC, ksem, NULL);
 
 #define	SEM_MAX_NAMELEN		14
 
-#define	SEM_NSEMS_MAX		256
+#define	SEM_NSEMS_MAX		20000
 #define	KS_UNLINKED		0x01
 
 static kmutex_t		ksem_lock	__cacheline_aligned;

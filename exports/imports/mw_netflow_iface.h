@@ -93,7 +93,7 @@ typedef struct _mw_base
 
 #define NETFLOW_INFO_ADDR_LEN 16
 
-typedef  int32_t mw_socket_fd_t; // must match mwsocket.h
+typedef  int64_t mw_socket_fd_t; // must match mwsocket.h
 
 typedef struct _mw_addr
 {

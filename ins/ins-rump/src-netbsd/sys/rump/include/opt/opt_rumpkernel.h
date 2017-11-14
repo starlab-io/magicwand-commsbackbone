@@ -9,7 +9,8 @@
 
 #define MODULAR 1
 #define MULTIPROCESSOR 1
-#define MAXUSERS 32
+//#define MAXUSERS 32
+#define MAXUSERS 3072
 
 #define DEBUGPRINT
 
