@@ -16,4 +16,15 @@ docmd() {
 }
 
 docmd scp -rq $PVM_USER@$PVM_IP:common /tmp/mwpvm
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi
+
 docmd scp -rq $PVM_USER@$PVM_IP:protvm /tmp/mwpvm
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi

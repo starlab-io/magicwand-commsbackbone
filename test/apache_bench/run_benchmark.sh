@@ -46,15 +46,24 @@ echo "#Size(bytes)      Average Response Time ( $ATTEMPTS reqests )" > $ABS_PATH
 for i in $( ls $FILEDIR | sort -n ); do
     
     scp $FILEDIR/$i $PVM_USER@$PVM_IP:$INDEXDIR/index.html >> /dev/null
-    if [ $? -ne 0 ]; then
+    RC=$?
+    if [ $RC -ne 0 ]; then
         echo "Command failed"
-        break
+        exit $RC
     fi
 
-    AVG_RESPONSE=`ab -n $ATTEMPTS "http://$ADDR/" | grep "\[ms\] (mean)" | awk '{ print $4 }'`
-    if [ $? -ne 0 ]; then
+    RAW_INPUT=$(ab -n $ATTEMPTS "http://$ADDR/")
+    RC=$?
+    if [ $RC -ne 0 ]; then
         echo "Command failed"
-        break
+        exit $RC
+    fi
+
+    AVG_RESPONSE=`echo "$RAW_INPUT" | grep "\[ms\] (mean)" | awk '{ print $4 }'`
+    RC=$?
+    if [ $RC -ne 0 ]; then
+        echo "Command failed"
+        exit $RC
     fi
 
     SIZE=$i
