@@ -376,7 +376,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is calling get/setsockopt %d/%d/%d\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
-                  level, name, Request->value );
+                  level, name, Request->val );
 
     if ( Request->modify ) // Set the feature's value
     {
@@ -564,7 +564,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         perror( "accept" );
-        Response->base.sockfd = -1;
+        // N.B. Response->base.sockfd is set by xe_net_set_base_response()
         // This happens frequently in non-blocking IO. Don't assert.
     }
     else

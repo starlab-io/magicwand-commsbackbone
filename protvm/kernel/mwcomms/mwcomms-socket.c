@@ -283,6 +283,11 @@ struct _mwsocket_active_request;
  *
  * An mwsocket is built on top of the mwsocket filesystem. A good
  * example of this model is found in the Linux kernel: fs/pipe.c
+ *
+ * XXXX: This structure should contain a lock so that only one thread
+ * can manipulate it at a time. There could be a race condition
+ * between the mwsocket_response_consumer() thread and
+ * mwsocket_release().
  */
 typedef struct _mwsocket_instance
 {
@@ -467,7 +472,7 @@ typedef struct _mwsocket_globals
     // Used to signal socket subsystem threads
     struct completion xen_iface_ready;
     bool              is_xen_iface_ready;
-    
+
     // Lock on ring access
     struct mutex request_lock;
 
@@ -519,15 +524,6 @@ typedef struct _mwsocket_replication_work
 } mwsocket_replication_work_t;
 
 
-// For multi-INS sockets: to make socket reissue accept()
-typedef struct _mwsocket_sticky_accept_work
-{
-    struct work_struct    base;
-    domid_t               domid;
-    mwsocket_instance_t * sockinst;
-} mwsocket_sticky_accept_work_t;
-
-
 typedef struct _mwsocket_sock_replicate_args
 {
     mwsocket_instance_t * sockinst;
@@ -575,11 +571,6 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
 
 static int
 mwsocket_new_ins( domid_t Domid );
-
-#if 0
-static void
-mwsocket_sticky_accept_worker( IN struct work_struct * Work );
-#endif
 
 static int
 mwsocket_propogate_listeners( struct work_struct * Work );
@@ -1152,7 +1143,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     int rc = 0;
     mwsocket_active_request_t * actreq = NULL;
     mt_request_socket_close_t * close = NULL;
-    
+
     if( !MW_SOCKET_IS_FD( SockInst->remote_fd ) )
     {
         MYASSERT( !"Not an MW socket" );
@@ -1318,6 +1309,8 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
     {
         if( curr->id == Id )
         {
+            // XXXX: Ideally we could lock the socket here to
+            // guarantee per-socket concurrency
             *Request = curr;
             rc = 0;
             break;
@@ -1325,6 +1318,26 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
     }
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 
+    if ( rc ) { goto ErrorExit; }
+
+    MYASSERT( *Request );
+
+    // We found the active request but its socket is dead. This
+    // happens when the host process dies unexpectedly. Fail the
+    // request.
+    // XXXX: A mutex could provide a cleaner way to avoid working
+    // on a dead socket.
+    if ( (*Request)->sockinst->mwflags & MWSOCKET_FLAG_RELEASED )
+    {
+        pr_debug( "Found request ID=%lx for dead socket %lx/%d.\n",
+                  (unsigned long) Id,
+                  (unsigned long) (*Request)->sockinst->remote_fd,
+                  (*Request)->sockinst->local_fd );
+//        MYASSERT( !"Response for dead socket" );
+//        rc = -ECANCELED;
+    }
+
+ErrorExit:
     return rc;
 }
 
@@ -1558,8 +1571,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
     {
         if( DEBUG_SHOW_TYPE( Response->base.type ) )
         {
-            pr_verbose( "close() against fd %d will no longer wait for %lx \
-                        completion\n",
+            pr_verbose( "close() against fd %d no longer awaiting %lx completion\n",
                         ActiveRequest->sockinst->local_fd,
                         (unsigned long)ActiveRequest->id );
         }
@@ -1632,7 +1644,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->proc->comm );
     }
 
-    if ( MtResponseSocketAccept == Response->base.type )
+    if( MtResponseSocketAccept == Response->base.type )
     {
         // No longer accepting on this sockinst
         ActiveRequest->sockinst->mwflags &= ~MWSOCKET_FLAG_ACCEPT;
@@ -2007,7 +2019,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         rc = -EINVAL;
         goto ErrorExit;
     }
-    
+
     // Given the client ID, get a request slot: the pointer to the
     // request buffer and an opaque handle
     rc = mw_xen_get_next_request_slot( WaitForRing,
@@ -2045,7 +2057,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     memcpy( (void *) req,
             &ActiveRequest->rr.request,
             ActiveRequest->rr.request.base.size );
-    
+
     rc = mw_xen_dispatch_request( h );
     // Fall-through
 
@@ -2342,6 +2354,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     typedef struct _mwsocket_ins_desc
     {
         domid_t domid; // 0 ==> invalid
+        mwsocket_instance_t * sockinst; // useful for debugging
         mwsocket_active_request_t * actreq;
     } mwsocket_ins_desc_t;
 
@@ -2355,8 +2368,14 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if( SockInst == curr ) { continue; }
-        if( !curr->ins_alive ) { continue; }
+        if( SockInst == curr  || // ignore the PollMonitor sockinst
+            !curr->ins_alive  || // the socket's INS is dead
+                                 // the socket has been released
+            (curr->mwflags & (MWSOCKET_FLAG_CLOSED | MWSOCKET_FLAG_RELEASED)) ) 
+        {
+            continue;
+        }
+
         if( count == MAX_INS_COUNT ) { break; }
 
         domid_t domid = MW_SOCKET_CLIENT_ID( curr->remote_fd );
@@ -2373,6 +2392,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
             {
                 count++;
                 ins[i].domid = domid;
+                ins[i].sockinst = curr;
                 break;
             }
         }
@@ -2559,8 +2579,6 @@ ErrorExit:
 }
 
 
-
-
 /**
  * @brief Processes an mwsocket creation request. Reachable via IOCTL.
  */
@@ -2605,6 +2623,7 @@ mwsocket_create( OUT mwsocket_t * SockFd,
                                 true );
     if( rc ) { goto ErrorExit; }
 
+    // The request is via ioctl(), so we're giving the socket to the user.
     sockinst->mwflags |= MWSOCKET_FLAG_USER;
 
 ErrorExit:
@@ -2858,7 +2877,7 @@ mwsocket_write( struct file * File,
         sockinst->read_expected = true;
         goto ErrorExit;
     }
-    
+
     // Otherwise... Create a new active request
     rc = mwsocket_create_active_request( sockinst, &actreq );
     if( rc ) { goto ErrorExit; }
@@ -3060,7 +3079,13 @@ mwsocket_release( struct inode * Inode,
         // fall-through
     }
 
-    MYASSERT( 1 == atomic_read( &sockinst->refct ) );
+    // XXXX: The socket must be destroyed. We force its refct down to
+    // 1 here. Cases where it isn't 1 should be investigated; one such
+    // case is on accept().
+
+    // MYASSERT( 1 == atomic_read( &sockinst->refct ) );
+    atomic_set( &sockinst->refct, 1 );
+
     mwsocket_put_sockinst( sockinst );
 
 ErrorExit:

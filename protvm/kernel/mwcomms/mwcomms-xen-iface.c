@@ -417,21 +417,21 @@ mw_xen_irq_event_handler( int Port, void * Data )
 
 
 static int
-mw_xen_send_event( void * Handle )
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_send_event( mwcomms_ins_data_t * Ins )
 {
-   struct evtchn_send send;
-   mwcomms_ins_data_t * ins = ( mwcomms_ins_data_t * ) Handle;
-   int rc = 0;
+    struct evtchn_send send = {0};
+    int rc = 0;
 
-   send.port = ins->common_evtchn;
+    send.port = Ins->common_evtchn;
 
-   rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
-   if ( rc )
-   {
-       pr_err( "Failed to send event\n" );
-   }
+    rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+    if ( rc )
+    {
+        pr_err( "Failed to send event\n" );
+    }
 
-   return rc;
+    return rc;
 }
 
 
@@ -1053,7 +1053,7 @@ ErrorExit:
 
 
 static void
-mw_xen_socket_wait( long TimeoutJiffies )
+mw_xen_wait( long TimeoutJiffies )
 {
     set_current_state( TASK_INTERRUPTIBLE );
     schedule_timeout( TimeoutJiffies );
@@ -1139,7 +1139,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         }
 
         // Wait and try again...
-        mw_xen_socket_wait( RING_FULL_TIMEOUT );
+        mw_xen_wait( RING_FULL_TIMEOUT );
     } while( true );
     
     *Dest = (mt_request_generic_t *)
