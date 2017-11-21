@@ -417,15 +417,15 @@ mw_xen_irq_event_handler( int Port, void * Data )
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+//MWSOCKET_DEBUG_ATTRIB
 mw_xen_send_event( mwcomms_ins_data_t * Ins )
 {
-    struct evtchn_send send = {0};
+    MYASSERT( Ins );
+
     int rc = 0;
+    struct evtchn_send send = { .port = Ins->common_evtchn };
 
-    send.port = Ins->common_evtchn;
-
-    rc = HYPERVISOR_event_channel_op(EVTCHNOP_send, &send);
+    rc = HYPERVISOR_event_channel_op( EVTCHNOP_send, &send );
     if ( rc )
     {
         pr_err( "Failed to send event\n" );
@@ -438,24 +438,24 @@ mw_xen_send_event( mwcomms_ins_data_t * Ins )
 static bool
 mw_xen_is_evt_chn_closed( mwcomms_ins_data_t * Ins )
 {
-   struct evtchn_status status;
-   int                  rc;
 
-   status.dom = DOMID_SELF;
-   status.port = Ins->common_evtchn;
+    MYASSERT( Ins );
+    int                  rc;
+    struct evtchn_status status = { .dom = DOMID_SELF,
+                                    .port = Ins->common_evtchn };
 
-   rc = HYPERVISOR_event_channel_op( EVTCHNOP_status, &status );
-   if ( rc < 0 )
-   {
-       return true;
-   }
+    rc = HYPERVISOR_event_channel_op( EVTCHNOP_status, &status );
+    if ( rc < 0 )
+    {
+        return true;
+    }
 
-   if ( status.status != EVTCHNSTAT_closed )
-   {
-      return false;
-   }
+    if ( status.status != EVTCHNSTAT_closed )
+    {
+        return false;
+    }
 
-   return true;
+    return true;
 }
 
 
@@ -642,7 +642,7 @@ ErrorExit:
 
 static int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_vm_port_is_bound( const char * Path )
+mw_xen_bind_evt_chn( const char * Path )
 {
     char * is_bound_str = NULL;
     mwcomms_ins_data_t * ins = NULL;
@@ -811,7 +811,7 @@ mw_xen_ins_found( IN const char * Path )
     // Create unbound event channel with client
     err = mw_xen_create_unbound_evt_chn( curr );
     if ( err ) { goto ErrorExit; }
-   
+
     // Offer Grant to Client
     err = mw_xen_offer_grant( curr );
     if( err ) { goto ErrorExit; }
@@ -1218,7 +1218,7 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+//MWSOCKET_DEBUG_ATTRIB
 mw_xen_dispatch_request( void * Handle )
 {
     int rc = 0;
@@ -1268,7 +1268,7 @@ mw_xen_xenstore_state_changed( struct xenbus_watch * W,
 
     if ( strstr( V[ XS_WATCH_PATH ], VM_EVT_CHN_BOUND_KEY ) )
     {
-        rc = mw_xen_vm_port_is_bound( V[ XS_WATCH_PATH ] );
+        rc = mw_xen_bind_evt_chn( V[ XS_WATCH_PATH ] );
         if ( rc )
         {
             pr_err( "Problem with binding event chn\n ");

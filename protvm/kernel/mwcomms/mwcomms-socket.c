@@ -957,8 +957,7 @@ mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
 
     // This sockinst was pollable (i.e. able to receive events) and
     // now we're destroying it, so let the poll monitor know.
-
-    if( !(MWSOCKET_FLAG_POLLABLE & SockInst->mwflags) )
+    if( MWSOCKET_FLAG_POLLABLE & SockInst->mwflags )
     {
         atomic_dec( &g_mwsocket_state.poll_sock_count );
     }
@@ -2326,7 +2325,7 @@ mwsocket_response_consumer( void * Arg )
                 memcpy( &actreq->rr.response, response, response->base.size );
                 actreq->response_populated = true;
             }
-            complete_all( &actreq->arrived );
+            complete( &actreq->arrived );
         }
 
         // We're done with this slot of the ring
