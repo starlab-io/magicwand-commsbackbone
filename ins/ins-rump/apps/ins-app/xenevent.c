@@ -1158,6 +1158,7 @@ init_state( void )
         rc = sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
         if( rc )
         {
+            perror( "sem_init()" );
             DEBUG_PRINT( "Semaphore %d failed init\n", i );
             fflush(stdout);
             sched_yield();
@@ -1166,6 +1167,7 @@ init_state( void )
         rc = sem_init( &curr->oplock, 0, 1 );
         if( rc )
         {
+            perror( "sem_init()" );
             DEBUG_PRINT( "Semaphore %d failed init\n", i );
             fflush(stdout);
             sched_yield();
@@ -1244,7 +1246,6 @@ init_state( void )
 
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
-    //xe_yield();
 
     sched_yield();
     
@@ -1316,10 +1317,6 @@ message_dispatcher( void )
     {
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
-        mt_request_type_t request_type;
-
-        // Always allow other threads to run in case there's work.
-        xe_yield();
 
         VERBOSE_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
@@ -1375,27 +1372,14 @@ message_dispatcher( void )
 
         if ( more_processing )
         {
-            // Tell the thread to process the buffer
+            // Tell the thread to process the buffer. No yield should be needed.
             DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
 
             sem_post( &assigned_thread->awaiting_work_sem );
         }
-
-        // Remember: we'll yield next...
-        request_type = MT_REQUEST_GET_TYPE( myitem->request );
-        if ( request_type == MtRequestSocketConnect
-             || request_type == MtRequestSocketAccept)
-        {
-            xe_yield();
-        }
-        else 
-        {
-            sched_yield();
-        }
     } // while
     
 ErrorExit:
-    xe_yield();
     return rc;
 
 } // message_dispatcher
