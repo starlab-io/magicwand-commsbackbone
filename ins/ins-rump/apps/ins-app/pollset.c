@@ -173,7 +173,7 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
             fds[ i ].fd = -1;
             continue;
         }
-        DEBUG_PRINT( "Including FD %x/%d in poll()\n",
+        VERBOSE_PRINT( "Including FD %lx/%d in poll()\n",
                      thisti->public_fd, thisti->local_fd );
         fds[ i ].fd =  thisti->local_fd;
     }
@@ -218,7 +218,7 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 
         thisti->poll_events = thisqi->events;
 
-        DEBUG_PRINT( "Found IO events %x => %x on socket %x/%d\n",
+        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n",
                      thisfd->revents, thisqi->events,
                      thisti->public_fd, thisti->local_fd );
         ++itemidx;

@@ -17,6 +17,8 @@
  ***************************************************************************/
 
 #include "mwsocket.h"
+#include <mw_netflow_iface.h> // common definitions for socket features
+
 
 #define _common_config_defined
 #   include "common_config.h"
@@ -34,7 +36,7 @@
 
 // Structures are shared across VMs in code built by different gccs.
 // Make sure they agree on the layout.
-#define MT_STRUCT_ATTRIBS __attribute__ ((__packed__))
+//#define MT_STRUCT_ATTRIBS __attribute__ ((__packed__))
 
 typedef uint16_t mt_size_t;
 typedef uint8_t  mt_bool_t;
@@ -86,15 +88,10 @@ typedef uint64_t mt_id_t;
 
 // PVM-initiated close() will not execute while this operation is in-process
 #define _MT_TYPE_MASK_CLOSE_WAITS 0x0400
-
-//#define _MT_TYPE_MASK_INS_MAIN    0x1000 // INS should process in main thread
+#define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
 
 #define MT_ALLOCATES_FD(x)   ( (x) & _MT_TYPE_MASK_ALLOC_FD )
 #define MT_DEALLOCATES_FD(x) ( (x) & _MT_TYPE_MASK_DEALLOC_FD )
-
-#define MT_CLOSE_WAITS(r)    ( (r)->base.type & _MT_TYPE_MASK_CLOSE_WAITS )
-
-// The INS should process this request in its main thread - there is no thread assignment
 
 typedef enum
 {
@@ -140,7 +137,7 @@ typedef enum
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
     MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
-} mt_response_id_t;
+} mt_response_type_t;
 
 typedef uint32_t mt_addrlen_t;
 
@@ -295,7 +292,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
     mt_sig_t            sig;
 
     // MtResponse*
-    mt_response_id_t    type;
+    mt_response_type_t  type;
 
     // Size of the payload only - after this header
     mt_size_t           size;
@@ -396,7 +393,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_accept
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_accept
 {
     mt_response_base_t base;
-    mt_flags_t        flags; // flags from request
+    mt_flags_t         flags; // flags from request
     mt_sockaddr_in_t   sockaddr;
 } mt_response_socket_accept_t;
 
@@ -573,28 +570,12 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_getname
 #define MT_RESPONSE_SOCKET_GETPEER_SIZE MT_RESPONSE_SOCKET_GETNAME_SIZE
 
 
-//
-// Socket behavioral attributes, normally set via setsockopt() and
-// fcntl(). This subset is supported by Magic Wand.
-//
-typedef enum
-{
-    MtSockAttribNone,
-    MtSockAttribNonblock,
-    MtSockAttribReuseaddr,
-    MtSockAttribReuseport,
-    MtSockAttribKeepalive,
-    MtSockAttribDeferAccept,
-    MtSockAttribNodelay,
-} mt_socket_attrib_t;
-
-
 typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_attrib
 {
     mt_request_base_t   base;
-    uint32_t            modify;  // bool: true => set, false => get
-    mt_socket_attrib_t  attrib;  // value of the single attribute of interest
-    uint32_t            value;   // value of specified attribute
+    uint32_t            modify; // bool: true => set, false => get
+    mt_sockfeat_name_t  name;   // which socket attribute is described?
+    mt_sockfeat_arg_t   val;
 } mt_request_socket_attrib_t;
 
 #define MT_REQUEST_SOCKET_ATTRIB_SIZE sizeof(mt_request_socket_attrib_t)
@@ -603,7 +584,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_attrib
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_attrib
 {
     mt_response_base_t base;
-    uint32_t           outval; // optional value of requested attrib
+    mt_sockfeat_arg_t  val; // optional value of requested attrib
 } mt_response_socket_attrib_t;
 
 #define MT_RESPONSE_SOCKET_ATTRIB_SIZE sizeof(mt_response_socket_attrib_t)

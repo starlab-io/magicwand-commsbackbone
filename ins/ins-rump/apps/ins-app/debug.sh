@@ -5,9 +5,10 @@
 ##
 
 target=ins-rump.run
+port=2221
 
 echo "If debugging, use:"
-echo "gdb -tui -ex 'target remote localhost:1234' $target"
+echo "gdb -tui -ex 'target remote localhost:$port' $target"
 
 if [ -z $RUMP_IP ]; then
     echo "Failure: RUMP_IP must be defined in env"
@@ -22,7 +23,7 @@ fi
 #$cpu_arg="vcpu-set 1,2"
 #$cpu_arg="vcpus=2"
 
-rumprun -S xen -dip -D 1234 -M 512 -N mw-ins-rump \
+rumprun -S xen -dip -D 1234 -M 5120 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/8,$_GW \
         $target

@@ -431,6 +431,7 @@ class Ins:
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
+        #cmd += '-p -D 1234 ' # DEBUGGING ONLY **********************
         cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
         cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
 

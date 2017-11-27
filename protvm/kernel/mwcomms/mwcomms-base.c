@@ -1,8 +1,8 @@
 /*************************************************************************
-* STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
-* Unauthorized copying of this file, via any medium is strictly prohibited.
-***************************************************************************/
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2016, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ ***************************************************************************/
 
 /**
  * @file    mwcomms-base.c
@@ -160,6 +160,10 @@
 
 #include <linux/file.h>
 
+#include <linux/netdevice.h>
+#include <linux/inetdevice.h>
+#include <net/if_inet6.h>
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -172,7 +176,7 @@
 
 #include "mwcomms-xen-iface.h"
 #include "mwcomms-socket.h"
-#include "mwcomms-backchannel.h"
+#include "mwcomms-netflow.h"
 
 #include "mwcomms-ioctls.h"
 
@@ -189,16 +193,14 @@
  * Globals scoped to this C module - put in struct for flexibility
  *****************************************************************************/
 
+
 typedef struct _mwcomms_base_globals
 {
     int             dev_major_num;
     struct class  * dev_class;
     struct device * dev_device;
 
-    // Shared memory
-    mw_region_t     xen_shmem;
-    // Indicates that the memory has been shared
-    struct completion ring_shared;
+    struct sockaddr   local_ip;
 
     // XXXX: list later (?)
     domid_t         client_domid;
@@ -255,10 +257,6 @@ module_init(mwbase_dev_init);
 module_exit(mwbase_dev_fini);
 
 
-//static int
-//mwbase_dev_client_ready_cb( domid_t ClientId );
-
-
 /******************************************************************************
  * Function definitions
  *****************************************************************************/
@@ -267,20 +265,114 @@ module_exit(mwbase_dev_fini);
 static mw_xen_init_complete_cb_t mwbase_client_ready_cb;
 
 static int
-mwbase_client_ready_cb( domid_t ClientId )
+mwbase_client_ready_cb( domid_t Domid )
 {
-    mwsocket_notify_ring_ready();
-    complete( &g_mwcomms_state.ring_shared );
+    mwsocket_notify_ring_ready( Domid );
+//    complete( &g_mwcomms_state.ring_shared );
     return 0;
 }
 
 
+/**
+ * @brief Find the external-facing IP address. First look for an IPv4
+ * address, then look for IPv6.
+ */
 static int
+mwbase_find_extern_ip( void )
+{
+    int rc = -ENOENT;
+    bool found = false;
+
+    bzero( &g_mwcomms_state.local_ip, sizeof( g_mwcomms_state.local_ip ) );
+
+    read_lock(&dev_base_lock);
+
+    struct net_device * dev = first_net_device( &init_net );
+    while( NULL != dev )
+    {
+        if ( 0 != strcmp( dev->name, EXT_IFACE ) ||
+             (NULL == dev->ip_ptr ) )
+        {
+            dev = next_net_device( dev );
+            continue;
+        }
+
+        struct in_ifaddr * ifa = NULL;
+        for ( ifa = dev->ip_ptr->ifa_list; NULL != ifa; ifa = ifa->ifa_next )
+        {
+            pr_info( "Found address %pI4 on interface %s\n",
+                     &ifa->ifa_address, dev->name );
+            if ( found )
+            {
+                MYASSERT( !"External interface has multiple addresses" );
+                rc = -EADDRINUSE;
+                goto ErrorExit;
+            }
+
+            found = true;
+            rc = 0;
+            //Addr->sin_addr.s_addr = ifa->ifa_address;
+            g_mwcomms_state.local_ip.sa_family = AF_INET;
+            ((struct sockaddr_in *) &g_mwcomms_state.local_ip)->sin_port = 0;
+            ((struct sockaddr_in *) &g_mwcomms_state.local_ip)->sin_addr.s_addr
+                = ifa->ifa_address;
+        }
+        dev = next_net_device( dev );
+    } // while
+
+    if ( found ) { goto ErrorExit; }
+
+    // No IPv4 addresses found. Move on to IPv6. UNTESTED!!!
+    dev = first_net_device( &init_net );
+    while( NULL != dev )
+    {
+        struct inet6_dev * indev = dev->ip6_ptr;
+        if ( 0 != strcmp( dev->name, EXT_IFACE ) ||
+             (NULL == indev) )
+        {
+            dev = next_net_device( dev );
+            continue;
+        }
+
+        struct inet6_ifaddr * ifa = NULL;
+        list_for_each_entry(ifa, &indev->addr_list, if_list)
+        {
+            pr_info( "Found address %pI6c on interface %s\n",
+                     &ifa->addr, dev->name );
+            if ( found )
+            {
+                MYASSERT( !"External interface has multiple addresses" );
+                rc = -EADDRINUSE;
+                goto ErrorExit;
+            }
+
+            found = true;
+            rc = 0;
+            g_mwcomms_state.local_ip.sa_family = AF_INET6;
+            ((struct sockaddr_in6 *) &g_mwcomms_state.local_ip)->sin6_port = 0;
+            ((struct sockaddr_in6 *) &g_mwcomms_state.local_ip)->sin6_addr
+                = ifa->addr;
+        }
+        dev = next_net_device( dev );
+    } // while
+
+ErrorExit:
+    if ( !found )
+    {
+        MYASSERT( !"Failed to find IP address" );
+    }
+    read_unlock(&dev_base_lock);
+    return rc;
+}
+
+
+static int
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_init( void )
 {
     int rc = 0;
     struct module * mod = (struct module *) THIS_MODULE;
-    
+
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
              "################################\n",
@@ -297,98 +389,100 @@ mwbase_dev_init( void )
           , "c" (mod) );
 #endif
 
-   bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
+    bzero( &g_mwcomms_state, sizeof(g_mwcomms_state) );
 
-   //
-   // Dynamically allocate a major number for the device
-   //
+    //
+    // Dynamically allocate a major number for the device
+    //
 
-   g_mwcomms_state.dev_major_num =
-       register_chrdev( 0, DEVICE_NAME, &mwcomms_fops );
+    g_mwcomms_state.dev_major_num =
+        register_chrdev( 0, DEVICE_NAME, &mwcomms_fops );
 
-   if ( g_mwcomms_state.dev_major_num < 0 )
-   {
-       rc =  g_mwcomms_state.dev_major_num;
-       pr_err( "register_chrdev failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    if ( g_mwcomms_state.dev_major_num < 0 )
+    {
+        rc =  g_mwcomms_state.dev_major_num;
+        pr_err( "register_chrdev failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
-   // Register the device class
-   g_mwcomms_state.dev_class = class_create( THIS_MODULE, CLASS_NAME );
-   if ( IS_ERR( g_mwcomms_state.dev_class ) )
-   {
-       rc = PTR_ERR( g_mwcomms_state.dev_class );
-       pr_err( "class_create failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    // Register the device class
+    g_mwcomms_state.dev_class = class_create( THIS_MODULE, CLASS_NAME );
+    if ( IS_ERR( g_mwcomms_state.dev_class ) )
+    {
+        rc = PTR_ERR( g_mwcomms_state.dev_class );
+        pr_err( "class_create failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
-   // Register the device driver
-   g_mwcomms_state.dev_device =
-       device_create( g_mwcomms_state.dev_class,
-                      NULL,
-                      MKDEV( g_mwcomms_state.dev_major_num, 0 ),
-                      NULL,
-                      DEVICE_NAME);
-   if ( IS_ERR( g_mwcomms_state.dev_device ) )
-   {
-       rc = PTR_ERR( g_mwcomms_state.dev_device );
-       pr_err( "device_create failed: %d\n", rc );
-       goto ErrorExit;
-   }
+    // Register the device driver
+    g_mwcomms_state.dev_device =
+        device_create( g_mwcomms_state.dev_class,
+                       NULL,
+                       MKDEV( g_mwcomms_state.dev_major_num, 0 ),
+                       NULL,
+                       DEVICE_NAME);
+    if ( IS_ERR( g_mwcomms_state.dev_device ) )
+    {
+        rc = PTR_ERR( g_mwcomms_state.dev_device );
+        pr_err( "device_create failed: %d\n", rc );
+        goto ErrorExit;
+    }
 
-   // Get shared memory in an entire, zeroed block.
-   // XXXX: break apart shmem later for multiple clients
-   g_mwcomms_state.xen_shmem.ptr = (void *)
-       __get_free_pages( GFP_KERNEL | __GFP_ZERO,
-                         XENEVENT_GRANT_REF_ORDER );
-   if ( NULL == g_mwcomms_state.xen_shmem.ptr )
-   {
-       pr_err( "Failed to allocate 0x%x pages\n", XENEVENT_GRANT_REF_COUNT );
-       rc = -ENOMEM;
-       goto ErrorExit;
-   }
 
-   g_mwcomms_state.xen_shmem.pagect = XENEVENT_GRANT_REF_COUNT;
-
-   // The socket iface is invoked when the ring sharing is
-   // complete. Therefore, init it before the Xen iface.
-   rc = mwsocket_init( &g_mwcomms_state.xen_shmem );
+   rc = mwbase_find_extern_ip();
    if ( rc )
    {
-       goto ErrorExit;
+       pr_warn( "Failed to find external IP address. "
+                "Some functionality will be limited\n" );
+       rc = 0;
    }
+
+    // The socket iface is invoked when the ring sharing is
+    // complete. Therefore, init it before the Xen iface.
+    rc = mwsocket_init( &g_mwcomms_state.local_ip );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
    
-   // Init the Xen interface. The callback will be invoked when client
-   // handshake is complete.
+    // Init the Xen interface. The callback will be invoked when client
+    // handshake is complete.
 
-   init_completion( &g_mwcomms_state.ring_shared );
-   rc = mw_xen_init( &g_mwcomms_state.xen_shmem,
-                     mwbase_client_ready_cb,
-                     mwsocket_event_cb );
-   if ( rc )
-   {
-       goto ErrorExit;
-   }
+//    init_completion( &g_mwcomms_state.ring_shared );
+   
+    rc = mw_xen_init( mwbase_client_ready_cb,
+                      mwsocket_event_cb );
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
 #ifdef BACKCHANNEL
-   rc = mw_backchannel_init();
+    rc = mw_backchannel_init();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+#endif
+
+   rc = mw_netflow_init( &g_mwcomms_state.local_ip );
    if ( rc )
    {
        goto ErrorExit;
    }
-#endif
 
 ErrorExit:
-   if ( rc )
-   {
-       mwbase_dev_fini();
-   }
+    if ( rc )
+    {
+        mwbase_dev_fini();
+    }
 
-   return rc;
+    return rc;
 }
 
 
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
@@ -399,16 +493,15 @@ mwbase_dev_fini( void )
     // Destroy state related to xen, including grant refs
     mw_xen_fini();
 
-#ifdef BACKCHANNEL
-    mw_backchannel_fini();
-#endif
+    mw_netflow_fini();
 
+#if 0
     if ( NULL != g_mwcomms_state.xen_shmem.ptr )
     {
         free_pages( (unsigned long) g_mwcomms_state.xen_shmem.ptr,
                     XENEVENT_GRANT_REF_ORDER );
     }
-    
+#endif
     // Tear down device
     if ( g_mwcomms_state.dev_major_num >= 0 )
     {
@@ -456,6 +549,7 @@ mwbase_dev_release(struct inode *Inode,
  * checking.
  */
 static long
+MWSOCKET_DEBUG_ATTRIB
 mwbase_dev_ioctl( struct file  * File,
                   unsigned int   Cmd,
                   unsigned long  Arg )
@@ -476,9 +570,9 @@ mwbase_dev_ioctl( struct file  * File,
         }
 
         rc = mwsocket_create( &create.outfd,
-                               create.domain,
-                               create.type,
-                               create.protocol );
+                              create.domain,
+                              create.type,
+                              create.protocol );
         if ( rc ) goto ErrorExit;
 
         // Copy the resulting FD back to the user

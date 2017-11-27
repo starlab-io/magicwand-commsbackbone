@@ -1,0 +1,28 @@
+#
+# Standard no-strings-attched compilation of the test TCP/IP app and
+# its accompanying shared library.  The shared library preloads the
+# app and intercepts selected TCP/IP calls to the network stack.
+# 
+
+CC = gcc
+CFLAGS = -Wall -fPIC -DPIC -std=c99
+CFLAGS += -I../../../common
+WRAPPER_DIR=../wrapper
+DEBUG = -ggdb
+PRE_LOAD_LIB_LOC=../wrapper
+
+TCP_IP_APP_NAME=multi-ins-test
+
+all: $(TCP_IP_APP_NAME) 
+
+$(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
+	$(CC) $(DEBUG) $(CFLAGS) $^ -o $@ -lpthread
+	@echo ""
+	@echo ""
+	$(MAKE) -C $(WRAPPER_DIR)
+
+clean:
+	rm -f $(TCP_IP_APP_NAME)
+	@echo ""
+	@echo ""
+	$(MAKE) clean all -C $(WRAPPER_DIR)

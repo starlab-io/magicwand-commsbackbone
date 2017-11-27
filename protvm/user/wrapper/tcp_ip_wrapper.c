@@ -249,12 +249,13 @@ mwcomms_write_request( IN  int                     MwFd,
     do
     {
         ct = libc_write( MwFd, Request, Request->base.size );
-        if ( !( ct < 0 && EAGAIN == errno ) )
+        if ( !( ct < 0 &&
+                ( EINTR == errno || EAGAIN == errno ) ) )
         {
             break;
         }
 
-        // rc == -1, errno == EAGAIN. So, try again...
+        // rc == -1, errno == EAGAIN or errno == EINTR. So, try again...
         DEBUG_PRINT( "write() failed, trying again.\n" );
 #if EAGAIN_TRIGGERS_SLEEP
         // The cost of this failing is negligible, so ignore return code.
@@ -264,6 +265,7 @@ mwcomms_write_request( IN  int                     MwFd,
     } while ( true );
 
     err = errno;
+    MYASSERT( 0 == err );
 
     if ( ct < 0 )
     {
@@ -408,25 +410,31 @@ hex_dump( const char *desc, void *addr, int len )
 
 
 int 
-socket( int domain, 
-        int type, 
-        int protocol )
+socket( int Domain, 
+        int Type, 
+        int Protocol )
 {
     int rc = 0;
     int err = 0;
 
-    if ( AF_INET != domain || (!USE_MWCOMMS) )
+    // See socket(2); N.B. Type can be OR-ed with specific flags
+    if ( AF_INET != Domain
+         || ( 0 == (SOCK_STREAM & Type ) )
+         || (!USE_MWCOMMS) )
     {
-        rc = libc_socket( domain, type, protocol );
+        rc = libc_socket( Domain, Type, Protocol );
+        err = errno;
+        DEBUG_PRINT( "libc_socket( %d, 0x%x, %d ) ==> %d\n",
+                     Domain, Type, Protocol, rc );
         goto ErrorExit;
     }
 
 #if USE_MWCOMMS
     mwsocket_create_args_t create;
 
-    create.domain   = xe_net_get_mt_protocol_family( domain );
+    create.domain   = xe_net_get_mt_protocol_family( Domain );
     create.type     = MT_ST_STREAM;
-    create.protocol = protocol;
+    create.protocol = Protocol;
     create.outfd = -1;
 
     rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
@@ -434,19 +442,17 @@ socket( int domain,
     {
         err = errno;
         MYASSERT( !"ioctl" );
-        errno = err;
         goto ErrorExit;
     }
+
+    DEBUG_PRINT( "mwsocket( %d, 0x%x, %d ) ==> %d\n",
+                 Domain, Type, Protocol, create.outfd );
 
     rc = create.outfd;
 #endif
 
 ErrorExit:
-    err = errno;
-    DEBUG_PRINT( "socket( %d, %d, %d ) ==> %d\n",
-                 domain, type, protocol, rc );
     errno = err;
-
     return rc;
 }
 
@@ -1272,13 +1278,25 @@ mwcomms_set_sockattr( IN int Level,
         switch( OptName )
         {
         case SO_REUSEADDR:
-            Attribs->attrib = MtSockAttribReuseaddr;
+            Attribs->name = MtSockAttribReuseaddr;
             break;
         case SO_KEEPALIVE:
-            Attribs->attrib = MtSockAttribKeepalive;
+            Attribs->name = MtSockAttribKeepalive;
             break;
         case SO_REUSEPORT:
-            Attribs->attrib = MtSockAttribReuseport;
+            Attribs->name = MtSockAttribReuseport;
+            break;
+        case SO_RCVTIMEO:
+            Attribs->name = MtSockAttribRcvTimeo;
+            break;
+        case SO_SNDTIMEO:
+            Attribs->name = MtSockAttribSndTimeo;
+            break;
+        case SO_RCVLOWAT:
+            Attribs->name = MtSockAttribRcvLoWat;
+            break;
+        case SO_SNDLOWAT:
+            Attribs->name = MtSockAttribSndLoWat;
             break;
         default:
             DEBUG_PRINT( "Failing on unsupported SOL_SOCKET option %d\n", OptName );
@@ -1291,10 +1309,10 @@ mwcomms_set_sockattr( IN int Level,
         {
         case TCP_DEFER_ACCEPT:
             // Linux-only option.
-            Attribs->attrib = MtSockAttribDeferAccept;
+            Attribs->name = MtSockAttribDeferAccept;
             break;
         case TCP_NODELAY:
-            Attribs->attrib = MtSockAttribNodelay;
+            Attribs->name = MtSockAttribNodelay;
             break;
         default:
             DEBUG_PRINT( "Failing on unsupported SOL_TCP option %d\n", OptName );
@@ -1319,7 +1337,7 @@ getsockopt( int         Fd,
 {
     int rc = 0;
     int err = 0;
-    mwsocket_attrib_t attribs = {0};
+    mwsocket_attrib_t attr = {0};
 
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
@@ -1328,7 +1346,7 @@ getsockopt( int         Fd,
         goto ErrorExit;
     }
 
-    rc = mwcomms_set_sockattr( Level, OptName, &attribs );
+    rc = mwcomms_set_sockattr( Level, OptName, &attr );
     if ( rc )
     {
         err = rc;
@@ -1336,9 +1354,9 @@ getsockopt( int         Fd,
         goto ErrorExit;
     }
 
-    attribs.modify = false;
+    attr.modify = false;
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attribs );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         err = errno;
@@ -1346,9 +1364,17 @@ getsockopt( int         Fd,
         goto ErrorExit;
     }
 
-    if ( OptLen > 0 )
+    if ( MtSockAttribSndTimeo == attr.name
+         || MtSockAttribRcvTimeo == attr.name )
     {
-        *(uint32_t *) OptVal = attribs.value;
+        MYASSERT( *OptLen >= sizeof(struct timeval) );
+        ((struct timeval *) OptVal)->tv_sec  = attr.val.t.s;
+        ((struct timeval *) OptVal)->tv_usec = attr.val.t.us;
+        *OptLen = sizeof( struct timeval );
+    }
+    else if ( *OptLen > 0 && *OptLen <= sizeof( attr.val ) )
+    {
+        memcpy( OptVal, &attr.val, *OptLen );
     }
 
 ErrorExit:
@@ -1367,7 +1393,7 @@ setsockopt( int          Fd,
             socklen_t    OptLen )
 {
     int rc = 0;
-    mwsocket_attrib_t attrib = {0};
+    mwsocket_attrib_t attr = {0};
     int err = 0;
 
     if ( !mwcomms_is_mwsocket( Fd ) )
@@ -1377,21 +1403,33 @@ setsockopt( int          Fd,
         goto ErrorExit;
     }
 
-    rc = mwcomms_set_sockattr( Level, OptName, &attrib );
+    rc = mwcomms_set_sockattr( Level, OptName, &attr );
     if ( rc )
     {
         err = rc;
         rc = -1;
         goto ErrorExit;
     }
-    
-    attrib.modify = true;
-    if ( OptLen > 0 )
+
+    attr.modify = true;
+    if ( MtSockAttribSndTimeo == attr.name
+         || MtSockAttribRcvTimeo == attr.name )
     {
-        attrib.value = *(uint32_t *) OptVal;
+        MYASSERT( OptLen >= sizeof(struct timeval) );
+        attr.val.t.s  = ((struct timeval *) OptVal)->tv_sec;
+        attr.val.t.us = ((struct timeval *) OptVal)->tv_usec;
+    }
+    else if ( OptLen > 0 && OptLen <= sizeof( attr.val ) )
+    {
+        memcpy( &attr.val, OptVal, OptLen );
+        //attr.value.v = (uint64_t) *(uint32_t *) OptVal;
+    }
+    else
+    {
+        MYASSERT( !"Unhandled option value" );
     }
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         err = errno;
@@ -1517,7 +1555,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     va_list ap;
     void * arg = NULL;
     int err = 0;
-    mwsocket_attrib_t attrib = {0};
+    mwsocket_attrib_t attr = {0};
     int oldflags = 0;
     int newflags = 0;
 
@@ -1559,11 +1597,11 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
         goto ErrorExit;
     }
 
-    attrib.modify = true;
-    attrib.attrib = MtSockAttribNonblock;
-    attrib.value  = (uint32_t) (bool) ( newflags & O_NONBLOCK );
+    attr.modify  = true;
+    attr.name    = MtSockAttribNonblock;
+    attr.val.v32 = (uint32_t) (bool) ( newflags & O_NONBLOCK );
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         DEBUG_PRINT( "ioctl() failed: %d\n", rc );

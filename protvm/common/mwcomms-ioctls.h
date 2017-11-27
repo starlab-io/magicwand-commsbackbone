@@ -13,7 +13,8 @@
 #  include <sys/ioctl.h>
 #endif // __KERNEL__
 
-#include <message_types.h>
+//#include <message_types.h>
+#include "mw_netflow_iface.h" // feature requests
 
 /******************************************************************************
  * Misc common definitions
@@ -75,13 +76,13 @@ typedef struct _mwsocket_verify_args
 typedef struct _mwsocket_attrib
 {
     // IN: true=set, false=get
-    bool          modify;
+    bool               modify;
 
     // IN: from message_types.h
-    mt_socket_attrib_t attrib;
+    mt_sockfeat_name_t name;
 
     // IN/OUT: value
-    unsigned long value;
+    mt_sockfeat_arg_t  val; // matches type passed on ring
 } mwsocket_attrib_t;
 
 #define MW_IOCTL_SOCKET_ATTRIBUTES                      \

@@ -26,4 +26,6 @@
 #define INS_DOMID_IOCTL                         \
     _IOWR( 'i', 74, domid_t )
 
+#define INS_HEARTBEAT_INTERVAL 1
+
 #endif
