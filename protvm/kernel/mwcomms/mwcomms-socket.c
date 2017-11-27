@@ -945,7 +945,8 @@ mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
     }
 
     // Destroy this socket instance!
-    MYASSERT( list_empty( &SockInst->inbound_list ) );
+
+    // MYASSERT( list_empty( &SockInst->inbound_list ) );
 
     // Remove from global sockinst_list
     mutex_lock( &g_mwsocket_state.sockinst_lock );
