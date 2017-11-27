@@ -205,7 +205,7 @@ mw_netflow_write_one( IN mwcomms_netflow_channel_t * Channel,
     // N.B. sock_sendmsg modifies hdr
 
     rc = sock_sendmsg( Channel->conn, &hdr );
-    if ( rc == Len ) 
+    if ( rc == Len )
     {
         rc = 0; // success
         goto ErrorExit;

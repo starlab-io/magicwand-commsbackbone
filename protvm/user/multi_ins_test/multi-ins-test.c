@@ -29,11 +29,11 @@ thread_func( void *arg )
     char buff[ BUFF_SIZE ] = {0};
     int err = 0;
     thread_info *t_info = ( thread_info *) arg;
-    
+
     listen_fd = socket( AF_INET, SOCK_STREAM, 0 );
-    if( listen_fd < 0 ) 
-    { 
-        printf("Socket Error: Thread: %d\n", t_info->t_num ); 
+    if( listen_fd < 0 )
+    {
+        printf("Socket Error: Thread: %d\n", t_info->t_num );
         goto ErrorExit;
     }
 
@@ -44,8 +44,8 @@ thread_func( void *arg )
     serv_addr.sin_port = htons( t_info->port );
 
     err = bind( listen_fd, ( struct sockaddr* ) &serv_addr, sizeof( serv_addr ) );
-    if( err ) 
-    { 
+    if( err )
+    {
         perror("BIND ERROR");
         printf("Errno: %d\n", errno );
         printf( "thread: %d, local_fd: %d\n", t_info->t_num, listen_fd ); 
@@ -54,18 +54,18 @@ thread_func( void *arg )
     printf( "Bind succeded for thread %d\n", t_info->t_num );
 
     err = listen( listen_fd, 3 );
-    if( err ) 
-    { 
+    if( err )
+    {
         perror("LISTEN ERROR");
         goto ErrorExit;
     }
     conn_fd = accept( listen_fd, ( struct sockaddr* ) &conn_addr, &addrlen );
-    if( conn_fd < 0 ) 
-    { 
+    if( conn_fd < 0 )
+    {
         perror("ACCEPT ERROR"); 
         goto ErrorExit;
     }
-        
+
     printf( "Accepted connection from %s \n", inet_ntoa( conn_addr.sin_addr ) );
 
     while( recv( conn_fd, buff, sizeof( buff ), 0) > 0 )
@@ -73,12 +73,10 @@ thread_func( void *arg )
         printf( "Thread %d Recieved: %s", t_info->t_num, buff);
         memset( ( void* ) &buff, 0, sizeof( buff ) );
     }
-    
+
     printf("Thread %d Exiting\n", t_info->t_num );
 
-
 ErrorExit:
-    
     if( listen_fd > 0 )
     {
         close( listen_fd );
@@ -97,9 +95,9 @@ int
 main()
 {
     printf("Listening on multiple ports to test multi-ins functinality\n\n");
-    
+
     thread_info t_info [ NUM_SOCKS ] = {0};
-    
+
     for( int i = 0; i < NUM_SOCKS; i++ )
     {
         t_info[i].t_num = i;

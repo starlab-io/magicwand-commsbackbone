@@ -341,8 +341,8 @@ typedef struct _mwsocket_instance
     // During polling, the primary mwsocket points to its sibling on
     // which there's an event. This only makes sense when polling for
     // an inbound connection (accept).
-    struct _mwsocket_instance * poll_active; 
-    
+    struct _mwsocket_instance * poll_active;
+
     // List of the fellow listening mwsockets; needed for destruction.
     struct list_head            sibling_listener_list;
 
@@ -396,7 +396,7 @@ typedef struct _mwsocket_instance
     bool                remote_surprise_close; 
     // Is the backing INS alive?
     bool                ins_alive;
-    
+
     // Do not allow close() while certain operations are
     // in-flight. Implement this behavior with a read-write lock,
     // wherein close takes a write lock and all the other operations a
@@ -876,13 +876,13 @@ MWSOCKET_DEBUG_ATTRIB
 mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 {
     int val = 0;
-    
+
     MYASSERT( SockInst );
 
     val = atomic_inc_return( &SockInst->refct );
 
 #if defined( DEBUG ) || defined( VERBOSE )
-    
+
     if( SockInst->local_fd < 0 )
     {
         //Print poll references
@@ -894,9 +894,8 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
         pr_debug( "Referenced socket instance %p fd=%d, refct=%d\n",
                     SockInst, SockInst->local_fd, val );
     }
-        
-#endif
 
+#endif
 
     // XXXX should this check be performed somewhere else?
     // removed for multiple INS change
@@ -907,7 +906,6 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
     // the ring but not destroyed yet (see mwsocket_response_consumer).
     //MYASSERT( val <= RING_SIZE( &g_mwsocket_state.front_ring ) + 2 );
 }
-
 
 
 // @brief Dereferences the socket instance, destroying upon 0 reference count
@@ -1250,8 +1248,8 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
         rc = -EINVAL;
         goto ErrorExit;
     }
-    
-    actreq =( mwsocket_active_request_t * )
+
+    actreq = (mwsocket_active_request_t * )
         kmem_cache_alloc( g_mwsocket_state.active_request_cache,
                           GFP_KERNEL | __GFP_ZERO );
     if( NULL == actreq )
@@ -1414,9 +1412,6 @@ mwsocket_pending_error( mwsocket_instance_t * SockInst,
 ErrorExit:
     return rc;
 }
-
-
-
 
 
 static void
@@ -1664,7 +1659,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
         // XXXX: could re-use ActiveRequest->arrived, but it would
         // have to be reset after each usage.
-        up( &primary->inbound_sem ); 
+        up( &primary->inbound_sem );
     }
 
     // N.B. Do not use ActiveRequest->response -- it might not be valid yet.
@@ -1683,7 +1678,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->proc->comm,
                   ActiveRequest->sockinst->local_fd,
                   Response->base.sockfd );
-        
+
         ActiveRequest->sockinst->remote_fd     = Response->base.sockfd;
         break;
     case MtResponseSocketListen:
@@ -1933,7 +1928,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
     default:
         break;
     }
-    
+
     return rc;
 }
 
@@ -2223,7 +2218,7 @@ mwsocket_response_consumer( void * Arg )
     // Policy: in case of pending exit, keep consuming the requests
     //         until there are no more
     //
-    
+
     pr_debug( "Entering response consumer loop\n" );
 
     while( true )
@@ -2257,7 +2252,7 @@ mwsocket_response_consumer( void * Arg )
                       response->base.size, response->base.type,
                       response->base.status );
         }
-        
+
         if( g_mwsocket_state.pending_exit )
         {
             //NULL response means pending exit was detected
@@ -2371,7 +2366,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         if( SockInst == curr  || // ignore the PollMonitor sockinst
             !curr->ins_alive  || // the socket's INS is dead
                                  // the socket has been released
-            (curr->mwflags & (MWSOCKET_FLAG_CLOSED | MWSOCKET_FLAG_RELEASED)) ) 
+            (curr->mwflags & (MWSOCKET_FLAG_CLOSED | MWSOCKET_FLAG_RELEASED)) )
         {
             continue;
         }
@@ -2387,7 +2382,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
                 // Already accounting for this domid
                 break;
             }
-            
+
             if( ins[i].domid == 0 )
             {
                 count++;
@@ -2472,7 +2467,7 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
         {
             // If this instance is referenced in the response, set its
             // events; otherwise clear them
-            currsi->usersock->poll_events = 0;    
+            currsi->usersock->poll_events = 0;
 
             for( int i = 0; i < response->count; ++i )
             {
@@ -3119,7 +3114,7 @@ mwsocket_init( IN struct sockaddr * LocalIp )
     INIT_LIST_HEAD( &g_mwsocket_state.active_request_list );
     INIT_LIST_HEAD( &g_mwsocket_state.sockinst_list );
 
-    init_waitqueue_head( &g_mwsocket_state.waitq );      
+    init_waitqueue_head( &g_mwsocket_state.waitq );
 
     gfn_new_inode_pseudo = (pfn_new_inode_pseudo_t *)
         kallsyms_lookup_name( "new_inode_pseudo" );

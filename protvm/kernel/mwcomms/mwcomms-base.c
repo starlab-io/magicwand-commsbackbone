@@ -449,7 +449,7 @@ mwbase_dev_init( void )
     // handshake is complete.
 
 //    init_completion( &g_mwcomms_state.ring_shared );
-   
+
     rc = mw_xen_init( mwbase_client_ready_cb,
                       mwsocket_event_cb );
     if ( rc )

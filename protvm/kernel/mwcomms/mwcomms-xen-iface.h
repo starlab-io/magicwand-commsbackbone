@@ -75,7 +75,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               OUT void                 ** Handle );
 
 int
-mw_xen_dispatch_request( void * Handle );    
+mw_xen_dispatch_request( void * Handle );
 
 int
 mw_xen_get_next_response( OUT mt_response_generic_t ** Response,

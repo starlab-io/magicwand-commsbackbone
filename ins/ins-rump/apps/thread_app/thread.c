@@ -75,11 +75,11 @@ int main ( void )
     pthread_t threads[NUM_THREADS];
     int rc;
     long t;
-    
+
     printf( "In main\n" );
 
     setlimit();
-    
+
     for ( t=0; t<NUM_THREADS; t++ )
     {
         printf("In main: creating thread %ld\n", t);

@@ -352,8 +352,9 @@ mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
    char                        str[ MAX_GNT_REF_WIDTH ] = {0};
    char                        path[ XENEVENT_PATH_STR_LEN ] = {0};
    int                         err = 0;
+
    MYASSERT( Ins );
-   
+
    if ( 0 >= Ins->domid  )
    {
        pr_err("Invalid domid passed to mw_xen_create_unbound_evt_chn\n");
@@ -361,7 +362,7 @@ mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
    }
 
    alloc_unbound.dom        = g_mwxen_state.my_domid;
-   alloc_unbound.remote_dom = Ins->domid; 
+   alloc_unbound.remote_dom = Ins->domid;
 
    err = HYPERVISOR_event_channel_op( EVTCHNOP_alloc_unbound, &alloc_unbound );
    if ( err )
@@ -384,7 +385,7 @@ mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
 
    err = mw_xen_write_to_key( path, VM_EVT_CHN_PORT_KEY, str );
    if ( err ) { goto ErrorExit; }
-   
+
 ErrorExit:
    return err;
 }
@@ -632,13 +633,12 @@ mw_xen_get_ins_from_xs_path( IN  const char         *  Path,
     {
         pr_err( "No backing INS entry found for XenStore path %s\n", Path );
     }
-    
+
 ErrorExit:
     CHECK_FREE( copy );
     return rc;
 }
-            
-            
+
 
 static int
 MWSOCKET_DEBUG_ATTRIB
@@ -740,7 +740,7 @@ MWSOCKET_DEBUG_ATTRIB
 mw_xen_init_ring_block( IN mwcomms_ins_data_t * Ins )
 {
     int rc = 0;
-    
+
     // Get shared memory in an entire zeroed block
     Ins->ring.ptr = (void *)
         __get_free_pages( GFP_KERNEL | __GFP_ZERO,
@@ -877,7 +877,7 @@ mw_xen_new_socket_rr( void )
 {
     static int curr_index = 0;
     int selected = 0;
-    
+
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
         if( g_mwxen_state.ins[ curr_index % MAX_INS_COUNT ].is_ring_ready  )
@@ -977,9 +977,9 @@ mw_xen_response_available( OUT void ** Handle )
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
         ins_index = mw_xen_get_next_index_rr();
-        
+
         if ( !g_mwxen_state.ins[ins_index].is_ring_ready ) { continue; }
-            
+
         available =
             RING_HAS_UNCONSUMED_RESPONSES( &g_mwxen_state.ins[ins_index].front_ring );
 
@@ -1066,7 +1066,7 @@ mw_xen_get_ins_from_domid( IN domid_t               Domid,
 {
     int rc = -ENXIO;
     int idx = 0;
-    
+
     for( int idx = 0; idx < MAX_INS_COUNT; idx++ )
     {
         if( g_mwxen_state.ins[idx].domid == Domid )
@@ -1082,7 +1082,7 @@ mw_xen_get_ins_from_domid( IN domid_t               Domid,
         MYASSERT( !"Unable to get INS from domid" );
         goto ErrorExit;
     }
-    
+
     // Success above, now verify the INS is alive
     if( !atomic64_read( &g_mwxen_state.ins[idx].in_use ) )
     {
@@ -1108,7 +1108,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
     int                 rc    = 0;
     mwcomms_ins_data_t *ins   = NULL;
     domid_t             domid = DomId;
-    
+
     MYASSERT( NULL != Handle );
     MYASSERT( NULL != Dest );
 
@@ -1119,7 +1119,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
 
     rc = mw_xen_get_ins_from_domid( domid, &ins );
     if( rc ) { goto ErrorExit; }
-    
+
     if ( !ins->is_ring_ready )
     {
         MYASSERT( !"Received request against unprepared/dead INS.\n" );
@@ -1141,7 +1141,7 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         // Wait and try again...
         mw_xen_wait( RING_FULL_TIMEOUT );
     } while( true );
-    
+
     *Dest = (mt_request_generic_t *)
         RING_GET_REQUEST( &ins->front_ring,
                           ins->front_ring.req_prod_pvt );
@@ -1180,7 +1180,7 @@ mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
         {
             continue;
         }
-        
+
         Domids[i] = curr->domid;
         rc++;
     }
