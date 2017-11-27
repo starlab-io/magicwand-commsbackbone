@@ -493,7 +493,7 @@ struct kinfo_pcb {
  * Maximum queue length specifiable by listen(2).
  */
 #ifndef SOMAXCONN
-#define	SOMAXCONN	128
+#define	SOMAXCONN	4000
 #endif
 
 #include <sys/cdefs.h>

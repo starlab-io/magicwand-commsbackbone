@@ -754,6 +754,7 @@ process_buffer_item( buffer_item_t * BufferItem )
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
+
     
     switch( request->base.type )
     {
@@ -1053,6 +1054,7 @@ worker_thread_func( void * Arg )
         // Block until work arrives
         DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
         sem_wait( &myitem->awaiting_work_sem );
+
         DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
@@ -1318,8 +1320,9 @@ message_dispatcher( void )
         buffer_item_t * myitem = NULL;
         mt_request_type_t request_type;
 
+
         // Always allow other threads to run in case there's work.
-        //xe_yield();
+        xe_yield();
 
         VERBOSE_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
@@ -1338,6 +1341,7 @@ message_dispatcher( void )
 
         VERBOSE_PRINT( "Attempting to read %ld bytes from input FD\n",
                      ONE_REQUEST_REGION_SIZE );
+
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size < (ssize_t) sizeof(mt_request_base_t)
@@ -1359,10 +1363,12 @@ message_dispatcher( void )
             goto ErrorExit;
         }
 
+
         VERBOSE_PRINT( "Read request %lx type %x size %x off ring\n",
                      (unsigned long) myitem->request->base.id,
                      myitem->request->base.type,
                      myitem->request->base.size );
+
 
         // Assign the buffer to a thread. If fails, reports to PVM but
         // keeps going.
@@ -1392,6 +1398,8 @@ message_dispatcher( void )
         {
             sched_yield();
         }
+
+
     } // while
     
 ErrorExit:

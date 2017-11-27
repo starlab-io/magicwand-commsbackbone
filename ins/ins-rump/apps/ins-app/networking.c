@@ -295,22 +295,26 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         level = SOL_SOCKET;
         name = SO_REUSEADDR;
         break;
+
     case MtSockAttribKeepalive:
         level = SOL_SOCKET;
         name = SO_KEEPALIVE;
         break;
+
     case MtSockAttribNodelay:
         level = IPPROTO_TCP; //SOL_TCP;
         name  = TCP_NODELAY;
+
     case MtSockAttribDeferAccept:
-        //level = SOL_TCP;
-        // This option is not supported on Rump. We'll drop it.
+        WorkerThread->defer_accept = true;
         rc = 0;
         goto ErrorExit;
+
     case MtSockAttribReuseport:
         level = SOL_SOCKET;
         name = SO_REUSEPORT;
         break;
+
     default:
         MYASSERT( !"Unrecognized attribute given" );
         rc = -EINVAL;
@@ -515,6 +519,12 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                 close( sockfd );
                 goto ErrorExit; // internal error
             }
+        }
+
+        if( WorkerThread->defer_accept )
+        {
+            rc = xe_net_defer_accept_wait( sockfd );
+            if( !rc ){ goto ErrorExit; }
         }
 
         // Init from global config

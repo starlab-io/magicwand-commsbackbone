@@ -57,7 +57,6 @@
 #define USE_MWCOMMS 1
 
 
-
 //
 // Which send() implementation should we use? This choice has big
 // implications for performance.

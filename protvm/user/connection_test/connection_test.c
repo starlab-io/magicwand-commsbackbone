@@ -12,10 +12,9 @@
 #include <mw_timer.h>
 
 //For Apache over INS
-#define REMOTE_IP "10.30.30.134"
+#define IP_STR_LEN 16
 
-//For plain apache on PVM
-//define REMOTE_IP "10.30.30.12"
+char remote_ip[ IP_STR_LEN ] = {0};
 
 #define REMOTE_PORT 80
 
@@ -31,12 +30,12 @@ connect_func( int conn_fd )
     MW_TIMER_INIT();
     
     conn_addr.sin_family = AF_INET;
-    conn_addr.sin_addr.s_addr = inet_addr( REMOTE_IP );
+    conn_addr.sin_addr.s_addr = inet_addr( remote_ip );
     conn_addr.sin_port = htons( REMOTE_PORT );
 
-    MW_START_TIMER();
+    MW_TIMER_START();
     err = connect( conn_fd, ( struct sockaddr* ) &conn_addr, sizeof( conn_addr ) );
-    MW_END_TIMER( "connect" );
+    MW_TIMER_END( "connect fd: %d ", conn_fd  );
     if( err ) 
     { 
         perror("CONNECT ERROR");
@@ -61,6 +60,14 @@ main( int argc, const char* argv[] )
         printf(" Please input number of connections\n ");
         return -1;
     }
+
+    if( NULL == argv[2] )
+    {
+        printf("Please input ip address\n");
+        return -1;
+    }
+
+    strncpy( remote_ip, argv[2], IP_STR_LEN );
 
     printf("Running %s connections\n", argv[1] );
 

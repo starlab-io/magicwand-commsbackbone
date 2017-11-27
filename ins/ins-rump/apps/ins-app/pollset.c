@@ -103,6 +103,51 @@ ErrorExit:
 }
 */
 
+void
+xe_net_poll_wait( void )
+{
+    struct timespec ts = {0,1};
+
+    while ( ts.tv_nsec > 0 )
+    {
+        (void) nanosleep( &ts, &ts );
+    }
+}
+
+int
+xe_net_defer_accept_wait( int SockFd )
+{
+    int rc = 0;
+    struct pollfd fds;
+
+    MYASSERT( 0 != SockFd );
+
+    fds.fd = SockFd;
+    fds.events = POLLIN | POLLRDNORM;
+    fds.revents = 0;
+
+    //Block until something arrives on socket
+    while ( rc == 0 )
+    {
+        rc = poll( &fds, 1, 0 );
+        if( rc > 0 ) { break; }
+
+        if( rc < 0 )
+        {
+            rc = XE_GET_NEG_ERRNO();
+            MYASSERT( !"Defer accept wait failed" );
+            goto ErrorExit;
+        }
+
+        xe_net_poll_wait();
+    }
+
+    DEBUG_PRINT("deferred accept returning on local socket: %d\n", SockFd );
+
+ErrorExit:
+    return rc;
+}
+
 // @brief Perform non-blocking poll against one socket
 int
 xe_pollset_query_one( IN  int   Fd,
@@ -116,7 +161,7 @@ xe_pollset_query_one( IN  int   Fd,
     fds.revents = 0;
 
     // Non-blocking poll against 1 FD
-    rc = poll( &fds, 1, 0 );
+    rc = poll( &fds, 1, INFTIM );
     if ( rc < 0 )
     {
         rc = XE_GET_NEG_ERRNO();
@@ -194,7 +239,6 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
         MYASSERT( !"poll" );
         goto ErrorExit;
     }
-
     
     for ( int i = 0;
           i < MAX_THREAD_COUNT &&
@@ -232,9 +276,12 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 
         thisti->poll_events = thisqi->events;
 
-        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n",
+        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n \
+                      item_idx: %d cur_pos: %d pollct: %d",
                      thisfd->revents, thisqi->events,
-                     thisti->public_fd, thisti->local_fd );
+                     thisti->public_fd, thisti->local_fd,
+                     item_idx, cur_pos, pollct );
+
         ++item_idx;
         ++cur_pos;
     }
