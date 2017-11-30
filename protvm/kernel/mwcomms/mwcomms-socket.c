@@ -587,6 +587,7 @@ static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
  * Caller must hold the global active_request_lock.
  */
 static mt_id_t
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_get_next_id( void )
 {
     static atomic64_t counter = ATOMIC64_INIT( 0 );
@@ -608,7 +609,8 @@ mwsocket_get_next_id( void )
 
         list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
         {
-            if( curr->id == id )
+            MYASSERT( curr->id );
+            if ( curr->id == id )
             {
                 pr_debug( "Not using ID %lx because it is currently in use\n",
                           (unsigned long) id );
@@ -2245,6 +2247,9 @@ mwsocket_response_consumer( void * Arg )
         rc = mw_xen_get_next_response( &response, h );
         if( rc ) { goto ErrorExit; }
 
+
+        MYASSERT( ! ( response->base.size > MESSAGE_TARGET_MAX_SIZE ) );
+        
         if ( DEBUG_SHOW_TYPE( response->base.type ) )
         {
             pr_debug( "Response ID %lx size %x type %x status %d\n",
@@ -2644,6 +2649,7 @@ mwsocket_verify( const struct file * File )
 
 
 static int
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_handle_attrib( IN struct file       * File,
                         IN mwsocket_attrib_t * SetAttribs )
 {

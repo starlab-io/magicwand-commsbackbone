@@ -332,10 +332,6 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     case MtSockAttribKeepalive:
         name = SO_KEEPALIVE;
         break;
-    case MtSockAttribDeferAccept:
-        //level = SOL_TCP;
-        // This option is not supported on Rump. We'll drop it.
-        goto ErrorExit;
     case MtSockAttribNodelay:
         level = IPPROTO_TCP; //SOL_TCP;
         name  = TCP_NODELAY;
@@ -366,6 +362,10 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     case MtSockAttribGlobalCongctl:
     case MtSockAttribGlobalDelackTicks:
         // globals [ via sysctl() ]
+        goto ErrorExit;
+    case MtSockAttribDeferAccept:
+        WorkerThread->defer_accept = true;
+        rc = 0;
         goto ErrorExit;
     default:
         MYASSERT( !"Unrecognized attribute given" );
@@ -528,6 +528,50 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     return 0;
 }
 
+void
+xe_net_poll_wait( void )
+{
+    struct timespec ts = {0,1};
+
+    while ( ts.tv_nsec > 0 )
+    {
+        (void) nanosleep( &ts, &ts );
+    }
+}
+
+int
+xe_net_defer_accept_wait( int SockFd )
+{
+    int rc = 0;
+    struct pollfd fds;
+
+    MYASSERT( 0 != SockFd );
+
+    fds.fd = SockFd;
+    fds.events = POLLIN | POLLRDNORM;
+    fds.revents = 0;
+
+    //Block until something arrives on socket
+    while ( rc == 0 )
+    {
+        rc = poll( &fds, 1, 0 );
+        if( rc > 0 ) { break; }
+
+        if( rc < 0 )
+        {
+            rc = XE_GET_NEG_ERRNO();
+            MYASSERT( !"Defer accept wait failed" );
+            goto ErrorExit;
+        }
+
+        xe_net_poll_wait();
+    }
+
+    DEBUG_PRINT("deferred accept returning on local socket: %d\n", SockFd );
+
+ErrorExit:
+    return rc;
+}
 
 int
 xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
@@ -585,6 +629,12 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
             }
         }
 
+        if( WorkerThread->defer_accept )
+        {
+            rc = xe_net_defer_accept_wait( sockfd );
+            if( !rc ){ goto ErrorExit; }
+        }
+
         // Init from global config
         rc = xe_net_init_socket( sockfd );
         if ( rc )
@@ -603,6 +653,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
                       WorkerThread->idx,
                       WorkerThread->public_fd, WorkerThread->local_fd,
                       inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
+
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,

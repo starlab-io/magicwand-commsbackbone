@@ -104,7 +104,6 @@ main()
         t_info[i].port = i + START_PORT;
         pthread_create( &t_info[i].thread_id, NULL,
                         &thread_func, (void *) &t_info[i] );
-        sleep(1);
     }
 
     for( int i = 0; i < NUM_SOCKS; i++ )

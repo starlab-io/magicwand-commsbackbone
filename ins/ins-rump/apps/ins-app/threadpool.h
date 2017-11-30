@@ -78,6 +78,13 @@ typedef struct _thread_item
     mt_flags_t     state_flags;
 
     //
+    // Workaround for TCP_DEFER_ACCEPT support ideally we could use
+    // NetBSD's accf_data filter, but there doesn't seem to be rump
+    // support for the pseudo device yet
+    //
+    bool defer_accept;
+
+    //
     // The native socket under management - save it's metadata for
     // easy state lookup.
     //
