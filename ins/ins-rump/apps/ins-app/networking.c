@@ -529,9 +529,9 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 }
 
 void
-xe_net_poll_wait( void )
+xe_net_defer_accept_wait( void )
 {
-    struct timespec ts = {0,1};
+    struct timespec ts = {0,1000};
 
     while ( ts.tv_nsec > 0 )
     {
@@ -539,10 +539,17 @@ xe_net_poll_wait( void )
     }
 }
 
+
+/*
+Wait for data to arrive on the socket
+If listening socket closes during 
+*/
+
 int
-xe_net_defer_accept_wait( int SockFd )
+xe_net_defer_accept_data( int SockFd )
 {
     int rc = 0;
+//    int pollct = 0;
     struct pollfd fds;
 
     MYASSERT( 0 != SockFd );
@@ -551,20 +558,14 @@ xe_net_defer_accept_wait( int SockFd )
     fds.events = POLLIN | POLLRDNORM;
     fds.revents = 0;
 
-    //Block until something arrives on socket
-    while ( rc == 0 )
+    //returns number of revent structures with events
+    rc = poll( &fds, 1, INFTIM );
+    if( rc < 0 )
     {
-        rc = poll( &fds, 1, 0 );
-        if( rc > 0 ) { break; }
-
-        if( rc < 0 )
-        {
-            rc = XE_GET_NEG_ERRNO();
-            MYASSERT( !"Defer accept wait failed" );
-            goto ErrorExit;
-        }
-
-        xe_net_poll_wait();
+        rc = XE_GET_NEG_ERRNO();
+        MYASSERT( !"Defer accept wait failed" );
+        perror("poll");
+        goto ErrorExit;
     }
 
     DEBUG_PRINT("deferred accept returning on local socket: %d\n", SockFd );
@@ -572,6 +573,73 @@ xe_net_defer_accept_wait( int SockFd )
 ErrorExit:
     return rc;
 }
+
+
+int
+test_poll( int LocalFd )
+{
+
+    int rc = 0;
+    struct pollfd fds;
+
+    fds.fd = LocalFd;
+    fds.events = POLLIN | POLLPRI | POLLOUT | POLLRDNORM | POLLWRNORM | POLLRDBAND |\
+        POLLWRBAND | POLLERR | POLLHUP | POLLNVAL;
+    fds.revents = 0;
+
+    rc = poll( &fds, 1, INFTIM );
+    if( rc < 0 )
+    {
+        perror("poll");
+    }
+    
+    return 0;
+}
+
+
+int
+xe_net_defer_accept_socket( int LocalFd,
+                            struct sockaddr * sockaddr,
+                            socklen_t * addrlen )
+{
+    int rc = 0;
+    struct pollfd listen_fds;
+    struct pollfd peer_fds[ MAX_THREAD_COUNT ];
+
+    fds.fd = LocalFd;
+    fds.events = POLLIN | POLLRDNORM;
+    fds.revents = 0;
+
+    test_poll( LocalFd );
+
+    do
+    {
+        //Poll for incoming connection
+        rc = poll( &fds, 1, 0 );
+
+        if( fds.revents & POLLNVAL )
+        {
+            DEBUG_PRINT("Listening socket closed while defer accept was waiting");
+            peer_fd = 0;
+            goto ErrorExit;
+        }
+        
+        if( fds.revents & ( POLLIN | POLLRDNORM ) )
+        {
+            rc = accept( LocalFd,
+                         (struct sockaddr *) sockaddr,
+                         (socklen_t *) addrlen );
+        }
+
+        //check peer connections for incomming data
+        peer_fd = xe_net_check_peer_data( LocalFd );
+        if( !rc ){ goto ErrorExit; }
+    }while(  );
+
+ErrorExit:
+    return peer_fd;
+}
+
 
 int
 xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
@@ -601,9 +669,18 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
         Response->flags = Request->flags;
     }
 
-    sockfd = accept( WorkerThread->local_fd,
-                     (struct sockaddr *) &sockaddr,
-                     (socklen_t *) &addrlen );
+    if( WorkerThread->defer_accept )
+    {
+        sockfd = xe_net_defer_accept_socket( WorkerThread->local_fd,
+                                             (struct sockaddr *) &sockaddr,
+                                             (socklen_t *) &addrlen );
+    }
+    else
+    {
+        sockfd = accept( WorkerThread->local_fd,
+                         (struct sockaddr *) &sockaddr,
+                         (socklen_t *) &addrlen );
+    }
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
@@ -629,11 +706,6 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
             }
         }
 
-        if( WorkerThread->defer_accept )
-        {
-            rc = xe_net_defer_accept_wait( sockfd );
-            if( !rc ){ goto ErrorExit; }
-        }
 
         // Init from global config
         rc = xe_net_init_socket( sockfd );

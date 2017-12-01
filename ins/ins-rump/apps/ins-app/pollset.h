@@ -18,9 +18,6 @@ xe_pollset_mod( mt_request_pollset_mod_t *  Request,
 */
 
 int
-xe_net_defer_accept_wait( int SockFd );
-
-int
 xe_pollset_query_one( IN  int   Fd,
                       OUT int * Events );
 
