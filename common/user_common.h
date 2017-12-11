@@ -71,7 +71,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_EMIT_BREAKPOINT() ((void)0)
 #endif
 
-#define MWCOMMS_DEBUG_ATTRIB  __attribute__((optimize("O0")))
+#define INS_DEBUG_ATTRIB  __attribute__((optimize("O0")))
 
 // Unconditionally emits breakpoint
 #define BARE_DEBUG_BREAK() _DEBUG_EMIT_BREAKPOINT()
