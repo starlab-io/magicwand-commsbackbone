@@ -115,6 +115,57 @@ net.inet.tcp.congctl.available: reno newreno cubic
 
 """
 
+
+
+
+# Map: domid => INS instance
+ins_map = dict()
+
+# MACs for usage by INSs; this way we don't overflow DHCP's mappings
+macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
+         '00:16:3e:28:2a:51' : { 'in_use' : False },
+         '00:16:3e:28:2a:52' : { 'in_use' : False },
+         '00:16:3e:28:2a:53' : { 'in_use' : False },
+         '00:16:3e:28:2a:54' : { 'in_use' : False },
+         '00:16:3e:28:2a:55' : { 'in_use' : False },
+         '00:16:3e:28:2a:56' : { 'in_use' : False },
+         '00:16:3e:28:2a:57' : { 'in_use' : False },
+         '00:16:3e:28:2a:58' : { 'in_use' : False },
+         '00:16:3e:28:2a:59' : { 'in_use' : False },
+         '00:16:3e:28:2a:5a' : { 'in_use' : False },
+         '00:16:3e:28:2a:5b' : { 'in_use' : False },
+         '00:16:3e:28:2a:5c' : { 'in_use' : False },
+         '00:16:3e:28:2a:5d' : { 'in_use' : False },
+         '00:16:3e:28:2a:5e' : { 'in_use' : False },
+         '00:16:3e:28:2a:5f' : { 'in_use' : False },
+         '00:16:3e:28:2a:60' : { 'in_use' : False },
+         '00:16:3e:28:2a:61' : { 'in_use' : False },
+         '00:16:3e:28:2a:62' : { 'in_use' : False },
+         '00:16:3e:28:2a:63' : { 'in_use' : False },
+         '00:16:3e:28:2a:64' : { 'in_use' : False },
+         '00:16:3e:28:2a:65' : { 'in_use' : False },
+         '00:16:3e:28:2a:66' : { 'in_use' : False },
+         '00:16:3e:28:2a:67' : { 'in_use' : False },
+         '00:16:3e:28:2a:68' : { 'in_use' : False },
+         '00:16:3e:28:2a:69' : { 'in_use' : False },
+         '00:16:3e:28:2a:6a' : { 'in_use' : False },
+         '00:16:3e:28:2a:6b' : { 'in_use' : False },
+         '00:16:3e:28:2a:6c' : { 'in_use' : False },
+         '00:16:3e:28:2a:6d' : { 'in_use' : False },
+         '00:16:3e:28:2a:6e' : { 'in_use' : False },
+         '00:16:3e:28:2a:6f' : { 'in_use' : False } }
+
+inst_num = 0
+
+
+exit_requested = False
+def handler(signum, frame):
+    global exit_requested
+    print( "Caught signal {0}".format( signum ) )
+    exit_requested = True
+
+
+
 def generate_sys_net_opts():
     """ Randomly, but smartly generate INS network configuration """
     params = list()
@@ -163,37 +214,53 @@ class INS:
         self.ip           = None
         self.stats        = None
         self.last_contact = time.time()
+        self._lock        = threading.Lock()
+        self._forwarders  = list() 
+
+    def set_listening_ports( self, port_list ):
+        self.lock()
+        try:
+            for p in port_list:
+                if p in [ x.get_port() for x in self._forwarders() ]:
+                    continue
+                fwd = PortForwarder( self.ip, p )
+                self._forwarders.append( fwd )
+        finally:
+            self.unlock()
+    
+    def set_active( activated ):
+        self.lock()
+        try:
+            for f in self._forwarders:
+                f.set_active( activated )
+        finally:
+            self.unlock()
+
+    def lock( self ):
+        self._lock.acquire()
+
+    def unlock( self ):
+        self._lock.release()
+
+    def busy( self ):
+        """ At 80%+ of socket capacity """
+        if self.stats:
+            return self.stats[1] >= 0.8 * self._stats[0]
+        else:
+            return False
+
+    def __del__( self ):
+        self.unlock()
 
     def __str__( self ):
         return ("id {0} IP {1} stats {2} contact {3}".
                 format( self.domid, self.ip, self.stats, self.last_contact ) )
 
 
-# Map: domid => INS instance
-ins_map = dict()
-
-# MACs for usage by INSs; this way we don't overflow DHCP's mappings
-macs = { '00:16:3e:28:2a:58' : { 'in_use' : False },
-         '00:16:3e:28:2a:59' : { 'in_use' : False },
-         '00:16:3e:28:2a:5a' : { 'in_use' : False },
-         '00:16:3e:28:2a:5b' : { 'in_use' : False },
-         '00:16:3e:28:2a:5c' : { 'in_use' : False },
-         '00:16:3e:28:2a:5d' : { 'in_use' : False } }
-
-inst_num = 0
-
-
-exit_requested = False
-def handler(signum, frame):
-    global exit_requested
-    print( "Caught signal {0}".format( signum ) )
-    exit_requested = True
-
-
 class PortForwarder:
     """
-    Class that manages iptables rules for TCP traffic forwarding to
-    support MagicWand's management of multiple INSs. Each instance of
+    Class that manages iptables rules for TCP traffic forwarding;
+    supports MagicWand's management of multiple INSs. Each instance of
     this class forwards one port from the Dom0 to the same port on an
     INS.
 
@@ -214,13 +281,32 @@ class PortForwarder:
         self._rules = list()
         self._port = in_port
         self._dest = dest_ip
+        self._active = False
 
-        self._redirect_conn_to_addr()
+    def set_active( activate ):
+        if self._active == activate:
+            printf( "Not activating already-active rule: {}".format(self) )
+            return
 
-    def __del__( self ):
-        #print "Stop redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        if activate:
+            self._redirect_conn_to_addr()
+        else:
+            self._deactivate()
+
+        self._active = activate
+
+    def active( self ):
+        return self._active
+    
+    def _deactivate( self ):
+        printf( "Deactive: {}".format( self ) )
         for (c,r) in self._rules:
             c.delete_rule( r )
+
+        self._rules = list() # drop old refs
+
+    def __del__( self ):
+        self._deactivate()
 
     def __str__( self ):
         return "0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
@@ -334,23 +420,21 @@ class XenStoreEventHandler:
         elif 'ip_addrs' in path:
             ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
+            ins_map[ domid ].lock()
             ins_map[ domid ].ip = ips[0]
+            ins_map[ domid ].unlock()
             client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
         elif 'network_stats' in path:
+            ins_map[ domid ].lock()
             ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
+            ins_map[ domid ].unlock()
         elif 'heartbeat' in path:
+            ins_map[ domid ].lock()
             ins_map[ domid ].last_contact = time.time()
+            ins_map[ domid ].unlock()
         elif 'listening_ports' in path:
             ports = [ int(p, 16) for p in newval.split() ]
-            ip = ins_map[ domid ].ip
-
-            # Rebuild the forwarding rules: get rid of old ones and re-create
-            self._forwarders = list() # releases references to the old rules
-            print( "Redirections:\n------------------" )
-            for p in ports:
-                f = PortForwarder( p, ip )
-                print( "    {0}".format( f ) )
-                self._forwarders.append( f )
+            ins_map[ domid ].set_listening_ports( ports )
         else:
             #print( "Ignoring {0} => {1}".format( path, newval ) )
             pass
@@ -389,7 +473,7 @@ class XenStoreWatch( threading.Thread ):
                 self._handler.event( c, path, value )
 
 
-class Ins:
+class InsSpawner:
     def __init__( self, xenstore_watcher ):
         """ 
         Spawn the Rump INS domU. Normally this is done via rumprun, which
@@ -473,7 +557,7 @@ class Ins:
         if rc:
             raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
 
-        macs[ self._mac ][ 'in_use' ] = True
+        macs[ self._mac ][ 'in_use' ] = False
 
     def wait( self ):
         """ Waits until the INS is ready to use """
@@ -600,13 +684,35 @@ def single_ins():
     w = XenStoreWatch( e )
     w.start()
     
-    s = Ins( w )
+    s = InsSpawner( w )
     s.wait() # Wait for INS IP address to appear
 
     while w.is_alive():
         w.join( POLL_INTERVAL )
 
 
+def ins_runner():
+    """ Spawns INSs as needed, destroys as permissible. """
+
+    spawn_new = True
+
+    x = XenIface()
+    e = XenStoreEventHandler( x )
+    w = XenStoreWatch( e )
+    w.start()
+
+    while True:
+        if spawn_new:
+            s = InsSpawner( w )
+            s.wait() # Wait for INS IP address to appear
+            spawn_new = False
+
+        # Monitor the health of all the INSes.
+        for i in ins_map.values():
+            if i.busy():
+                spawn_new = True
+        # If they're all too busy, then spawn a new one.
+        time.sleep( POLL_INTERVAL )
 
 if __name__ == '__main__':
     print( "Running in PID {0}".format( os.getpid() ) )
@@ -615,6 +721,7 @@ if __name__ == '__main__':
     signal.signal( signal.SIGABRT, handler )
     signal.signal( signal.SIGQUIT, handler )
 
-    single_ins()
+    #single_ins()
+    ins_runner()
 
     print( "Exiting main thread" )

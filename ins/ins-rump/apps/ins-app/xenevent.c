@@ -1107,7 +1107,8 @@ heartbeat_thread_func( void * Args )
     {
         char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
-        (void) snprintf( stats, sizeof(stats), "%lx:%llx:%llx",
+        (void) snprintf( stats, sizeof(stats), "%lx:%lx:%llx:%llx",
+                         (unsigned long) MAX_THREAD_COUNT,
                          (unsigned long) g_state.network_stats_socket_ct,
                          (unsigned long long) g_state.network_stats_bytes_recv,
                          (unsigned long long) g_state.network_stats_bytes_sent );
