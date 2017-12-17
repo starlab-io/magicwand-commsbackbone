@@ -300,6 +300,9 @@ typedef struct _mwsocket_instance
     struct inode       * inode;
     struct file        * file;
 
+    // For general access when concurrency is concern
+    struct mutex         access_lock;
+
     // File descriptor info: one for PVM, one for INS
     int                  local_fd; 
     mw_socket_fd_t       remote_fd;
@@ -610,7 +613,7 @@ mwsocket_get_next_id( void )
         list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
         {
             MYASSERT( curr->id );
-            if ( curr->id == id )
+            if( curr->id == id )
             {
                 pr_debug( "Not using ID %lx because it is currently in use\n",
                           (unsigned long) id );
@@ -756,8 +759,8 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     *SockInst = (mwsocket_instance_t *) File->private_data;
 
-    if ( NULL == (*SockInst) ||
-         File != (*SockInst)->file )
+    if( NULL == (*SockInst) ||
+        File != (*SockInst)->file )
     {
         rc = -EBADFD;
         pr_err( "Invalid file object %p given\n", File );
@@ -785,7 +788,7 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if ( curr->remote_fd  == RemoteFd )
+        if( curr->remote_fd  == RemoteFd )
         {
             *SockInst = curr;
             rc = 0;
@@ -795,7 +798,7 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
 
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
-    if ( rc )
+    if( rc )
     {
         pr_info( "Failed to find requested remote FD=%lx\n",
                  (unsigned long) RemoteFd );
@@ -817,10 +820,10 @@ mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
     mwsocket_instance_t * sockinst = NULL;
 
     rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, RemoteFd );
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     rc = mwsocket_close_remote( sockinst, Wait );
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     sockinst->remote_surprise_close = true;
 
@@ -842,7 +845,7 @@ mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
     mwsocket_instance_t * sockinst = NULL;
 
     rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, RemoteFd );
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     pr_warn( "Delivering signal %d to process %d (%s) for socket %d\n",
              SignalNum,
@@ -910,7 +913,44 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 }
 
 
-// @brief Dereferences the socket instance, destroying upon 0 reference count
+/**
+ * @brief Sets or clears pollable bit from flags and updates the
+ * pollable socket count.
+ *
+ */
+static void
+mwsocket_set_pollable( IN mwsocket_instance_t * SockInst,
+                       IN bool                  Pollable )
+{
+    MYASSERT( SockInst );
+
+    mutex_lock( &SockInst->access_lock );
+
+    if( (bool) (SockInst->mwflags | MWSOCKET_FLAG_POLLABLE) == Pollable )
+    {
+        // The state of the socket matches the requested state
+        goto ErrorExit;
+    }
+
+    if( Pollable )
+    {
+        atomic_inc( &g_mwsocket_state.poll_sock_count );
+        SockInst->mwflags |= MWSOCKET_FLAG_POLLABLE;
+    }
+    else
+    {
+        atomic_dec( &g_mwsocket_state.poll_sock_count );
+        SockInst->mwflags &= ~MWSOCKET_FLAG_POLLABLE;
+    }
+
+ErrorExit:
+    mutex_unlock( &SockInst->access_lock );
+}
+
+
+/**
+ * @brief Dereferences the socket instance, destroying upon 0 reference count
+ */
 static void
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
@@ -956,12 +996,9 @@ mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
 
     list_del( &SockInst->sibling_listener_list );
 
-    // This sockinst was pollable (i.e. able to receive events) and
-    // now we're destroying it, so let the poll monitor know.
-    if( MWSOCKET_FLAG_POLLABLE & SockInst->mwflags )
-    {
-        atomic_dec( &g_mwsocket_state.poll_sock_count );
-    }
+    // If this sockinst was pollable (i.e. able to receive events)
+    // update the global count of pollable sockets.
+    mwsocket_set_pollable( SockInst, false );
 
     pr_debug( "Destroyed socket instance %p fd=%d\n",
               SockInst, SockInst->local_fd );
@@ -998,8 +1035,8 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
         kmem_cache_alloc( g_mwsocket_state.sockinst_cache, GFP_KERNEL );
     if( NULL == sockinst )
     {
-        MYASSERT( !"kmem_cache_alloc failed\n" );
         rc = -ENOMEM;
+        MYASSERT( !"kmem_cache_alloc failed\n" );
         goto ErrorExit;
     }
 
@@ -1012,6 +1049,7 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     mutex_unlock( &g_mwsocket_state.sockinst_lock );
 
     *SockInst = sockinst;
+    mutex_init( &sockinst->access_lock );
     sockinst->local_fd = -1;
     sockinst->remote_fd = MT_INVALID_SOCKET_FD;
     // For pretty printing prior to binding, etc, esp in netflow
@@ -1034,11 +1072,7 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     // refct starts at 1; an extra put() is done upon close()
     atomic_set( &sockinst->refct, 1 );
 
-    if ( Pollable )
-    {
-        atomic_inc( &g_mwsocket_state.poll_sock_count );
-        sockinst->mwflags |= MWSOCKET_FLAG_POLLABLE;
-    }
+    mwsocket_set_pollable( sockinst, Pollable );
 
     if( !CreateBackingFile ) { goto ErrorExit; }
     
@@ -1192,7 +1226,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
         rc = 0;
     }
 
-    if ( 0 == rc ) { rc = actreq->rr.response.base.status; }
+    if( 0 == rc ) { rc = actreq->rr.response.base.status; }
 
 ErrorExit:
     mwsocket_destroy_active_request( actreq );
@@ -1244,7 +1278,7 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
     MYASSERT( SockInst );
     MYASSERT( ActReq );
 
-    if ( !SockInst->ins_alive )
+    if( !SockInst->ins_alive )
     {
         pr_debug( "Not creating active request for dead INS" );
         rc = -EINVAL;
@@ -1318,7 +1352,7 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
     }
     mutex_unlock( &g_mwsocket_state.active_request_lock );
 
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     MYASSERT( *Request );
 
@@ -1327,7 +1361,7 @@ mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
     // request.
     // XXXX: A mutex could provide a cleaner way to avoid working
     // on a dead socket.
-    if ( (*Request)->sockinst->mwflags & MWSOCKET_FLAG_RELEASED )
+    if( (*Request)->sockinst->mwflags & MWSOCKET_FLAG_RELEASED )
     {
         pr_debug( "Found request ID=%lx for dead socket %lx/%d.\n",
                   (unsigned long) Id,
@@ -1379,7 +1413,7 @@ mwsocket_pending_error( mwsocket_instance_t * SockInst,
     // These messages are exempt from pending errors, since they must
     // reach the INS.
     if( MtRequestSocketShutdown == RequestType 
-         || MtRequestSocketClose == RequestType )
+        || MtRequestSocketClose == RequestType )
     {
         goto ErrorExit;
     }
@@ -1491,7 +1525,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     mw_netflow_info_t nf = {0};
     int obs = MwObservationNone;
 
-    if ( !mw_netflow_consumer_exists() )
+    if( !mw_netflow_consumer_exists() )
     {
         goto ErrorExit;
     }
@@ -1537,7 +1571,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
         break;
     }
 
-    if ( drop ) { goto ErrorExit; }
+    if( drop ) { goto ErrorExit; }
 
     MYASSERT( sizeof(mw_obs_space_t) == sizeof(uint16_t) );
     nf.obs = __cpu_to_be16( (mw_obs_space_t) obs );
@@ -1582,7 +1616,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
         up_read( &ActiveRequest->sockinst->close_lock );
     }
-    else if ( MtResponseSocketClose == Response->base.type
+    else if( MtResponseSocketClose == Response->base.type
               && ActiveRequest->sockinst->close_lock_write )
     {
         pr_debug( "up_write(close_lock), sockfd=%d\n", ActiveRequest->sockinst->local_fd );
@@ -2009,11 +2043,12 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         goto ErrorExit;
     }
 
-    if ( !ActiveRequest->sockinst->ins_alive )
+    if( !ActiveRequest->sockinst->ins_alive )
     {
+        rc = -ESTALE;
         pr_debug( "Not sending request %llx to dead INS\n",
                   (unsigned long long) ActiveRequest->id );
-        rc = -EINVAL;
+        mwsocket_set_pollable( ActiveRequest->sockinst, false );
         goto ErrorExit;
     }
 
@@ -2025,12 +2060,15 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                                        &h );
     if( rc )
     {
-        if ( WaitForRing )
+        if( WaitForRing )
         {
             // We were willing to wait for the ring, but we failed
-            // anyway. Assume the INS is dead.
-            pr_info( "Marking INS %d as dead\n", MW_SOCKET_CLIENT_ID( base->sockfd ) );
+            // anyway. Assume the INS is dead. Propogate this news as
+            // needed.
+            pr_info( "Marking INS %d as dead\n",
+                     MW_SOCKET_CLIENT_ID( base->sockfd ) );
             ActiveRequest->sockinst->ins_alive = false;
+            mwsocket_set_pollable( ActiveRequest->sockinst, false );
         }
         goto ErrorExit;
     }
@@ -2148,7 +2186,7 @@ mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
 
     // XXXX: wrong???? find the sockinst by the embedded domid?
     rc = mwsocket_find_sockinst_by_remote_fd( &sockinst, Request->base.sockfd );
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     rc = mwsocket_create_active_request( sockinst, &actreq );
     if( rc ) { goto ErrorExit; }
@@ -2157,11 +2195,11 @@ mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
     memcpy( &actreq->rr.request, Request, Request->base.size );
 
     rc = mwsocket_send_request( actreq, true );
-    if ( rc ) { goto ErrorExit; }
+    if( rc ) { goto ErrorExit; }
 
     // Copy the response for the caller, provided we have enough space for it.
     // XXXX: is this check needed?
-    if ( actreq->rr.response.base.size > Response->base.size )
+    if( actreq->rr.response.base.size > Response->base.size )
     {
         rc = -ENOSPC;
         MYASSERT( !"Insufficient space given for response" );
@@ -2248,9 +2286,9 @@ mwsocket_response_consumer( void * Arg )
         if( rc ) { goto ErrorExit; }
 
 
-        MYASSERT( ! ( response->base.size > MESSAGE_TARGET_MAX_SIZE ) );
+        MYASSERT( !( response->base.size > MESSAGE_TARGET_MAX_SIZE ) );
         
-        if ( DEBUG_SHOW_TYPE( response->base.type ) )
+        if( DEBUG_SHOW_TYPE( response->base.type ) )
         {
             pr_debug( "Response ID %lx size %x type %x status %d\n",
                       (unsigned long)response->base.id,
@@ -2321,7 +2359,7 @@ mwsocket_response_consumer( void * Arg )
         {
             // The caller is healthy and wants the response. Copy
             // response if needed then notify any waiter.
-            if ( !actreq->response_populated )
+            if( !actreq->response_populated )
             {
                 memcpy( &actreq->rr.response, response, response->base.size );
                 actreq->response_populated = true;
@@ -2346,8 +2384,11 @@ static int
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
 {
+    // The pseudo-socket must not be pollable, and must always
+    // indicate a live INS (the pseudo-socket's non-existent INS
+    // cannot die by convention.
     MYASSERT( !(SockInst->mwflags & MWSOCKET_FLAG_POLLABLE) );
-
+    MYASSERT( SockInst->ins_alive );
     int rc = 0;
 
     // For tracking INSs and the pollset requests we send to them
@@ -2368,8 +2409,14 @@ mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
+        if( !curr->ins_alive )
+        {
+            // If the socket's INS is dead, stop polling on it.
+            mwsocket_set_pollable( curr, false );
+            continue;
+        }
+
         if( SockInst == curr  || // ignore the PollMonitor sockinst
-            !curr->ins_alive  || // the socket's INS is dead
                                  // the socket has been released
             (curr->mwflags & (MWSOCKET_FLAG_CLOSED | MWSOCKET_FLAG_RELEASED)) )
         {
@@ -2754,7 +2801,7 @@ mwsocket_read( struct file * File,
         // inbound one that arrived first.
         mwsocket_active_request_t * new = NULL;
         rc = mwsocket_await_inbound_connection( actreq, &new );
-        if ( rc ) { goto ErrorExit; }
+        if( rc ) { goto ErrorExit; }
 
         // We're consuming the returning accept() here
         sockinst->user_outstanding_accept = false;
@@ -2864,7 +2911,7 @@ mwsocket_write( struct file * File,
         goto ErrorExit;
     }
 
-    if ( MtRequestSocketAccept == base.type )
+    if( MtRequestSocketAccept == base.type )
     {
         // Distribute accept() to all INSs. This is generating a new
         // outstanding accept().

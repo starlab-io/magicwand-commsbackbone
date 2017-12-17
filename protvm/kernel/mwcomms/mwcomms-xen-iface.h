@@ -94,8 +94,6 @@ mw_xen_read_old_ins( void );
 bool
 mw_xen_response_available( void ** Handle );
 
-int
-mw_xen_get_active_ins_domids( domid_t Domids[] );
 
 int
 mw_xen_reap_dead_ins( void );

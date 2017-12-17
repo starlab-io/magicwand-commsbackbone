@@ -782,7 +782,7 @@ mw_xen_ins_found( IN const char * Path )
     }
 
     //
-    // Get the client Id 
+    // Get the client ID
     //
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
@@ -921,7 +921,7 @@ mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 ErrorExit:
     atomic64_set( &Ins->in_use, 0 );
     Ins->is_ring_ready = false;
-
+    Ins->domid = DOMID_INVALID;
     return;
 }
 
@@ -964,7 +964,6 @@ mw_xen_reap_dead_ins( void )
 
 //ErrorExit:
     return 0;
-
 }
 
 
@@ -1155,36 +1154,6 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
     *Handle = ins;
 
 ErrorExit:
-    return rc;
-}
-
-
-int
-MWSOCKET_DEBUG_ATTRIB
-mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
-{
-
-    int rc = 0;
-    mwcomms_ins_data_t * curr = NULL;
-
-    for( int i = 0; i < MAX_INS_COUNT; i++ )
-    {
-        curr = &g_mwxen_state.ins[i];
-
-        if( atomic64_read( &curr->in_use ) == 0 )
-        {
-            continue;
-        }
-
-        if ( !curr->is_ring_ready )
-        {
-            continue;
-        }
-
-        Domids[i] = curr->domid;
-        rc++;
-    }
-
     return rc;
 }
 

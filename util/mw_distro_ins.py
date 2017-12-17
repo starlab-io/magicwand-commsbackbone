@@ -35,19 +35,24 @@
 ##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We 
 ##   interface with Xen by calling out to xl.
 ##
+##   The INS memory requirement is based on the number of sockets it
+##   supports. Take this into account here (manually or
+##   programmatically).
+##
 
 MW_XENSTORE_ROOT = b"/mw"
 
 # ToDo: INS will launch "successfully" with 256MB, but will not publish heartbeat/network_stats to xenstore, leading the PVM to think it's dead. Giving it 3GB allows the INS to function fully. Why is that?
-INS_MEMORY_MB = 3048
-POLL_INTERVAL = 0.01
-DEFAULT_TIMEOUT = 2
+INS_MEMORY_MB = 1024
+POLL_INTERVAL = 0.05
+DEFAULT_TIMEOUT = 5
 
 # ToDo: Create a dependency on common/common_config.h to supply these values
 HEARTBEAT_INTERVAL_SEC = 15
 HEARTBEAT_MAX_MISSES = 2
 MAX_INS_COUNT = 2
 
+import logging
 import sys
 import os
 import random
@@ -127,9 +132,6 @@ net.inet.tcp.congctl.available: reno newreno cubic
 # Map: domid => INS instance
 ins_map = dict()
 
-# DomID of the INS which is being port forwarded to.
-active_ins = None
-
 # List of INS's that do not have domids assigned
 ins_queue = list()
 
@@ -173,9 +175,8 @@ inst_num = 0
 exit_requested = False
 def handler(signum, frame):
     global exit_requested
-    print( "Caught signal {0}".format( signum ) )
+    logging.warn( "Caught signal {0}".format( signum ) )
     exit_requested = True
-
 
 
 def generate_sys_net_opts():
@@ -213,9 +214,9 @@ def generate_sys_net_opts():
     params.append( "delack_ticks:{0:x}".format( random.randint( 10, 40) ) )
     params.append( "congctl:{0}".format( random.choice( ["reno", "newreno", "cubic"] ) ) )
 
-    print "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) )
+    logging.debug( "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) ) )
     opts = " ".join( params )
-    print "TCP/IP parameter value: {0}".format( opts )
+    logging.debug( "TCP/IP parameter value: {0}".format( opts ) )
     return opts
 
 
@@ -224,14 +225,37 @@ class INS:
     def __init__( self, domid=None ):
         self.domid             = domid
         self.ip                = None
-        self.stats             = None
+        self.stats             = dict()
         self.last_contact      = time.time()
         self.missed_heartbeats = 0
         self._lock             = threading.Lock()
         self._forwarders       = list()
+        self._active           = False
 
         if domid == None:
             self._create()
+
+    def __del__( self ):
+        """ Destroy the INS associated with this object. """
+
+        p = subprocess.Popen( ["xl", "destroy", "{0:d}".format(self.domid) ],
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+        (stdout, stderr ) = p.communicate()
+        rc = p.wait()
+        if rc:
+            raise RuntimeError( "Call to xl failed: {}\n".format( stderr ) )
+
+        macs[ self._mac ][ 'in_use' ] = False
+
+        logging.info( "Destroyed INS {}".format( self ) )
+
+    def __str__( self ):
+        return ("id {} IP {} contact {} {}active".
+                format( self.domid, self.ip, self.last_contact,
+                        { False : "in", True : "" } [self._active ] ) )
+
+    def __repr__( self ):
+        return str( self )
 
     def _create( self ):
         """
@@ -260,7 +284,7 @@ class INS:
 
         ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
 
-        print("PATH: {0}".format( os.environ['PATH'] ) )
+        logging.debug( "PATH: {0}".format( os.environ['PATH'] ) )
 
         # Find available MAC
         mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
@@ -278,7 +302,7 @@ class INS:
 
         inst_num += 1
 
-        print( "Running command {0}".format(cmd) )
+        logging.info( "Running command {0}".format(cmd) )
 
         p = subprocess.Popen( cmd.split(),
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
@@ -302,7 +326,6 @@ class INS:
             raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
 
         # self.domid = int( p.stdout.read().split(':')[1] )
-
         ins_queue.append(self)
 
     def set_listening_ports( self, port_list ):
@@ -323,19 +346,66 @@ class INS:
                 f.set_active( activated )
         finally:
             self.unlock()
+        self._active = activated
+        if activated:
+            logging.info( "Active: {}".format( self.domid ) )
+        
+    def is_active( self ):
+        return self._active
 
+    def register_heartbeat( self ):
+        self.lock()
+        try:
+            self.last_contact = time.time()
+            self.missed_heartbeats = 0
+        finally:
+            self.unlock()
+
+    def check_heartbeat( self ):
+        """ False ==> this INS is dead """
+        alive = True
+        self.lock()
+        try:
+            if( time.time() - self.last_contact >
+                HEARTBEAT_INTERVAL_SEC * (self.missed_heartbeats + 1) + 1 ):
+                self.missed_hearbeats += 1
+                logging.warn( "INS {} has missed {} heartbeat(s)\n".
+                              format(self.domid, self.missed_heartbeats) )
+
+                if self.missed_heartbeats >= HEARTBEAT_MAX_MISSES:
+                    logging.warn( "INS {} is now considered dead\n".format(self.domid) )
+                    alive = False
+        finally:
+            self.unlock()
+
+        return alive
+            
     def lock( self ):
         self._lock.acquire()
 
     def unlock( self ):
         self._lock.release()
 
-    def busy( self ):
-        """ At 80%+ of socket capacity """
-        if self.stats:
-            return self.stats[1] >= 0.8 * self.stats[0]
-        else:
-            return False
+    def update_stats( self, stats_str ):
+        self.lock()
+        try:
+            # See hearbeat_thread_func in xenevent.c for this format
+            stats = [ int(x,16) for x in stats_str.split(':') ]
+            self.stats[ 'max_sockets' ]  = stats[0]
+            self.stats[ 'used_sockets' ] = stats[1]
+            self.stats[ 'recv_bytes' ]   = stats[2]
+            self.stats[ 'sent_bytes' ]   = stats[3]
+        finally:
+            self.unlock()
+
+    def get_load( self ):
+        used = 1.0 * self.stats.get( 'used_sockets', 0 )
+        capacity = 1.0 * self.stats.get( 'max_sockets', 1 )
+        return used / capacity
+
+    def overloaded( self ):
+        """ At 80%+ of max load """
+        return self.get_load() >= 0.80
 
     def wait( self ):
         """ Waits until the INS is ready to use """
@@ -346,32 +416,14 @@ class INS:
             if ( self.domid != None and
                  self.domid in ins_map and
                  self.ip != None ):
-                print( "INS {0} is ready with IP {1}".
-                       format( self.domid, self.ip ) )
+                logging.info( "Ready: INS {}".format(self) )
+                logging.info( "All: {}".format(ins_map) )
                 break
+
             time.sleep( POLL_INTERVAL )
             t += POLL_INTERVAL
             if t > DEFAULT_TIMEOUT:
                 raise RuntimeError( "wait() is taking too long" )
-
-    def __del__( self ):
-        """ Destroy the INS associated with this object. """
-
-        print( "Destroying INS {0}".format( self.domid ) )
-        p = subprocess.Popen( ["xl", "destroy", "{0}".format(self.domid) ],
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-        (stdout, stderr ) = p.communicate()
-        rc = p.wait()
-        if rc:
-            raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
-
-        macs[ self._mac ][ 'in_use' ] = False
-
-        self.unlock()
-
-    def __str__( self ):
-        return ("id {0} IP {1} stats {2} contact {3}".
-                format( self.domid, self.ip, self.stats, self.last_contact ) )
 
 
 class PortForwarder:
@@ -385,11 +437,14 @@ class PortForwarder:
     These rules necessitate that incoming connections originate from 
     somewhere other than the Dom0 (or associated DomU's ???).
 
-    These two rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
+    These rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
     1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT 
 
     2. iptables -t nat -I PREROUTING -m tcp -p tcp --dport 2200 \
         -j DNAT --to-destination 1.2.3.4
+
+    3. iptables -A FORWARD -m conntrack --ctstate \
+        ESTABLISHED,RELATED -j ACCEPT
     """
 
     def __init__( self, in_port, dest_ip ):
@@ -416,7 +471,8 @@ class PortForwarder:
         return self._active
     
     def _deactivate( self ):
-        print( "Deactive: {}".format( self ) )
+        logging.info( "Deactivated: {}".format( self ) )
+
         for (c,r) in self._rules:
             c.delete_rule( r )
 
@@ -489,6 +545,8 @@ class PortForwarder:
 
         self._enable_rule(chain, rule)
 
+        logging.info( "Activated: {}".format( self ) )
+        
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)
         for table in ( iptc.Table.FILTER, iptc.Table.NAT, 
@@ -546,16 +604,11 @@ class XenStoreEventHandler:
             ins_map[ domid ].lock()
             ins_map[ domid ].ip = ips[0]
             ins_map[ domid ].unlock()
-            client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
+            #client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
         elif 'network_stats' in path:
-            ins_map[ domid ].lock()
-            ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
-            ins_map[ domid ].unlock()
+            ins_map[ domid ].update_stats( newval )
         elif 'heartbeat' in path:
-            ins_map[ domid ].lock()
-            ins_map[ domid ].last_contact = time.time()
-            ins_map[ domid ].missed_heartbeats = 0
-            ins_map[ domid ].unlock()
+            ins_map[ domid ].register_heartbeat()
         elif 'listening_ports' in path:
             ports = [ int(p, 16) for p in newval.split() ]
             ins_map[ domid ].set_listening_ports( ports )
@@ -628,7 +681,7 @@ class XenIface:
      def __init__( self ):
          """
          The Xen python bindings are very broken on Ubuntu 14.04, so we
-         just call out tothe xl program.
+         just call out to the xl program.
          """
 
      def get_vif( self, domid ):
@@ -695,48 +748,56 @@ def test_redir():
              return
          time.sleep( POLL_INTERVAL )
 
-def run_networker():
-    # See which INS has the least traffic
-    # Set that INS to active
-    # Set all of the other INSs to inactive
 
-    i = None
+def balance_load():
+    """
+    Serves as load balancer. Routes new connections to least busy INS
+    if the current one is too busy. If all of them are too busy, returns
+    True so caller will create a new one.
+    """
 
-    for d in ins_map.keys():
-        if ins_map[d].stats != None:
-            i = d
-            break
+    assert len(ins_map), "No INS is running at all"
 
-    if i == None:
-        return
+    all_active = [ v for (k,v) in ins_map.iteritems() if v.is_active() ]
 
-    for d in ins_map.keys():
-        if ins_map[d].stats == None:
-            continue
-        if ( ins_map[i].stats[2] + ins_map[i].stats[3] >
-             ins_map[d].stats[2] + ins_map[d].stats[3] and
-             not ins_map[d].busy() ):
-            i = d
+    if not all_active:
+        # There is no active INS; this can happen on initialization. Pick the first one.
+        curr = ins_map.values()[0]
+        curr.set_active( True )
+    else:
+        assert len(all_active) == 1, "Only one INS should be active here"
+        curr = all_active[0]
 
-    global active_ins
+    if not curr.overloaded():
+        # Nothing to do here
+        return False
 
-    if ( active_ins in ins_map.keys() and
-         (ins_map[active_ins].stats[2] + ins_map[active_ins].stats[3]) * 0.75 <=
-         ins_map[i].stats[2] + ins_map[i].stats[3] ):
-        return
+    # curr is overloaded: shift burden to the INS with the lowest load    
+    logging.debug( "Stats: {}, load: {}, overloaded: {}".
+                   format( curr.stats, curr.get_load(), curr.overloaded() ) )
+    logging.info( "INS {} is overloaded, looking for another one".format(curr) )
 
-    print( "Old active INS: {0}, New active INS: {1}".format(active_ins, i) )
-    ins_map[i].set_active( True )
-    ins_map[active_ins].set_active( False )
+    available = [ v for (k,v) in ins_map.iteritems() if not v.overloaded() ]
+    if not available:
+        # Nothing is available - the caller needs to create a new INS
+        return True
 
-    active_ins = i
+    new = min( available, key=lambda x: x.get_load() )
+
+    logging.info( "{} is over-loaded. Directing traffic to {}"
+                  .format( curr, new ) )
+
+    new.set_active( True )   # 2 INSs are active
+    curr.set_active( False ) # 1 INS is active
+    return False
+
 
 def single_ins():
     x = XenIface()
     e = XenStoreEventHandler( x )
     w = XenStoreWatch( e )
     w.start()
-    
+
     s = INS()
     s.wait() # Wait for INS IP address to appear
 
@@ -754,38 +815,32 @@ def ins_runner():
     w = XenStoreWatch( e )
     w.start()
 
-    global active_ins
-
-    first = INS()
-    first.wait()
-    first.set_active( True )
-    active_ins = first.domid
-
-    #Create more INSs here. Currently, code will not create more on it's own
-
+    # Create more INSs and monitor the workload here.
+    # INS activation is handled by balance_load()
     while ( not exit_requested ):
-        curr_time = time.time()
-        for d in ins_map.keys():
-            i = ins_map[d]
-            if curr_time - i.last_contact <= HEARTBEAT_INTERVAL_SEC * (i.missed_heartbeats + 1) + 1:
-                continue;
-            i.missed_heartbeats = i.missed_heartbeats + 1
-            sys.stderr.write( "INS {0} has missed {1} heartbeat(s)\n".format(d, i.missed_heartbeats) )
+        if spawn_new and len(ins_map) < MAX_INS_COUNT:
+            spawn_new = False
+            i = INS()
+            i.wait()
 
-            if i.missed_heartbeats >= HEARTBEAT_MAX_MISSES:
-                sys.stderr.write( "INS {0} is now considered dead\n".format(d) )
-                del ins_map[d]
-                print("{}, {}".format(len(ins_map), len(ins_queue)))
+        # Fresh query of INSs in each iteration; the set may have
+        # changed. N.B. INSs are inserted into ins_map by the XS
+        # monitor.
+        for domid in ins_map.keys():
+            # Check for death
+            if not ins_map[domid].check_heartbeat():
+                del ins_map[domid]
 
-        run_networker()
+        spawn_new = balance_load()
 
         time.sleep( POLL_INTERVAL )
 
-    for d in ins_map.keys():
-        del ins_map[d]
-
 if __name__ == '__main__':
-    print( "Running in PID {0}".format( os.getpid() ) )
+    logging.basicConfig( format='%(levelname)s: %(message)s',
+                         level=logging.DEBUG )
+
+    logging.debug( "Running in PID {0}".format( os.getpid() ) )
+
     signal.signal( signal.SIGINT,  handler )
     signal.signal( signal.SIGTERM, handler )
     signal.signal( signal.SIGABRT, handler )
@@ -794,4 +849,7 @@ if __name__ == '__main__':
     #single_ins()
     ins_runner()
 
-    print( "Exiting main thread" )
+    global ins_map
+    ins_map = None # deref all items
+    logging.info("Exiting main thread" )
+
