@@ -226,8 +226,8 @@ class INS:
         self.domid             = domid
         self.ip                = None
         self.stats             = dict()
-        self.last_contact      = time.time()
-        self.missed_heartbeats = 0
+        self._last_contact      = time.time()
+        self._missed_heartbeats = 0
         self._lock             = threading.Lock()
         self._forwarders       = list()
         self._active           = False
@@ -250,9 +250,13 @@ class INS:
         logging.info( "Destroyed INS {}".format( self ) )
 
     def __str__( self ):
-        return ("id {} IP {} contact {} {}active".
-                format( self.domid, self.ip, self.last_contact,
-                        { False : "in", True : "" } [self._active ] ) )
+        rules = ""
+        if self._forwarders:
+            rules = "\n\t" + "\n\t".join( [str(f) for f in self._forwarders ] )
+
+        return ("id {} IP {} {}active{}".
+                format( self.domid, self.ip,
+                        { False : "in", True : "" }[self._active ], rules ) )
 
     def __repr__( self ):
         return str( self )
@@ -336,6 +340,7 @@ class INS:
                     continue
                 fwd = PortForwarder( p, self.ip )
                 self._forwarders.append( fwd )
+            logging.debug( self )
         finally:
             self.unlock()
     
@@ -356,8 +361,8 @@ class INS:
     def register_heartbeat( self ):
         self.lock()
         try:
-            self.last_contact = time.time()
-            self.missed_heartbeats = 0
+            self._last_contact = time.time()
+            self._missed_heartbeats = 0
         finally:
             self.unlock()
 
@@ -366,13 +371,13 @@ class INS:
         alive = True
         self.lock()
         try:
-            if( time.time() - self.last_contact >
-                HEARTBEAT_INTERVAL_SEC * (self.missed_heartbeats + 1) + 1 ):
-                self.missed_hearbeats += 1
+            if( time.time() - self._last_contact >
+                HEARTBEAT_INTERVAL_SEC * (self._missed_heartbeats + 1) + 1 ):
+                self._missed_heartbeats += 1
                 logging.warn( "INS {} has missed {} heartbeat(s)\n".
-                              format(self.domid, self.missed_heartbeats) )
+                              format(self.domid, self._missed_heartbeats) )
 
-                if self.missed_heartbeats >= HEARTBEAT_MAX_MISSES:
+                if self._missed_heartbeats >= HEARTBEAT_MAX_MISSES:
                     logging.warn( "INS {} is now considered dead\n".format(self.domid) )
                     alive = False
         finally:
@@ -482,7 +487,7 @@ class PortForwarder:
         self._deactivate()
 
     def __str__( self ):
-        return "0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        return "*:{0} ==> {1}:{0}".format( self._port, self._dest )
 
     def get_port( self ):
         return self._port
@@ -589,6 +594,7 @@ class XenStoreEventHandler:
             # We can't do anything without the domid
             return
 
+        logging.debug( "Event on path: {}".format( path ) )
         if 'ins_dom_id' in path:
             assert domid == int(newval)
             if len(ins_queue) == 0:
@@ -836,6 +842,8 @@ def ins_runner():
         time.sleep( POLL_INTERVAL )
 
 if __name__ == '__main__':
+    #global ins_map
+
     logging.basicConfig( format='%(levelname)s: %(message)s',
                          level=logging.DEBUG )
 
@@ -849,7 +857,6 @@ if __name__ == '__main__':
     #single_ins()
     ins_runner()
 
-    global ins_map
     ins_map = None # deref all items
     logging.info("Exiting main thread" )
 
