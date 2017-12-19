@@ -8,7 +8,7 @@
 #include <string.h>
 #include <errno.h>
 
-#define NUM_SOCKS 60
+#define NUM_SOCKS 5000
 
 #define BUFF_SIZE 32
 #define START_PORT 2000

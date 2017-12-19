@@ -1076,6 +1076,14 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     if( !CreateBackingFile ) { goto ErrorExit; }
     
+    fd = get_unused_fd_flags( flags );
+    if( fd < 0 )
+    {
+        rc = -EMFILE;
+        MYASSERT( !"get_unused_fd_flags() failed\n" );
+        goto ErrorExit;
+    }
+
     inode = gfn_new_inode_pseudo( g_mwsocket_state.fs_mount->mnt_sb );
     if( NULL == inode )
     {
@@ -1096,8 +1104,8 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     path.dentry = d_alloc_pseudo( g_mwsocket_state.fs_mount->mnt_sb, &name );
     if( NULL == path.dentry )
     {
-        MYASSERT( !"d_alloc_pseudo() failed\n" );
         rc = -ENOMEM;
+        MYASSERT( !"d_alloc_pseudo() failed\n" );
         goto ErrorExit;
     }
     path.mnt = mntget( g_mwsocket_state.fs_mount );
@@ -1108,6 +1116,8 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     {
         rc = PTR_ERR( file );
         MYASSERT( !"alloc_file() failed" );
+        file = NULL;
+        path_put( &path );
         goto ErrorExit;
     }
     sockinst->file = file;
@@ -1118,17 +1128,9 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     file->f_flags |= flags;
 
-    fd = get_unused_fd_flags( flags );
-    if( fd < 0 )
-    {
-        MYASSERT( !"get_unused_fd_flags() failed\n" );
-        rc = -EMFILE;
-        goto ErrorExit;
-    }
-
     // Success
     sockinst->local_fd = fd;
-    sockinst->f_flags = flags;
+    sockinst->f_flags  = flags;
     getnstimeofday( &sockinst->est_time );
 
     fd_install( fd, sockinst->file );
@@ -1140,11 +1142,7 @@ ErrorExit:
     if( rc )
     {
         // Cleanup partially-created file
-        if( file )
-        {
-            put_filp( file );
-            path_put( &path );
-        }
+        if( file )  { put_filp( file ); }
         if( inode ) { iput( inode ); }
         if( sockinst )
         {
