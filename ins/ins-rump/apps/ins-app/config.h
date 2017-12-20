@@ -11,8 +11,8 @@
 // open to fail with EMFILE errno.
 //
 
-//#define MAX_THREAD_COUNT 4000   // for production
-#define MAX_THREAD_COUNT 500// for testing
+#define MAX_THREAD_COUNT 4000   // for production
+//#define MAX_THREAD_COUNT 100// for testing
 
 
 //
