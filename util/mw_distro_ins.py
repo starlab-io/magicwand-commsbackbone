@@ -858,5 +858,5 @@ if __name__ == '__main__':
     ins_runner()
 
     ins_map = None # deref all items
-    logging.info("Exiting main thread" )
+    logging.info( "Exiting main thread" )
 

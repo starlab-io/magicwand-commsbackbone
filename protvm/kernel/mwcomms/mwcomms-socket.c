@@ -2056,7 +2056,8 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         if( WaitForRing )
         {
             // We were willing to wait for the ring, but we failed
-            // anyway. Assume the INS is dead. Propogate this news as
+            // anyway. (It could also not yet have an initialized
+            // ring.) Assume the INS is dead. Propogate this news as
             // needed.
             pr_info( "Marking INS %d as dead\n",
                      MW_SOCKET_CLIENT_ID( base->sockfd ) );
@@ -2071,6 +2072,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     // state such that the system will fail if a response is not
     // received.
     rc = mwsocket_pre_process_request( ActiveRequest );
+    MYASSERT( 0 == rc );
     if( rc ) { goto ErrorExit; }
 
     // Success

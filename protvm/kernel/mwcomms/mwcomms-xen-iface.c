@@ -102,8 +102,14 @@ typedef struct _mwcomms_ins_data
     // count: how many heartbeats have been missed?
     int                       missed_heartbeats;
 
-    // Only one request is allowed at a time. It is held from
-    // mw_xen_get_next_request_slot() until mw_xen_dispatch_request().
+    // Only one request slot is revealed at a time. It is reserved for
+    // the client's usage: it is acquired in
+    // mw_xen_get_next_request_slot() and released in
+    // mw_xen_dispatch_request().
+
+    // The current (outstanding) request for this INS.
+    mt_request_generic_t    * curr_req;
+
     bool                      locked;
     struct mutex              request_lock;
 } mwcomms_ins_data_t;
@@ -1085,7 +1091,7 @@ mw_xen_get_ins_from_domid( IN domid_t               Domid,
 
     if( rc )
     {
-        MYASSERT( !"Unable to get INS from domid" );
+        pr_info( "Could not get INS from domid=%d\n", Domid );
         goto ErrorExit;
     }
 
@@ -1132,6 +1138,16 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         goto ErrorExit;
     }
 
+    // The INS is ready. No matter what failures occur below, we
+    // acquire the lock now. That means we must also return the handle
+    // to the caller (in locked state).
+
+    mutex_lock( &ins->request_lock );
+    ins->locked = true;
+    ins->curr_req = NULL;
+
+    *Handle = ins;
+
     while( true )
     {
         // Is the INS still alive?
@@ -1159,18 +1175,16 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
     *Dest = (mt_request_generic_t *)
         RING_GET_REQUEST( &ins->front_ring,
                           ins->front_ring.req_prod_pvt );
-    if ( !Dest )
+    if( !Dest )
     {
         pr_err( "Destination buffer is NULL\n" );
         rc = -EIO;
         goto ErrorExit;
     }
 
-    MYASSERT( !ins->locked );
-    mutex_lock( &ins->request_lock );
-    ins->locked = true;
+    // Success: *Dest is populated, rc is 0
 
-    *Handle = ins;
+    ins->curr_req = *Dest;
 
 ErrorExit:
     return rc;
@@ -1205,26 +1219,47 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
 }
 
 
+/**
+ * @brief Releases slot for request in this INS's ring buffer.
+ *
+ * Optionally sends the request to the INS. Closely paired with
+ * mw_xen_get_next_request_slot().
+ */
 int
-//MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_ATTRIB
 mw_xen_release_request( IN void * Handle,
                         IN bool   SendRequest )
 {
     int rc = 0;
     mwcomms_ins_data_t * ins = (mwcomms_ins_data_t *) Handle;
 
-    if ( NULL == Handle )
+    // mw_xen_get_next_request_slot() gives a NULL handle upon failure
+    if( NULL == ins ||
+        0 == atomic64_read( &ins->in_use ) )
     {
         rc = -EINVAL;
-        // MYASSERT( !"NULL Handle given" );
         goto ErrorExit;
     }
 
+    // mw_xen_get_next_request_slot() succeeded: the lock is acquired
+
+    MYASSERT( ins->locked );
+
     if( SendRequest )
     {
-        // Locked state is expected only if
-        // mw_xen_get_next_request_slot() succeeded.
-        MYASSERT( ins->locked );
+        mt_request_generic_t * req  = (mt_request_generic_t *)
+            RING_GET_REQUEST( &ins->front_ring,
+                              ins->front_ring.req_prod_pvt );
+        MYASSERT( MT_IS_REQUEST( req ) );
+        MYASSERT( ins->curr_req == req );
+        if( !MT_IS_REQUEST( ins->curr_req ) )
+        {
+            rc = -EINVAL;
+            MYASSERT( !"Invalid request on ring buffer!!!!" );
+            goto ErrorExit;
+        }
+
+        // Advance the ring metadata in shared memory, notify remote side
         ++ins->front_ring.req_prod_pvt;
         RING_PUSH_REQUESTS( &ins->front_ring );
 
@@ -1233,10 +1268,14 @@ mw_xen_release_request( IN void * Handle,
 #endif
     }
 
-    mutex_unlock( &ins->request_lock );
-    ins->locked = false;
-
 ErrorExit:
+    if( ins )
+    {
+        // MYASSERT( ins->locked ); // Valid in single-threaded usage
+        ins->curr_req = NULL;
+        mutex_unlock( &ins->request_lock );
+        ins->locked = false;
+    }
     return rc;
 }
 
