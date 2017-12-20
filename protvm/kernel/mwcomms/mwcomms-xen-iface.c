@@ -102,6 +102,10 @@ typedef struct _mwcomms_ins_data
     // count: how many heartbeats have been missed?
     int                       missed_heartbeats;
 
+    // Only one request is allowed at a time. It is held from
+    // mw_xen_get_next_request_slot() until mw_xen_dispatch_request().
+    bool                      locked;
+    struct mutex              request_lock;
 } mwcomms_ins_data_t;
 
 
@@ -829,6 +833,9 @@ mw_xen_ins_found( IN const char * Path )
     //
     mw_xen_ins_alive( curr );
 
+    mutex_init( &curr->request_lock );
+    curr->locked = false;
+
     curr->is_ring_ready = true;
     pr_info( "INS %d is ready\n", curr->domid );
 
@@ -1104,19 +1111,18 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle )
 {
-    int                 rc    = 0;
-    mwcomms_ins_data_t *ins   = NULL;
-    domid_t             domid = DomId;
+    int                  rc    = 0;
+    mwcomms_ins_data_t * ins   = NULL;
 
     MYASSERT( NULL != Handle );
     MYASSERT( NULL != Dest );
 
     if ( DOMID_INVALID == DomId || (domid_t)-1 == DomId )
     {
-        domid = mw_xen_new_socket_rr();
+        DomId = mw_xen_new_socket_rr();
     }
 
-    rc = mw_xen_get_ins_from_domid( domid, &ins );
+    rc = mw_xen_get_ins_from_domid( DomId, &ins );
     if( rc ) { goto ErrorExit; }
 
     if ( !ins->is_ring_ready )
@@ -1126,20 +1132,29 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         goto ErrorExit;
     }
 
-    do
+    while( true )
     {
-        if ( !RING_FULL( &ins->front_ring ) ) { break; }
-        if ( !WaitForRing )
+        // Is the INS still alive?
+        if( 0 == atomic64_read( &ins->in_use ) )
         {
-            // Wait was not requested so fail. This happens often so
-            // don't emit a message for it.
+            rc = -ESTALE;
+            pr_info( "INS %d died since request arrived. Failing it now, rc=%d.\n",
+                     DomId, rc );
+            goto ErrorExit;
+        }
+        if( !RING_FULL( &ins->front_ring ) ) { break; }
+        if( !WaitForRing )
+        {
+            // Wait was not requested and there's no slot, so report
+            // the failure. This happens very often so don't emit a
+            // message for it.
             rc = -EAGAIN;
             goto ErrorExit;
         }
 
         // Wait and try again...
         mw_xen_wait( RING_FULL_TIMEOUT );
-    } while( true );
+    }
 
     *Dest = (mt_request_generic_t *)
         RING_GET_REQUEST( &ins->front_ring,
@@ -1150,6 +1165,10 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         rc = -EIO;
         goto ErrorExit;
     }
+
+    MYASSERT( !ins->locked );
+    mutex_lock( &ins->request_lock );
+    ins->locked = true;
 
     *Handle = ins;
 
@@ -1188,7 +1207,8 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
 
 int
 //MWSOCKET_DEBUG_ATTRIB
-mw_xen_dispatch_request( void * Handle )
+mw_xen_release_request( IN void * Handle,
+                        IN bool   SendRequest )
 {
     int rc = 0;
     mwcomms_ins_data_t * ins = (mwcomms_ins_data_t *) Handle;
@@ -1196,16 +1216,25 @@ mw_xen_dispatch_request( void * Handle )
     if ( NULL == Handle )
     {
         rc = -EINVAL;
-        MYASSERT( !"NULL Handle given" );
+        // MYASSERT( !"NULL Handle given" );
         goto ErrorExit;
     }
 
-    ++ins->front_ring.req_prod_pvt;
-    RING_PUSH_REQUESTS( &ins->front_ring );
+    if( SendRequest )
+    {
+        // Locked state is expected only if
+        // mw_xen_get_next_request_slot() succeeded.
+        MYASSERT( ins->locked );
+        ++ins->front_ring.req_prod_pvt;
+        RING_PUSH_REQUESTS( &ins->front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    rc = mw_xen_send_event( ins );
+        rc = mw_xen_send_event( ins );
 #endif
+    }
+
+    mutex_unlock( &ins->request_lock );
+    ins->locked = false;
 
 ErrorExit:
     return rc;

@@ -476,9 +476,6 @@ typedef struct _mwsocket_globals
     struct completion xen_iface_ready;
     bool              is_xen_iface_ready;
 
-    // Lock on ring access
-    struct mutex request_lock;
-
     // Active requests
     struct kmem_cache * active_request_cache;
     struct list_head    active_request_list;
@@ -1087,8 +1084,8 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     inode = gfn_new_inode_pseudo( g_mwsocket_state.fs_mount->mnt_sb );
     if( NULL == inode )
     {
-        MYASSERT( !"new_inode_pseudo() failed\n" );
         rc = -ENOMEM;
+        MYASSERT( !"new_inode_pseudo() failed\n" );
         goto ErrorExit;
     }
     sockinst->inode = inode;
@@ -1178,8 +1175,8 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
 
     if( !MW_SOCKET_IS_FD( SockInst->remote_fd ) )
     {
-        MYASSERT( !"Not an MW socket" );
         rc = -EINVAL;
+        MYASSERT( !"Not an MW socket" );
         goto ErrorExit;
     }
 
@@ -1288,8 +1285,8 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
                           GFP_KERNEL | __GFP_ZERO );
     if( NULL == actreq )
     {
-        MYASSERT( !"kmem_cache_alloc failed" );
         rc = -ENOMEM;
+        MYASSERT( !"kmem_cache_alloc failed" );
         goto ErrorExit;
     }
 
@@ -1713,7 +1710,7 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->local_fd,
                   Response->base.sockfd );
 
-        ActiveRequest->sockinst->remote_fd     = Response->base.sockfd;
+        ActiveRequest->sockinst->remote_fd = Response->base.sockfd;
         break;
     case MtResponseSocketListen:
         ActiveRequest->sockinst->mwflags |= MWSOCKET_FLAG_LISTENING;
@@ -2010,6 +2007,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     mt_request_generic_t * req  = NULL;
     void                 * h    = NULL;
     mt_request_base_t    * base = NULL;
+    bool                   send = false;
 
     MYASSERT( ActiveRequest );
 
@@ -2031,13 +2029,10 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
               MtRequestPollsetQuery == base->type ||
               MW_SOCKET_IS_FD( base->sockfd ) );
 
-    // Hold this for duration of the operation. 
-    mutex_lock( &g_mwsocket_state.request_lock );
-
     if( !MT_IS_REQUEST( &ActiveRequest->rr.request ) )
     {
-        MYASSERT( !"Invalid request given\n" );
         rc = -EINVAL;
+        MYASSERT( !"Invalid request given\n" );
         goto ErrorExit;
     }
 
@@ -2078,6 +2073,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     rc = mwsocket_pre_process_request( ActiveRequest );
     if( rc ) { goto ErrorExit; }
 
+    // Success
     if( DEBUG_SHOW_TYPE( ActiveRequest->rr.request.base.type ) )
     {
         pr_debug( "Sending request %lx fd %lx/%d type %x\n",
@@ -2090,12 +2086,10 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     memcpy( (void *) req,
             &ActiveRequest->rr.request,
             ActiveRequest->rr.request.base.size );
-
-    rc = mw_xen_dispatch_request( h );
-    // Fall-through
+    send = true;
 
 ErrorExit:
-    mutex_unlock( &g_mwsocket_state.request_lock );
+    rc = mw_xen_release_request( h, send );
 
     return rc;
 }
@@ -2177,8 +2171,8 @@ mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
 
     if( Request->base.size > sizeof( *Request ) )
     {
-        MYASSERT( !"Request size too big" );
         rc = -EINVAL;
+        MYASSERT( !"Request size too big" );
         goto ErrorExit;
     }
 
@@ -2642,8 +2636,8 @@ mwsocket_create( OUT mwsocket_t * SockFd,
     *SockFd = (mwsocket_t)-1;
     if( !g_mwsocket_state.is_xen_iface_ready )
     {
-        MYASSERT( !"Ring has not been initialized\n" );
         rc = -ENODEV;
+        MYASSERT( !"Ring has not been initialized\n" );
         goto ErrorExit;
     }
 
@@ -2772,8 +2766,8 @@ mwsocket_read( struct file * File,
 
     if( !sockinst->read_expected )
     {
-        MYASSERT( !"Calling read() but fire-and-forget was indicated in write()" );
         rc = -EINVAL;
+        MYASSERT( !"Calling read() but fire-and-forget was indicated in write()" );
         goto ErrorExit;
     }
 
@@ -2816,9 +2810,9 @@ mwsocket_read( struct file * File,
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
         // Keep the request alive and stage for another read attempt.
-        pr_warn( "read() was interrupted\n" );
         sockinst->read_expected = true;
         rc = -EINTR;
+        pr_warn( "read() was interrupted\n" );
         goto ErrorExit;
     }
 
@@ -2826,8 +2820,8 @@ mwsocket_read( struct file * File,
     response = (mt_response_generic_t *) &actreq->rr.response;
     if( Len < response->base.size )
     {
-        MYASSERT( !"User buffer is too small for response" );
         rc = -EINVAL;
+        MYASSERT( !"User buffer is too small for response" );
         goto ErrorExit;
     }
 
@@ -2847,8 +2841,8 @@ mwsocket_read( struct file * File,
     rc = copy_to_user( Bytes, (void *)response, response->base.size );
     if( rc )
     {
-        MYASSERT( !"copy_to_user() failed" );
         rc = -EFAULT;
+        MYASSERT( !"copy_to_user() failed" );
         goto ErrorExit;
     }
     
@@ -2883,8 +2877,8 @@ mwsocket_write( struct file * File,
 
     if( Len < MT_REQUEST_BASE_SIZE )
     {
-        MYASSERT( !"User provided too few bytes." );
         rc = -EINVAL;
+        MYASSERT( !"User provided too few bytes." );
         goto ErrorExit;
     }
 
@@ -2892,8 +2886,8 @@ mwsocket_write( struct file * File,
     rc = copy_from_user( &base, Bytes, sizeof(base) );
     if( rc )
     {
-        MYASSERT( !"copy_from_user failed." );
         rc = -EFAULT;
+        MYASSERT( !"copy_from_user failed." );
         goto ErrorExit;
     }
 
@@ -2904,8 +2898,8 @@ mwsocket_write( struct file * File,
 
     if( sockinst->read_expected )
     {
-        MYASSERT( !"write() called but read() expected" );
         rc = -EIO;
+        MYASSERT( !"write() called but read() expected" );
         goto ErrorExit;
     }
 
@@ -2939,15 +2933,15 @@ mwsocket_write( struct file * File,
     rc = copy_from_user( request, Bytes, Len );
     if( rc )
     {
-        MYASSERT( !"copy_from_user failed." );
         rc = -EFAULT;
+        MYASSERT( !"copy_from_user failed." );
         goto ErrorExit;
     }
 
     if( request->base.size > Len )
     {
-        MYASSERT( !"Request is longer than provided buffer." );
         rc = -EINVAL;
+        MYASSERT( !"Request is longer than provided buffer." );
         goto ErrorExit;
     }
 
@@ -3008,8 +3002,8 @@ mwsocket_ioctl( struct file * File,
         rc = copy_from_user( &attrib, (void *)Arg, sizeof(attrib) );
         if( rc )
         {
-            MYASSERT( !"Invalid memory provided\n" );
             rc = -EFAULT;
+            MYASSERT( !"Invalid memory provided\n" );
             goto ErrorExit;
         }
 
@@ -3023,15 +3017,15 @@ mwsocket_ioctl( struct file * File,
                                sizeof(attrib.val) );
             if( rc )
             {
-                MYASSERT( !"Invalid memory provided\n" );
                 rc = -EFAULT;
+                MYASSERT( !"Invalid memory provided\n" );
                 goto ErrorExit;
             }
         }
         break;
     default:
-        pr_err( "Called with invalid IOCTL %x\n", Cmd );
         rc = -EINVAL;
+        pr_err( "Called with invalid IOCTL %x\n", Cmd );
         goto ErrorExit;
     }
 
@@ -3090,7 +3084,14 @@ mwsocket_release( struct inode * Inode,
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
 
-    MYASSERT( sockinst->mwflags & MWSOCKET_FLAG_USER );
+    // The socket may have been created in mwsocket_create() but
+    // creation failed on the INS. In this case, we'll destroy a
+    // socket with MWSOCKET_FLAG_USER cleared. So the socket should
+    // either have no remote FD, or MWSOCKET_FLAG_USER should be
+    // asserted.
+
+    MYASSERT( sockinst->remote_fd == MT_INVALID_SOCKET_FD ||
+              (sockinst->mwflags & MWSOCKET_FLAG_USER)     );
 
     sockinst->mwflags |= MWSOCKET_FLAG_RELEASED;
 
@@ -3153,7 +3154,6 @@ mwsocket_init( IN struct sockaddr * LocalIp )
 
     g_mwsocket_state.local_ip = LocalIp;
 
-    mutex_init( &g_mwsocket_state.request_lock );
     mutex_init( &g_mwsocket_state.active_request_lock );
     mutex_init( &g_mwsocket_state.sockinst_lock );
 
@@ -3175,8 +3175,8 @@ mwsocket_init( IN struct sockaddr * LocalIp )
     if( NULL == gfn_new_inode_pseudo
         || NULL == gfn_dynamic_dname )
     {
-        MYASSERT( !"Couldn't find required kernel function\n" );
         rc = -ENXIO;
+        MYASSERT( !"Couldn't find required kernel function\n" );
         goto ErrorExit;
     }
 
@@ -3190,8 +3190,8 @@ mwsocket_init( IN struct sockaddr * LocalIp )
 
     if( NULL == g_mwsocket_state.active_request_cache )
     {
-        MYASSERT( !"kmem_cache_create() failed\n" );
         rc = -ENOMEM;
+        MYASSERT( !"kmem_cache_create() failed\n" );
         goto ErrorExit;
     }
 
@@ -3201,8 +3201,8 @@ mwsocket_init( IN struct sockaddr * LocalIp )
                            0, 0, NULL );
     if( NULL == g_mwsocket_state.sockinst_cache )
     {
-        MYASSERT( !"kmem_cache_create() failed\n" );
         rc = -ENOMEM;
+        MYASSERT( !"kmem_cache_create() failed\n" );
         goto ErrorExit;
     }
 
@@ -3213,8 +3213,8 @@ mwsocket_init( IN struct sockaddr * LocalIp )
                      MWSOCKET_MESSAGE_CONSUMER_THREAD );
     if( NULL == g_mwsocket_state.response_reader_thread )
     {
-        MYASSERT( !"kthread_run() failed\n" );
         rc = -ESRCH;
+        MYASSERT( !"kthread_run() failed\n" );
         goto ErrorExit;
     }
 
@@ -3225,8 +3225,8 @@ mwsocket_init( IN struct sockaddr * LocalIp )
                      MWSOCKET_MONITOR_THREAD );
     if( NULL == g_mwsocket_state.monitor_thread )
     {
-        MYASSERT( !"kthread_run() failed\n" );
         rc = -ESRCH;
+        MYASSERT( !"kthread_run() failed\n" );
         goto ErrorExit;
     }
 
@@ -3278,8 +3278,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
 
     if( !(usersock->mwflags & MWSOCKET_FLAG_USER) )
     {
-        MYASSERT( !"Not a user socket. I shouldn't have been invoked." );
         rc = -EINVAL;
+        MYASSERT( !"Not a user socket. I shouldn't have been invoked." );
         goto ErrorExit;
     }
 
