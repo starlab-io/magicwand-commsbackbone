@@ -1,3 +1,9 @@
+/**************************************************************************
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2018, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ **************************************************************************/
+
 // Assorted support functions that rely on the NetBSD API. Put them
 // here to avoid header file troubles.
 

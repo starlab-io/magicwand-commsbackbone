@@ -1,6 +1,12 @@
 #!/bin/bash
 
 ##
+## STAR LAB PROPRIETARY & CONFIDENTIAL
+## Copyright (C) 2016, Star Lab — All Rights Reserved
+## Unauthorized copying of this file, via any medium is strictly prohibited.
+##
+
+##
 ## Loads the mwcomms driver. Its device will be useable by all.
 ##
 
