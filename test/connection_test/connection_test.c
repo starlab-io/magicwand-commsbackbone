@@ -133,6 +133,14 @@ main( int argc, const char* argv[] )
 {
     
     struct pollfd *fds = NULL;
+
+    if( argc < 3 )
+    {
+        printf("Args:\n"
+               "1) number of connections\n"
+               "2) ip address\n"
+               "3) time to poll\n" );
+    }
     
     if( NULL == argv[1] )
     {
@@ -146,11 +154,6 @@ main( int argc, const char* argv[] )
         return -1;
     }
     
-    if( NULL == argv[3] )
-    {
-        printf("Please input the number of seconds you would like to poll");
-    }
-
     strncpy( remote_ip, argv[2], IP_STR_LEN );
     
     num_conn = strtol( argv[1], NULL, 10 );
