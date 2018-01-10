@@ -555,7 +555,7 @@ xe_net_data_on_socket( struct pollfd *PollFd )
         goto ErrorExit;
     }
 
-    if( ( PollFd->revents & ( POLLIN | POLLHUP ) ) ||
+    if( ( PollFd->revents & ( POLLIN | POLLRDNORM ) ) ||
         ( PollFd->revents == 0 ) )
     {
         
@@ -647,7 +647,7 @@ xe_net_defer_accept_socket( int LocalFd,
     listen_poll_fd.revents = 0;
 
     do
-    {   
+    {
         //first check for sockets that we already know have data
         for( int i=0; i < MAX_THREAD_COUNT; i++ )
         {
@@ -679,23 +679,33 @@ xe_net_defer_accept_socket( int LocalFd,
             {
                 
                 DEBUG_PRINT("Defer accept peer disconnect detected, local fd: %d\n",
-                            peer_poll_fds[i].fd );
+                            peer_poll_fds[last_idx].fd );
                 
                 //Peer has disconnected
-                close( peer_poll_fds[i].fd );
+                close( peer_poll_fds[last_idx].fd );
                 
-                peer_poll_fds[i].fd = -1;
-                peer_poll_fds[i].revents = 0;
+                peer_poll_fds[last_idx].fd = -1;
+                peer_poll_fds[last_idx].revents = 0;
+
+                last_idx++;
 
                 continue;
             }
 
-            if( peer_poll_fds[i].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
+            if( peer_poll_fds[last_idx].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
             {
-                close( peer_poll_fds[i].fd );
-                DEBUG_PRINT( "Error: Closing socket %d\n", peer_poll_fds[i].fd );
-                peer_poll_fds[i].fd = -1;
-                peer_poll_fds[i].revents = 0;
+                close( peer_poll_fds[last_idx].fd );
+                
+                DEBUG_PRINT( "Error: Closing socket %d revents: %x\n",
+                             peer_poll_fds[last_idx].fd,
+                             peer_poll_fds[last_idx].revents );
+
+                peer_poll_fds[last_idx].fd = -1;
+                peer_poll_fds[last_idx].revents = 0;
+
+                last_idx++;
+
+                continue;
             }
             
             last_idx++;
@@ -757,13 +767,6 @@ xe_net_defer_accept_socket( int LocalFd,
         if( rc < 0 )
         {
             perror("Defer accept poll failed");
-        }
-
-        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
-        {
-            if( peer_poll_fds[i].fd == -1 ) { continue; }
-
-
         }
         
         xe_net_defer_accept_wait();
