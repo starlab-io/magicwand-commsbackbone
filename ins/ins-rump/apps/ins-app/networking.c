@@ -529,7 +529,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 }
 
 void
-xe_net_poll_wait( void )
+xe_net_defer_accept_wait( void )
 {
     struct timespec ts = {0,1};
 
@@ -539,39 +539,245 @@ xe_net_poll_wait( void )
     }
 }
 
+
+
 int
-xe_net_defer_accept_wait( int SockFd )
+MWCOMMS_DEBUG_ATTRIB
+xe_net_data_on_socket( struct pollfd *PollFd )
 {
-    int rc = 0;
-    struct pollfd fds;
-
-    MYASSERT( 0 != SockFd );
-
-    fds.fd = SockFd;
-    fds.events = POLLIN | POLLRDNORM;
-    fds.revents = 0;
-
-    //Block until something arrives on socket
-    while ( rc == 0 )
+    int rc = -1;
+    int bytes_read = 0;
+    char buf = 0;
+    
+    if( PollFd->fd == -1 )
     {
-        rc = poll( &fds, 1, 0 );
-        if( rc > 0 ) { break; }
+        rc = -1;
+        goto ErrorExit;
+    }
 
-        if( rc < 0 )
+    if( ( PollFd->revents & ( POLLIN | POLLRDNORM ) ) ||
+        ( PollFd->revents == 0 ) )
+    {
+        
+        bytes_read = recv( PollFd->fd, ( void * ) &buf, 1, MSG_PEEK );
+
+        if( bytes_read > 0 )
         {
-            rc = XE_GET_NEG_ERRNO();
-            MYASSERT( !"Defer accept wait failed" );
+            rc = 1;
             goto ErrorExit;
         }
 
-        xe_net_poll_wait();
-    }
+        //For some reason read is returning -1 and errno 0
+        //when there is no data on the nonblocking socket
+        if( bytes_read < 0 && errno != EAGAIN )
+        {
+            DEBUG_PRINT("recieve error when checking for peer disconnect. errno: %d\n", errno );
+            goto ErrorExit;
+            rc = -1;
+        }
 
-    DEBUG_PRINT("deferred accept returning on local socket: %d\n", SockFd );
+        if( bytes_read == 0 )
+        {
+            rc = 0;
+            goto ErrorExit;
+        }
+
+    }
 
 ErrorExit:
     return rc;
 }
+
+
+int
+MWCOMMS_DEBUG_ATTRIB
+xe_net_unset_sock_nonblock( int SockFd )
+{
+    int rc = 0;
+
+    //Set flag to non blocking (xe_net_accept_socket will handle
+    //accept4 flags
+    rc = fcntl( SockFd, F_GETFL, 0 );
+    if( rc < 0 )
+    {
+        rc = -EIO;
+        perror("Could not get flags for fd in defer_accept_socket");
+    }
+
+    //Returns 0 on success
+    rc = fcntl( SockFd, F_SETFL, ( rc & ~O_NONBLOCK ) );
+    if( rc < 0 )
+    {
+        rc = -EIO;
+        perror("Unsetting O_NONBLOCK failed");
+    }
+
+    return rc;
+}
+    
+
+
+int
+MWCOMMS_DEBUG_ATTRIB
+xe_net_defer_accept_socket( int LocalFd,
+                            struct sockaddr * sockaddr,
+                            socklen_t * addrlen )
+{
+    
+    int rc = 0;
+    struct pollfd listen_poll_fd = {0};
+
+    static int last_idx = 0;
+    static bool init = false;
+    static struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    if( !init )
+    {
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            peer_poll_fds[i].fd = -1;
+            peer_poll_fds[i].events = POLLIN | POLLRDNORM;
+        }
+        
+        init = true;
+    }
+
+    listen_poll_fd.fd = LocalFd;
+    listen_poll_fd.events = POLLIN | POLLRDNORM | POLLNVAL;
+    listen_poll_fd.revents = 0;
+
+    do
+    {
+        //first check for sockets that we already know have data
+        for( int i=0; i < MAX_THREAD_COUNT; i++ )
+        {
+            last_idx = last_idx % MAX_THREAD_COUNT;
+
+            if( peer_poll_fds[last_idx].fd == -1 )
+            {
+                last_idx++;
+                continue;
+            }
+
+            rc = xe_net_data_on_socket( &peer_poll_fds[last_idx] );
+            
+            if( rc == 1 )
+            {
+                rc = peer_poll_fds[last_idx].fd;
+
+                xe_net_unset_sock_nonblock( peer_poll_fds[last_idx].fd );
+
+                peer_poll_fds[last_idx].revents = 0;
+                peer_poll_fds[last_idx].fd = -1;
+
+                last_idx++;
+
+                goto ErrorExit;
+            }
+
+            if( rc == 0 )
+            {
+                
+                DEBUG_PRINT("Defer accept peer disconnect detected, local fd: %d\n",
+                            peer_poll_fds[last_idx].fd );
+                
+                //Peer has disconnected
+                close( peer_poll_fds[last_idx].fd );
+                
+                peer_poll_fds[last_idx].fd = -1;
+                peer_poll_fds[last_idx].revents = 0;
+
+                last_idx++;
+
+                continue;
+            }
+
+            if( peer_poll_fds[last_idx].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
+            {
+                close( peer_poll_fds[last_idx].fd );
+                
+                DEBUG_PRINT( "Error: Closing socket %d revents: %x\n",
+                             peer_poll_fds[last_idx].fd,
+                             peer_poll_fds[last_idx].revents );
+
+                peer_poll_fds[last_idx].fd = -1;
+                peer_poll_fds[last_idx].revents = 0;
+
+                last_idx++;
+
+                continue;
+            }
+            
+            last_idx++;
+        }
+
+        //Poll for incoming connection
+        do
+        {
+            rc = poll( &listen_poll_fd, 1, 0 );
+            if( rc < 0 )
+            {
+                perror("Polling listening socket failed");
+                break;
+            }
+
+            if( listen_poll_fd.revents & POLLNVAL )
+            {
+                DEBUG_PRINT("Listening socket closed while defer accept was waiting");
+                rc = 0;
+                goto ErrorExit;
+            }
+
+            //Listen FD has incomming connection
+            if( listen_poll_fd.revents & ( POLLIN | POLLRDNORM ) )
+            {
+                rc = paccept( LocalFd,
+                              sockaddr,
+                              addrlen,
+                              NULL,
+                              SOCK_NONBLOCK );
+                if( rc < 0 )
+                {
+                    perror("Defer accept call to accept failed");
+                    break;
+                }
+
+                //Add connection to peer pool
+                for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+                {
+                    if( peer_poll_fds[i].fd == -1 )
+                    {
+                        peer_poll_fds[i].fd = rc;
+                        peer_poll_fds[i].revents = 0;
+                        break;
+                    }
+                    
+                    if( i == ( MAX_THREAD_COUNT - 1 ) )
+                    {
+                        DEBUG_PRINT( "Socket count exceeded closing socket: %d\n", rc );
+                        close( rc );
+                    }
+                }
+            }
+            
+        } while( rc > 0 );
+
+
+        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 0 );
+        if( rc < 0 )
+        {
+            perror("Defer accept poll failed");
+        }
+        
+        xe_net_defer_accept_wait();
+
+    } while( true );
+
+ErrorExit:
+    DEBUG_PRINT( "Defer accept returning with value: %d\n", rc );
+    return rc;
+}
+
 
 int
 xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
@@ -601,9 +807,18 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
         Response->flags = Request->flags;
     }
 
-    sockfd = accept( WorkerThread->local_fd,
-                     (struct sockaddr *) &sockaddr,
-                     (socklen_t *) &addrlen );
+    if( WorkerThread->defer_accept )
+    {
+        sockfd = xe_net_defer_accept_socket( WorkerThread->local_fd,
+                                             (struct sockaddr *) &sockaddr,
+                                             (socklen_t *) &addrlen );
+    }
+    else
+    {
+        sockfd = accept( WorkerThread->local_fd,
+                         (struct sockaddr *) &sockaddr,
+                         (socklen_t *) &addrlen );
+    }
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
@@ -629,11 +844,6 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
             }
         }
 
-        if( WorkerThread->defer_accept )
-        {
-            rc = xe_net_defer_accept_wait( sockfd );
-            if( !rc ){ goto ErrorExit; }
-        }
 
         // Init from global config
         rc = xe_net_init_socket( sockfd );
