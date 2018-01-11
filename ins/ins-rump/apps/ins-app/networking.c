@@ -542,7 +542,7 @@ xe_net_defer_accept_wait( void )
 
 
 int
-INS_DEBUG_ATTRIB
+MWCOMMS_DEBUG_ATTRIB
 xe_net_data_on_socket( struct pollfd *PollFd )
 {
     int rc = -1;
@@ -590,7 +590,7 @@ ErrorExit:
 
 
 int
-INS_DEBUG_ATTRIB
+MWCOMMS_DEBUG_ATTRIB
 xe_net_unset_sock_nonblock( int SockFd )
 {
     int rc = 0;
@@ -618,7 +618,7 @@ xe_net_unset_sock_nonblock( int SockFd )
 
 
 int
-INS_DEBUG_ATTRIB
+MWCOMMS_DEBUG_ATTRIB
 xe_net_defer_accept_socket( int LocalFd,
                             struct sockaddr * sockaddr,
                             socklen_t * addrlen )
