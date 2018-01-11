@@ -1,3 +1,9 @@
+##
+## STAR LAB PROPRIETARY & CONFIDENTIAL
+## Copyright (C) 2018, Star Lab — All Rights Reserved
+## Unauthorized copying of this file, via any medium is strictly prohibited.
+##
+
 # This is run from the build directory, like:
 #  <RUMPRUNROOT>/obj-amd64-xen/buildrump.sh/sys/rump/dev/lib/libxenevent$
 # Therefore we actually have to go up the directory tree this far.

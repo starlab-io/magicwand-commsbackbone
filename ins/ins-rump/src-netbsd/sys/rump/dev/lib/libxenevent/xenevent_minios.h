@@ -1,3 +1,9 @@
+/**************************************************************************
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2018, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ **************************************************************************/
+
 #ifndef xenevent_minios_h
 #define xenevent_minios_h
 

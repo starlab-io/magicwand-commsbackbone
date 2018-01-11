@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef config_h
 #define config_h
 
@@ -12,8 +18,7 @@
 //
 
 //#define MAX_THREAD_COUNT 4000   // for production
-#define MAX_THREAD_COUNT 100 //for testing
-
+#define MAX_THREAD_COUNT 500 // for testing
 
 //
 // Number of buffer items. This is the number of requests (from the

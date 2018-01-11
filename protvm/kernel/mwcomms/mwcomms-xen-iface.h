@@ -75,7 +75,8 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               OUT void                 ** Handle );
 
 int
-mw_xen_dispatch_request( void * Handle );
+mw_xen_release_request( IN void * Handle,
+                         IN bool   SendRequest );
 
 int
 mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
@@ -94,8 +95,6 @@ mw_xen_read_old_ins( void );
 bool
 mw_xen_response_available( void ** Handle );
 
-int
-mw_xen_get_active_ins_domids( domid_t Domids[] );
 
 int
 mw_xen_reap_dead_ins( void );

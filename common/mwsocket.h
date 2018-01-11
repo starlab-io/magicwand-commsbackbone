@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef mwsockets_h
 #define mwsockets_h
 
@@ -34,8 +40,7 @@ typedef  mw_socket_fd_t mw_fd_t; // alias
 
 #define MW_SOCKET_LOCAL_ID_MASK 0x00000000ffffffff
 
-// A value is deemed an MW socket fd if it is positive and it has the
-// right prefix
+// A value is deemed an MW socket fd if it has the right prefix
 
 #define MW_SOCKET_IS_FD(x)                                              \
     ( (((uint64_t)x) >> MW_SOCKET_PREFIX_SHIFT) == _MW_SOCKET_PREFIX )

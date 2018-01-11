@@ -30,8 +30,7 @@
 // boot parameter - specifically look at gnttab_max_frames. N.B. we
 // must create one grant reference per shared page.
 //
-// For initial development, this number will be 4 because 2^5 = 32
-// meaning each INS will get 32 pages of sharedmem
+// For initial development, each INS will get 32 pages of shared mem.
 //
 #define XENEVENT_GRANT_REF_ORDER  5 // (2^order == page count)
 
@@ -133,5 +132,6 @@
 // response arrival?
 //
 #define PVM_USES_EVENT_CHANNEL 1
+
 
 #endif //common_config_h

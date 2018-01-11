@@ -1,6 +1,6 @@
 /*************************************************************************
 * STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Copyright (C) 2018, Star Lab — All Rights Reserved
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
@@ -658,9 +658,17 @@ update_listening_ports( void )
         // Only add the port if it is nonzero
         if ( 0 != curr->bound_port_num )
         {
-            char port[5];
+            char port[6];
             snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
-            strncat( listening_ports, port, sizeof(listening_ports) );
+
+            if ( strlen( listening_ports ) > sizeof( listening_ports ) - strlen( port ) - 1 )
+            {
+                rc = -EOVERFLOW;
+                MYASSERT( !"Error: Too much data for string listening_ports" );
+                goto ErrorExit;
+            }
+            
+            strncat( listening_ports, port, sizeof( listening_ports ) - strlen( listening_ports ) - 1 );
         }
     }
 
@@ -1107,7 +1115,8 @@ heartbeat_thread_func( void * Args )
     {
         char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
-        (void) snprintf( stats, sizeof(stats), "%lx:%llx:%llx",
+        (void) snprintf( stats, sizeof(stats), "%lx:%lx:%llx:%llx",
+                         (unsigned long) MAX_THREAD_COUNT,
                          (unsigned long) g_state.network_stats_socket_ct,
                          (unsigned long long) g_state.network_stats_bytes_recv,
                          (unsigned long long) g_state.network_stats_bytes_sent );

@@ -102,6 +102,16 @@ typedef struct _mwcomms_ins_data
     // count: how many heartbeats have been missed?
     int                       missed_heartbeats;
 
+    // Only one request slot is revealed at a time. It is reserved for
+    // the client's usage: it is acquired in
+    // mw_xen_get_next_request_slot() and released in
+    // mw_xen_dispatch_request().
+
+    // The current (outstanding) request for this INS.
+    mt_request_generic_t    * curr_req;
+
+    bool                      locked;
+    struct mutex              request_lock;
 } mwcomms_ins_data_t;
 
 
@@ -782,7 +792,7 @@ mw_xen_ins_found( IN const char * Path )
     }
 
     //
-    // Get the client Id 
+    // Get the client ID
     //
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
@@ -828,6 +838,9 @@ mw_xen_ins_found( IN const char * Path )
     // Complete: the handshake is done
     //
     mw_xen_ins_alive( curr );
+
+    mutex_init( &curr->request_lock );
+    curr->locked = false;
 
     curr->is_ring_ready = true;
     pr_info( "INS %d is ready\n", curr->domid );
@@ -921,7 +934,7 @@ mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 ErrorExit:
     atomic64_set( &Ins->in_use, 0 );
     Ins->is_ring_ready = false;
-
+    Ins->domid = DOMID_INVALID;
     return;
 }
 
@@ -964,7 +977,6 @@ mw_xen_reap_dead_ins( void )
 
 //ErrorExit:
     return 0;
-
 }
 
 
@@ -1079,7 +1091,7 @@ mw_xen_get_ins_from_domid( IN domid_t               Domid,
 
     if( rc )
     {
-        MYASSERT( !"Unable to get INS from domid" );
+        pr_info( "Could not get INS from domid=%d\n", Domid );
         goto ErrorExit;
     }
 
@@ -1105,19 +1117,18 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               OUT mt_request_generic_t ** Dest,
                               OUT void                 ** Handle )
 {
-    int                 rc    = 0;
-    mwcomms_ins_data_t *ins   = NULL;
-    domid_t             domid = DomId;
+    int                  rc    = 0;
+    mwcomms_ins_data_t * ins   = NULL;
 
     MYASSERT( NULL != Handle );
     MYASSERT( NULL != Dest );
 
     if ( DOMID_INVALID == DomId || (domid_t)-1 == DomId )
     {
-        domid = mw_xen_new_socket_rr();
+        DomId = mw_xen_new_socket_rr();
     }
 
-    rc = mw_xen_get_ins_from_domid( domid, &ins );
+    rc = mw_xen_get_ins_from_domid( DomId, &ins );
     if( rc ) { goto ErrorExit; }
 
     if ( !ins->is_ring_ready )
@@ -1127,64 +1138,55 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
         goto ErrorExit;
     }
 
-    do
+    // The INS is ready. No matter what failures occur below, we
+    // acquire the lock now. That means we must also return the handle
+    // to the caller (in locked state).
+
+    mutex_lock( &ins->request_lock );
+    ins->locked = true;
+    ins->curr_req = NULL;
+
+    *Handle = ins;
+
+    while( true )
     {
-        if ( !RING_FULL( &ins->front_ring ) ) { break; }
-        if ( !WaitForRing )
+        // Is the INS still alive?
+        if( 0 == atomic64_read( &ins->in_use ) )
         {
-            // Wait was not requested so fail. This happens often so
-            // don't emit a message for it.
+            rc = -ESTALE;
+            pr_info( "INS %d died since request arrived. Failing it now, rc=%d.\n",
+                     DomId, rc );
+            goto ErrorExit;
+        }
+        if( !RING_FULL( &ins->front_ring ) ) { break; }
+        if( !WaitForRing )
+        {
+            // Wait was not requested and there's no slot, so report
+            // the failure. This happens very often so don't emit a
+            // message for it.
             rc = -EAGAIN;
             goto ErrorExit;
         }
 
         // Wait and try again...
         mw_xen_wait( RING_FULL_TIMEOUT );
-    } while( true );
+    }
 
     *Dest = (mt_request_generic_t *)
         RING_GET_REQUEST( &ins->front_ring,
                           ins->front_ring.req_prod_pvt );
-    if ( !Dest )
+    if( !Dest )
     {
         pr_err( "Destination buffer is NULL\n" );
         rc = -EIO;
         goto ErrorExit;
     }
 
-    *Handle = ins;
+    // Success: *Dest is populated, rc is 0
+
+    ins->curr_req = *Dest;
 
 ErrorExit:
-    return rc;
-}
-
-
-int
-MWSOCKET_DEBUG_ATTRIB
-mw_xen_get_active_ins_domids( domid_t Domids[ MAX_INS_COUNT ] )
-{
-
-    int rc = 0;
-    mwcomms_ins_data_t * curr = NULL;
-
-    for( int i = 0; i < MAX_INS_COUNT; i++ )
-    {
-        curr = &g_mwxen_state.ins[i];
-
-        if( atomic64_read( &curr->in_use ) == 0 )
-        {
-            continue;
-        }
-
-        if ( !curr->is_ring_ready )
-        {
-            continue;
-        }
-
-        Domids[i] = curr->domid;
-        rc++;
-    }
-
     return rc;
 }
 
@@ -1217,28 +1219,63 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
 }
 
 
+/**
+ * @brief Releases slot for request in this INS's ring buffer.
+ *
+ * Optionally sends the request to the INS. Closely paired with
+ * mw_xen_get_next_request_slot().
+ */
 int
-//MWSOCKET_DEBUG_ATTRIB
-mw_xen_dispatch_request( void * Handle )
+MWSOCKET_DEBUG_ATTRIB
+mw_xen_release_request( IN void * Handle,
+                        IN bool   SendRequest )
 {
     int rc = 0;
     mwcomms_ins_data_t * ins = (mwcomms_ins_data_t *) Handle;
 
-    if ( NULL == Handle )
+    // mw_xen_get_next_request_slot() gives a NULL handle upon failure
+    if( NULL == ins ||
+        0 == atomic64_read( &ins->in_use ) )
     {
         rc = -EINVAL;
-        MYASSERT( !"NULL Handle given" );
         goto ErrorExit;
     }
 
-    ++ins->front_ring.req_prod_pvt;
-    RING_PUSH_REQUESTS( &ins->front_ring );
+    // mw_xen_get_next_request_slot() succeeded: the lock is acquired
+
+    MYASSERT( ins->locked );
+
+    if( SendRequest )
+    {
+        mt_request_generic_t * req  = (mt_request_generic_t *)
+            RING_GET_REQUEST( &ins->front_ring,
+                              ins->front_ring.req_prod_pvt );
+        MYASSERT( MT_IS_REQUEST( req ) );
+        MYASSERT( ins->curr_req == req );
+        if( !MT_IS_REQUEST( ins->curr_req ) )
+        {
+            rc = -EINVAL;
+            MYASSERT( !"Invalid request on ring buffer!!!!" );
+            goto ErrorExit;
+        }
+
+        // Advance the ring metadata in shared memory, notify remote side
+        ++ins->front_ring.req_prod_pvt;
+        RING_PUSH_REQUESTS( &ins->front_ring );
 
 #if INS_USES_EVENT_CHANNEL
-    rc = mw_xen_send_event( ins );
+        rc = mw_xen_send_event( ins );
 #endif
+    }
 
 ErrorExit:
+    if( ins )
+    {
+        // MYASSERT( ins->locked ); // Valid in single-threaded usage
+        ins->curr_req = NULL;
+        mutex_unlock( &ins->request_lock );
+        ins->locked = false;
+    }
     return rc;
 }
 
