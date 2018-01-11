@@ -74,13 +74,18 @@
  * (1) The socket instance ("sockinst") as discussed above. A sockinst
  * represents a live socket on the INS.
  *
- * (2) The active request, which represents a request/response pair
+ * (2) The "active request", which represents a request/response pair
  * while it is "in-flight", meaning that the request has been created
  * and sent to the INS, but the response has not been received and
  * processed yet. Each active request is associated with a socket
  * instance. Moreover, each active request holds a reference to its
  * socket instance while it is alive, thus keeping the socket instance
  * from being destroyed.
+ *
+ *
+ * Multi-INS support
+ * -----------------
+ * To facilitate attack mitigation and TCP/IP stack diversification, ...
  *
  *
  * General notes
@@ -634,8 +639,8 @@ mwsocket_notify_ring_ready( domid_t Domid )
 {
     MYASSERT( Domid );
 
-    // Triggered when new Ins is added.
-    // only call if this is the first Ins that has been added
+    // Triggered when new INS is added.
+    // only call if this is the first INS that has been added
     if( !g_mwsocket_state.is_xen_iface_ready )
     {
         g_mwsocket_state.is_xen_iface_ready = true;

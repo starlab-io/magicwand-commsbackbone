@@ -1,6 +1,6 @@
 /*************************************************************************
  * STAR LAB PROPRIETARY & CONFIDENTIAL
- * Copyright (C) 2016, Star Lab — All Rights Reserved
+ * Copyright (C) 2018, Star Lab — All Rights Reserved
  * Unauthorized copying of this file, via any medium is strictly prohibited.
  ***************************************************************************/
 
@@ -15,7 +15,7 @@
  * protected virtual machine (PVM). It supports
  * multithreading/multiprocessing - e.g a multi-threaded application
  * above it can read/write to its device, and each request (write) can
- * expect to receive the corresponding response (from read).
+ * expect to receive the corresponding response (via read).
  *
  * The LKM supports a handshake with another Xen virtual machine, the
  * unikernel agent (implemented on the Rump unikernel). The handshake
@@ -23,11 +23,11 @@
  * sharing memory via grant references.
  *
  * The LKM supports the usage of an underlying Xen ring buffer. The
- * LKM writes requests on to the ring buffer, and reads responses off
- * the ring buffer. The LKM does not assume that a response following
- * a request will correspond to that last request.
+ * LKM writes requests to the ring buffer, and reads responses from
+ * it. The LKM does not assume that a response following a request
+ * will correspond to that last request.
  *
- * The multithreading support works as follows:
+ * Multithreading support works as follows:
  *
  * (1) A user-mode program writes a request to the LKM's
  *     device. The LKM assigns a driver-wide unique ID to that
@@ -46,7 +46,8 @@
  * This model implies some strict standards:
  *
  * - The remote side *must* send a response for every request it
- *   receives.
+ *   receives, although the responses can be in a different order than
+ *   the requests.
  * 
  * - The programs that use this LKM must be well-written: upon writing
  *   a request, they must indicate to the LKM whether or not they will
@@ -75,12 +76,18 @@
  *
  * This LKM is structured such that this object, mwcomms-base, serves
  * as the main entry point. It initializes its own kernel device and
- * then asks the Xen interface (see mwcomms-xen-iface) to initialize,
- * which in turn waits for an INS client to appear and completes a
- * handshake with it. Once the handshake is done, a shared memory
- * buffer will have been established and the mwsocket subsystem
- * (mwcomms-socket) is notified. In turn, it initializes the Xen ring
- * buffer.
+ * initializes the Xen subsystem and the netflow channel.
+ *
+ * When initializing the Xen subsystem, a callback is passed to
+ * it. When a new INS is recognized, the subsystem completes a
+ * handshake with it to include sharing a block of memory for a ring
+ * buffer. Once that is complete, the callback is invoked. That, in
+ * turn, notifies the mwsocket subsystem that there is a new INS
+ * available for usage. If there are any listening sockets, those will
+ * be "replicated" to the new INS to facilitate multi-INS
+ * support. N.B. a new INS is recognized on a XenWatch thread, which
+ * we cannot cause to block for a long time. Thus the mwsocket
+ * subsystem completes socket replication via a work item.
  *
  * When a process wants to create a new mwsocket, it sends an IOCTL to
  * the main LKM device. That causes mwcomms-socket to create a new
@@ -91,8 +98,7 @@
  * callback in mwcomms-socket to be invoked, thus destroying the
  * mwsocket.
  *
- * The core functionality of this LKM is found in mwcomms-socket. See
- * mwcomms-socket.c for more info.
+ * The core functionality of this LKM is found in mwcomms-socket.
  *
  *
  * Here's a visualization of the LKM:
@@ -130,7 +136,11 @@
  * The significant advantages to this design can be seen in the
  * diagram: the kernel facilities are leveraged to support (1) polling
  * and (2) mwsocket destruction, even in the case of process
- * termination. This alleviates the LKM from those burdens.
+ * termination. This alleviates the LKM from those burdens. In a
+ * future refactor, this could be simplified so that all calls use the
+ * main device. This can be achieved as long as there are no conflicts
+ * among the IOCTLs and the release() and poll() calls can be
+ * disambiguated correctly.
  */
 
 // The device will appear under /dev using this value
@@ -268,7 +278,6 @@ static int
 mwbase_client_ready_cb( domid_t Domid )
 {
     mwsocket_notify_ring_ready( Domid );
-//    complete( &g_mwcomms_state.ring_shared );
     return 0;
 }
 
@@ -448,22 +457,12 @@ mwbase_dev_init( void )
     // Init the Xen interface. The callback will be invoked when client
     // handshake is complete.
 
-//    init_completion( &g_mwcomms_state.ring_shared );
-
     rc = mw_xen_init( mwbase_client_ready_cb,
                       mwsocket_event_cb );
     if ( rc )
     {
         goto ErrorExit;
     }
-
-#ifdef BACKCHANNEL
-    rc = mw_backchannel_init();
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
-#endif
 
    rc = mw_netflow_init( &g_mwcomms_state.local_ip );
    if ( rc )
