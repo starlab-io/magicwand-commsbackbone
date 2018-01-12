@@ -541,56 +541,79 @@ xe_net_defer_accept_wait( void )
 
 
 
-int
-MWCOMMS_DEBUG_ATTRIB
+bool
+INS_DEBUG_ATTRIB
 xe_net_data_on_socket( struct pollfd *PollFd )
 {
-    int rc = -1;
+    bool rc = false;
     int bytes_read = 0;
     char buf = 0;
     
     if( PollFd->fd == -1 )
     {
-        rc = -1;
+        rc = false;
         goto ErrorExit;
     }
 
-    if( ( PollFd->revents & ( POLLIN | POLLRDNORM ) ) ||
-        ( PollFd->revents == 0 ) )
+    if( ! ( PollFd->revents & ( POLLIN | POLLRDNORM ) ) )
     {
-        
-        bytes_read = recv( PollFd->fd, ( void * ) &buf, 1, MSG_PEEK );
-
-        if( bytes_read > 0 )
-        {
-            rc = 1;
-            goto ErrorExit;
-        }
-
-        //For some reason read is returning -1 and errno 0
-        //when there is no data on the nonblocking socket
-        if( bytes_read < 0 && errno != EAGAIN )
-        {
-            DEBUG_PRINT("recieve error when checking for peer disconnect. errno: %d\n", errno );
-            goto ErrorExit;
-            rc = -1;
-        }
-
-        if( bytes_read == 0 )
-        {
-            rc = 0;
-            goto ErrorExit;
-        }
-
+        rc = false;
+        goto ErrorExit;
     }
+
+    bytes_read = recv( PollFd->fd, ( void * ) &buf, 1, MSG_PEEK );
+
+    if( bytes_read <= 0 )
+    {
+        DEBUG_PRINT("Error reading from connected socket in defer_accept");
+        rc = false;
+        goto ErrorExit;
+    }
+
+    rc = true;
 
 ErrorExit:
     return rc;
 }
 
 
+bool
+INS_DEBUG_ATTRIB
+xe_net_peer_disconnected( struct pollfd *PollFd )
+{
+    bool rc = false;
+    char buf = 0;
+    int bytes_read = 0;
+
+    if( PollFd->fd == -1 )
+    {
+        rc = false;
+        goto ErrorExit;
+    }
+    
+    if( ( PollFd->revents & ( POLLIN | POLLHUP ) ) ||
+        ( PollFd->revents == 0 ) )
+    {
+        bytes_read = recv( PollFd->fd, &buf, 1, MSG_PEEK );
+
+        if( bytes_read < 0 && errno != EAGAIN )
+        {
+            perror("recieve error when checking for peer disconnect");
+        }
+
+        if( bytes_read == 0 )
+        {
+            rc = true;
+            goto ErrorExit;
+        }
+    }
+    
+ErrorExit:
+    return rc;
+}
+
 int
-MWCOMMS_DEBUG_ATTRIB
+INS_DEBUG_ATTRIB
 xe_net_unset_sock_nonblock( int SockFd )
 {
     int rc = 0;
@@ -618,7 +641,7 @@ xe_net_unset_sock_nonblock( int SockFd )
 
 
 int
-MWCOMMS_DEBUG_ATTRIB
+INS_DEBUG_ATTRIB
 xe_net_defer_accept_socket( int LocalFd,
                             struct sockaddr * sockaddr,
                             socklen_t * addrlen )
@@ -647,7 +670,7 @@ xe_net_defer_accept_socket( int LocalFd,
     listen_poll_fd.revents = 0;
 
     do
-    {
+    {   
         //first check for sockets that we already know have data
         for( int i=0; i < MAX_THREAD_COUNT; i++ )
         {
@@ -658,54 +681,16 @@ xe_net_defer_accept_socket( int LocalFd,
                 last_idx++;
                 continue;
             }
-
-            rc = xe_net_data_on_socket( &peer_poll_fds[last_idx] );
             
-            if( rc == 1 )
+            if( xe_net_data_on_socket( &peer_poll_fds[last_idx] ) )
             {
                 rc = peer_poll_fds[last_idx].fd;
-
                 xe_net_unset_sock_nonblock( peer_poll_fds[last_idx].fd );
-
                 peer_poll_fds[last_idx].revents = 0;
                 peer_poll_fds[last_idx].fd = -1;
 
                 last_idx++;
-
                 goto ErrorExit;
-            }
-
-            if( rc == 0 )
-            {
-                
-                DEBUG_PRINT("Defer accept peer disconnect detected, local fd: %d\n",
-                            peer_poll_fds[last_idx].fd );
-                
-                //Peer has disconnected
-                close( peer_poll_fds[last_idx].fd );
-                
-                peer_poll_fds[last_idx].fd = -1;
-                peer_poll_fds[last_idx].revents = 0;
-
-                last_idx++;
-
-                continue;
-            }
-
-            if( peer_poll_fds[last_idx].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
-            {
-                close( peer_poll_fds[last_idx].fd );
-                
-                DEBUG_PRINT( "Error: Closing socket %d revents: %x\n",
-                             peer_poll_fds[last_idx].fd,
-                             peer_poll_fds[last_idx].revents );
-
-                peer_poll_fds[last_idx].fd = -1;
-                peer_poll_fds[last_idx].revents = 0;
-
-                last_idx++;
-
-                continue;
             }
             
             last_idx++;
@@ -768,13 +753,36 @@ xe_net_defer_accept_socket( int LocalFd,
         {
             perror("Defer accept poll failed");
         }
+
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            if( peer_poll_fds[i].fd == -1 ) { continue; }
+
+            if( xe_net_peer_disconnected( &peer_poll_fds[i] ) )
+            {
+                //Peer has disconnected
+                close( peer_poll_fds[i].fd );
+                peer_poll_fds[i].fd = -1;
+                peer_poll_fds[i].revents = 0;
+                continue;
+            }
+
+            if( peer_poll_fds[i].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
+            {
+                close( peer_poll_fds[i].fd );
+                DEBUG_PRINT( "Error: Closing socket %d\n", peer_poll_fds[i].fd );
+                peer_poll_fds[i].fd = -1;
+                peer_poll_fds[i].revents = 0;
+            }
+        }
         
         xe_net_defer_accept_wait();
 
     } while( true );
 
 ErrorExit:
-    DEBUG_PRINT( "Defer accept returning with value: %d\n", rc );
+    printf( "Defer accept returning with value: %d\n", rc );
+    fflush(stdout);
     return rc;
 }
 

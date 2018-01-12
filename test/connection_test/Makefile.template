@@ -6,23 +6,15 @@
 
 CC = gcc
 CFLAGS = -Wall -Wno-missing-braces -fPIC -DPIC -pthread
-CFLAGS += -I../../../common
-WRAPPER_DIR=../wrapper
+CFLAGS += -I../../common
 DEBUG = -ggdb
-PRE_LOAD_LIB_LOC=../wrapper
 
-TCP_IP_APP_NAME=multi-ins-test
+TCP_IP_APP_NAME=connection_test
 
 all: $(TCP_IP_APP_NAME) 
 
 $(TCP_IP_APP_NAME): $(TCP_IP_APP_NAME).c
 	$(CC) $(DEBUG) $(CFLAGS) $^ -o $@ 
-	@echo ""
-	@echo ""
-	$(MAKE) -C $(WRAPPER_DIR)
 
 clean:
 	rm -f $(TCP_IP_APP_NAME)
-	@echo ""
-	@echo ""
-	$(MAKE) clean -C $(WRAPPER_DIR)
