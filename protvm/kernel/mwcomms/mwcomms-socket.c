@@ -1,18 +1,19 @@
 /*************************************************************************
-* STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
-* Unauthorized copying of this file, via any medium is strictly prohibited.
-***************************************************************************/
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2016, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ ***************************************************************************/
 
 /**
  * @file    mwcomms-socket.c
  * @author  Matt Leinhos
- * @date    23 March 2017
+ * @date    16 Jan 2018
  * @version 0.2
  * @brief   Implementation of MagicWand socket.
  *
  * Overview
  * --------
+ *
  * This file provides the core of the Magic Wand PVM driver's
  * functionality. Once an application has created a new Magic Wand
  * socket (mwsocket) via an IOCTL to the main LKM device, its further
@@ -20,6 +21,7 @@
  *
  * Initialization
  * --------------
+ *
  * This C module's init function (mwsocket_init) initializes a variety
  * of bookkeeping structures, including a pseudo filesystem (so it can
  * create file objects which interact with VFS), a couple of caches
@@ -30,11 +32,13 @@
  *
  * Once the Xen handshake and shared memory arrangement is completed
  * (see mwcomms-base.c), mwsocket_notify_ring_ready() is invoked. In
- * turn the threads are released from a wait and begin working.
+ * turn the aforementioned threads are released from a wait and begin
+ * working.
  *
  *
  * Socket interactions
  * -------------------
+ *
  * When an application creates a new mwsocket, the actual creation is
  * done by mwsocket_create(), which:
  *
@@ -69,6 +73,7 @@
  *
  * Data structures
  * ---------------
+ *
  * There are two primary data structures here:
  *
  * (1) The socket instance ("sockinst") as discussed above. A sockinst
@@ -83,13 +88,9 @@
  * from being destroyed.
  *
  *
- * Multi-INS support
- * -----------------
- * To facilitate attack mitigation and TCP/IP stack diversification, ...
- *
- *
  * General notes
  * --------------
+ *
  * This code is structured to maximize data throughput. When writing a
  * request, an application-level user can specify whether or not it
  * wants to wait for the response. In some cases it may make sense not
@@ -119,6 +120,8 @@
  * _MT_TYPE_MASK_CLOSE_WAITS in message_types.h. This is implemented
  * with a reader-writer lock in the socket instance. To complete a
  * close, the write lock must be held.
+ *
+ * See mwcomms-base.c for more notes.
  */
 
 #include "mwcomms-common.h"
