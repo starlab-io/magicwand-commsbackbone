@@ -1172,6 +1172,7 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     int rc = 0;
     mwsocket_active_request_t * actreq = NULL;
     mt_request_socket_close_t * close = NULL;
+    bool sent = false;
 
     if( !MW_SOCKET_IS_FD( SockInst->remote_fd ) )
     {
@@ -1207,11 +1208,17 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     rc = mwsocket_send_request( actreq, true );
     if( rc ) { goto ErrorExit; }
 
-    if( !WaitForResponse ) { goto ErrorExit; } // no more work
+    sent = true;
 
+    // No more work? In that case, response consumer will destroy this AR.
+    if( !WaitForResponse ) { goto ErrorExit; }
+
+    // WaitForResponse: true, sent: true
     rc = wait_for_completion_timeout( &actreq->arrived, GENERAL_RESPONSE_TIMEOUT );
     if( 0 == rc )
     {
+        // We'll destroy the AR and the response consumer won't find
+        // it when/if the response arrives
         rc = -ETIME;
         pr_warn( "Timed out while waiting for response to close\n" );
     }
@@ -1224,7 +1231,11 @@ mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
     if( 0 == rc ) { rc = actreq->rr.response.base.status; }
 
 ErrorExit:
-    mwsocket_destroy_active_request( actreq );
+    if( WaitForResponse || !sent )
+    {
+        // We're responsible for destruction
+        mwsocket_destroy_active_request( actreq );
+    }
     return rc;
 }
 
