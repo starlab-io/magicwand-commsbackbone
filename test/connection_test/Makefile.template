@@ -7,7 +7,8 @@
 CC = gcc
 CFLAGS = -Wall -Wno-missing-braces -fPIC -DPIC -pthread
 CFLAGS += -I../../common
-DEBUG = -ggdb
+CFLAGS += -DKEEPALIVE
+DEBUG = -gdwarf-2 -g3
 
 TCP_IP_APP_NAME=connection_test
 

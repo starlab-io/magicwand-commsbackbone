@@ -916,6 +916,7 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
  *
  */
 static void
+MWSOCKET_DEBUG_ATTRIB
 mwsocket_set_pollable( IN mwsocket_instance_t * SockInst,
                        IN bool                  Pollable )
 {
@@ -923,7 +924,7 @@ mwsocket_set_pollable( IN mwsocket_instance_t * SockInst,
 
     mutex_lock( &SockInst->access_lock );
 
-    if( (bool) (SockInst->mwflags | MWSOCKET_FLAG_POLLABLE) == Pollable )
+    if( ( (bool) ( SockInst->mwflags & MWSOCKET_FLAG_POLLABLE ) ) == Pollable )
     {
         // The state of the socket matches the requested state
         goto ErrorExit;

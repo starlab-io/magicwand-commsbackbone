@@ -13,10 +13,11 @@ if [ -z $MWROOT ]; then
 fi
 
 # Copy the template Makefiles to regular Makefiles
-for d in $MWROOT/ins/ins-rump/apps/ins-app           \
-         $MWROOT/protvm/user/wrapper                 \
-         $MWROOT/protvm/kernel/mwcomms               \
-         $MWROOT/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent;
+for d in $MWROOT/ins/ins-rump/apps/ins-app                              \
+         $MWROOT/protvm/user/wrapper                                    \
+         $MWROOT/protvm/kernel/mwcomms                                  \
+         $MWROOT/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent   \
+         $MWROOT/test;
 do
    cp $d/Makefile.template $d/Makefile
 done

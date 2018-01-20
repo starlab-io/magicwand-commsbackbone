@@ -30,3 +30,4 @@ Makefile
 makefile
 common_config.h
 .idea
+.gdbinit

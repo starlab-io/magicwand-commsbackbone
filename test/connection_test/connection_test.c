@@ -67,9 +67,10 @@ do_read( struct pollfd *Fds )
         
         
         rc = recv( Fds[i].fd, (void*) &buf, sizeof(buf) , MSG_DONTWAIT );
-        if( ( rc < 0 ) )
+        if( ( rc < 0 ) && ( errno != ( EAGAIN | EWOULDBLOCK ) ) )
         {
             perror("recv");
+            printf("errno: %d\n", errno);
         }
 
         //Conection is closed on remote side

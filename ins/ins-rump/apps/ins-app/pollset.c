@@ -233,8 +233,8 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 
         thisti->poll_events = thisqi->events;
 
-        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n \
-                      item_idx: %d cur_pos: %d pollct: %d",
+        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n"
+                     "item_idx: %d cur_pos: %d pollct: %d\n",
                      thisfd->revents, thisqi->events,
                      thisti->public_fd, thisti->local_fd,
                      item_idx, cur_pos, pollct );
