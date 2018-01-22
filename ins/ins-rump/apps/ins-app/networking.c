@@ -373,10 +373,11 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         goto ErrorExit;
     }
 
-    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is calling get/setsockopt %d/%d/%d\n",
+    DEBUG_PRINT ( "Worker thread %d (socket %lx / %d) is calling get/setsockopt"
+                  "%d/%d/%d\n",
                   WorkerThread->idx,
                   WorkerThread->public_fd, WorkerThread->local_fd,
-                  level, name, Request->val );
+                  level, name, Request->val.v32 );
 
     if ( Request->modify ) // Set the feature's value
     {
@@ -531,7 +532,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 void
 xe_net_defer_accept_wait( void )
 {
-    struct timespec ts = {0,1};
+    struct timespec ts = {0,1000};
 
     while ( ts.tv_nsec > 0 )
     {
@@ -539,27 +540,73 @@ xe_net_defer_accept_wait( void )
     }
 }
 
-
+struct mw_pollfd
+{
+    struct pollfd poll_fd;
+    struct timeval conn_tv;
+};
 
 int
+xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
+{
+
+    struct timeval curr_tv = {0};
+    struct timeval res_tv  = {0};
+    double elapsed = 0.0;
+    int rc = 0;
+
+    MYASSERT( MwPollFd );
+
+    gettimeofday( &curr_tv, NULL );
+    
+    timersub( &curr_tv, &MwPollFd->conn_tv, &res_tv );
+
+    elapsed = (double)res_tv.tv_sec + ( res_tv.tv_usec/1000000.0 );
+
+    DEBUG_PRINT( "socket idle for %f seconds \n", elapsed );
+
+    if ( elapsed >= 1.0 )
+    {
+        DEBUG_PRINT( "socket: %d idle for more than 1 second, closing\n",
+                     MwPollFd->poll_fd.fd );
+        rc = 1;
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+//Checks status of socket by reading from the socket
+//returns 0 for disconnect, 1 for data available and -1 for error
+int
 INS_DEBUG_ATTRIB
-xe_net_data_on_socket( struct pollfd *PollFd )
+xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
 {
     int rc = -1;
     int bytes_read = 0;
     char buf = 0;
     
-    if( PollFd->fd == -1 )
+    if( MwPollFd->poll_fd.fd == -1 )
     {
         rc = -1;
         goto ErrorExit;
     }
 
-    if( ( PollFd->revents & ( POLLIN | POLLRDNORM ) ) ||
-        ( PollFd->revents == 0 ) )
+
+    //Check for socket timeout if timeout has passed, return 0
+    if( xe_net_idle_socket_timeout( MwPollFd ) == 1 )
+    {
+        rc = 0;
+        goto ErrorExit;
+    }
+
+    if( ( MwPollFd->poll_fd.revents & ( POLLIN | POLLRDNORM ) ) ||
+        ( MwPollFd->poll_fd.revents == 0 ) )
     {
         
-        bytes_read = recv( PollFd->fd, ( void * ) &buf, 1, MSG_PEEK );
+        bytes_read = recv( MwPollFd->poll_fd.fd, ( void * ) &buf, 1, MSG_PEEK );
         
         if( bytes_read > 0 )
         {
@@ -567,24 +614,34 @@ xe_net_data_on_socket( struct pollfd *PollFd )
             goto ErrorExit;
         }
 
-        //For some reason read is returning -1 and errno 0
-        //when there is no data on the nonblocking socket
-        if( bytes_read < 0 && ( ( errno != 35 ) || ( errno != 0 ) ) )
-        {
-            DEBUG_PRINT("recieve error when checking for peer disconnect. errno: %d\n", errno );
-            goto ErrorExit;
-            rc = -1;
-        }
 
         if( bytes_read == 0 )
         {
             rc = 0;
             goto ErrorExit;
         }
+        
+        //For some reason read sometimes returns -1 and 0,
+        //not sure why, so I'm only going to check this condition
+        if( ( bytes_read < 0 && ( errno == EAGAIN ) ) ||
+            ( bytes_read < 0 && ( errno == 0 ) ) )
+        {
+            rc = -1;
+            goto ErrorExit;
+        }
 
+
+        //if we got here, this is not good
+        DEBUG_PRINT("recieve error when checking for peer disconnect. rc: %d "
+                    "errno: %d sockfd: %d\n",
+                    bytes_read, errno, MwPollFd->poll_fd.fd );
+        rc = -1;
     }
 
 ErrorExit:
+    DEBUG_PRINT( "xe_net_data_on_socket returning: %d socket: %d "
+                 "revents: 0x%x errno: %d\n",
+                 rc, MwPollFd->poll_fd.fd, MwPollFd->poll_fd.revents, errno );
     return rc;
 }
 
@@ -616,7 +673,7 @@ xe_net_unset_sock_nonblock( int SockFd )
 }
     
 
-
+    
 int
 INS_DEBUG_ATTRIB
 xe_net_defer_accept_socket( int LocalFd,
@@ -627,89 +684,34 @@ xe_net_defer_accept_socket( int LocalFd,
     int rc = 0;
     struct pollfd listen_poll_fd = {0};
 
-    static __thread int last_idx = 0;
-    static __thread bool init = false;
-    static __thread struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+//    static __thread int last_idx = 0;
+//    static __thread bool init = false;
+//    static __thread struct mw_pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+    
+    static int last_idx = 0;
+    static bool init = false;
+    static struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
 
     if( !init )
     {
         for( int i = 0; i < MAX_THREAD_COUNT; i++ )
         {
-            peer_poll_fds[i].fd = -1;
-            peer_poll_fds[i].events = POLLIN | POLLRDNORM;
+            mw_peer_poll_fds[i].poll_fd.fd = -1;
+            mw_peer_poll_fds[i].poll_fd.events = POLLIN | POLLRDNORM;
         }
         
         init = true;
     }
 
     listen_poll_fd.fd = LocalFd;
-    listen_poll_fd.events = POLLIN | POLLRDNORM | POLLNVAL;
+    listen_poll_fd.events = POLLIN | POLLRDNORM | POLLHUP | POLLNVAL;
     listen_poll_fd.revents = 0;
 
     do
     {
-        //first check for sockets that we already know have data
-        for( int i=0; i < MAX_THREAD_COUNT; i++ )
-        {
-            last_idx = last_idx % MAX_THREAD_COUNT;
 
-            if( peer_poll_fds[last_idx].fd == -1 )
-            {
-                last_idx++;
-                continue;
-            }
-
-            rc = xe_net_data_on_socket( &peer_poll_fds[last_idx] );
-            
-            if( rc == 1 )
-            {
-                rc = peer_poll_fds[last_idx].fd;
-
-                xe_net_unset_sock_nonblock( peer_poll_fds[last_idx].fd );
-
-                peer_poll_fds[last_idx].revents = 0;
-                peer_poll_fds[last_idx].fd = -1;
-
-                last_idx++;
-
-                goto ErrorExit;
-            }
-
-            if( rc == 0 )
-            {
-                
-                DEBUG_PRINT("Defer accept peer disconnect detected, local fd: %d\n",
-                            peer_poll_fds[last_idx].fd );
-                
-                //Peer has disconnected
-                close( peer_poll_fds[last_idx].fd );
-                
-                peer_poll_fds[last_idx].fd = -1;
-                peer_poll_fds[last_idx].revents = 0;
-
-                last_idx++;
-
-                continue;
-            }
-
-            if( peer_poll_fds[last_idx].revents & ( POLLNVAL | POLLERR | POLLHUP ) )
-            {
-                close( peer_poll_fds[last_idx].fd );
-                
-                DEBUG_PRINT( "Error: Closing socket %d revents: %x\n",
-                             peer_poll_fds[last_idx].fd,
-                             peer_poll_fds[last_idx].revents );
-
-                peer_poll_fds[last_idx].fd = -1;
-                peer_poll_fds[last_idx].revents = 0;
-
-                last_idx++;
-
-                continue;
-            }
-            
-            last_idx++;
-        }
 
         //Poll for incoming connection
         do
@@ -745,10 +747,13 @@ xe_net_defer_accept_socket( int LocalFd,
                 //Add connection to peer pool
                 for( int i = 0; i < MAX_THREAD_COUNT; i++ )
                 {
-                    if( peer_poll_fds[i].fd == -1 )
+                    if( mw_peer_poll_fds[i].poll_fd.fd == -1 )
                     {
-                        peer_poll_fds[i].fd = rc;
-                        peer_poll_fds[i].revents = 0;
+                        gettimeofday( &mw_peer_poll_fds[i].conn_tv, NULL );
+                        mw_peer_poll_fds[i].poll_fd.fd = rc;
+                        mw_peer_poll_fds[i].poll_fd.revents = 0;
+                        
+                        DEBUG_PRINT("Added socket %d to defer accept list\n", rc );
                         break;
                     }
                     
@@ -762,11 +767,90 @@ xe_net_defer_accept_socket( int LocalFd,
             
         } while( rc > 0 );
 
+        //Copy mw_peer_poll_fds info into peer_poll_fds for poll call
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            peer_poll_fds[i].fd      = mw_peer_poll_fds[i].poll_fd.fd;
+            peer_poll_fds[i].events  = mw_peer_poll_fds[i].poll_fd.events;
+            peer_poll_fds[i].revents = mw_peer_poll_fds[i].poll_fd.revents;
+        }
 
         rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 0 );
         if( rc < 0 )
         {
             perror("Defer accept poll failed");
+        }
+
+        //Copy results of poll call into mw_peer_poll_fds
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            mw_peer_poll_fds[i].poll_fd.fd      = peer_poll_fds[i].fd;
+            mw_peer_poll_fds[i].poll_fd.revents = peer_poll_fds[i].revents;
+            mw_peer_poll_fds[i].poll_fd.events  = peer_poll_fds[i].events;
+        }
+
+        //first check for sockets that we already know have data
+        for( int i=0; i < MAX_THREAD_COUNT; i++ )
+        {
+            last_idx = last_idx % MAX_THREAD_COUNT;
+
+            if( mw_peer_poll_fds[last_idx].poll_fd.fd == -1 )
+            {
+                last_idx++;
+                continue;
+            }
+
+            rc = xe_net_check_idle_socket( &mw_peer_poll_fds[last_idx] );
+            
+            if( rc == 1 )
+            {
+                rc = mw_peer_poll_fds[last_idx].poll_fd.fd;
+
+                xe_net_unset_sock_nonblock( mw_peer_poll_fds[last_idx].poll_fd.fd );
+
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
+
+                last_idx++;
+
+                goto ErrorExit;
+            }
+
+            if( rc == 0 )
+            {
+                
+                DEBUG_PRINT("Defer accept peer disconnect detected, local fd: %d\n",
+                            mw_peer_poll_fds[last_idx].poll_fd.fd );
+                
+                //Peer has disconnected
+                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
+                
+                mw_peer_poll_fds[last_idx].poll_fd.fd = -1;
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+
+                last_idx++;
+
+                continue;
+            }
+
+            if( mw_peer_poll_fds[last_idx].poll_fd.revents &
+                ( POLLNVAL | POLLERR | POLLHUP ) )
+            {
+                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
+                
+                DEBUG_PRINT( "Error: Closing socket %d revents: %x\n",
+                             mw_peer_poll_fds[last_idx].poll_fd.fd,
+                             mw_peer_poll_fds[last_idx].poll_fd.revents );
+
+                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+
+                last_idx++;
+
+                continue;
+            }
+            
+            last_idx++;
         }
         
         xe_net_defer_accept_wait();
