@@ -86,6 +86,17 @@ static xe_net_param_t g_net_params[] =
 };
 #endif // MODIFY_NETWORK_PARAMETERS
 
+
+//This is a struct that is required for the defer accept code to work
+//it holds the pollfd and the time a connection was accepted
+//so we can close a socket if it's been idle for too long
+struct mw_pollfd
+{
+    struct pollfd poll_fd;
+    struct timeval conn_tv;
+};
+
+
 static int
 xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
 {
@@ -540,11 +551,6 @@ xe_net_defer_accept_wait( void )
     }
 }
 
-struct mw_pollfd
-{
-    struct pollfd poll_fd;
-    struct timeval conn_tv;
-};
 
 int
 xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
@@ -563,9 +569,7 @@ xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
 
     elapsed = (double)res_tv.tv_sec + ( res_tv.tv_usec/1000000.0 );
 
-    DEBUG_PRINT( "socket idle for %f seconds \n", elapsed );
-
-    if ( elapsed >= 1.0 )
+    if ( elapsed >= DEFER_ACCEPT_MAX_IDLE )
     {
         DEBUG_PRINT( "socket: %d idle for more than 1 second, closing\n",
                      MwPollFd->poll_fd.fd );
@@ -614,15 +618,14 @@ xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
             goto ErrorExit;
         }
 
-
         if( bytes_read == 0 )
         {
             rc = 0;
             goto ErrorExit;
         }
         
-        //For some reason read sometimes returns -1 and 0,
-        //not sure why, so I'm only going to check this condition
+        //For some reason read sometimes returns -1 and errno:0
+        //when it seems like errno should be EAGAIN
         if( ( bytes_read < 0 && ( errno == EAGAIN ) ) ||
             ( bytes_read < 0 && ( errno == 0 ) ) )
         {
@@ -684,13 +687,17 @@ xe_net_defer_accept_socket( int LocalFd,
     int rc = 0;
     struct pollfd listen_poll_fd = {0};
 
-//    static __thread int last_idx = 0;
-//    static __thread bool init = false;
-//    static __thread struct mw_pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+//For some reason, gdb will not work if we have thread local storage defined here
+//if that is the case, use a single threaded version of apache and standard
+//static variables
+//    static int last_idx = 0;
+//    static bool init = false;
+//    static struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    static __thread int last_idx = 0;
+    static __thread bool init = false;
+    static __thread struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
     
-    static int last_idx = 0;
-    static bool init = false;
-    static struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
 
     struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
 

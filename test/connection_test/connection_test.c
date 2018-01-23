@@ -53,19 +53,11 @@ do_read( struct pollfd *Fds )
 {
     int rc = 0;
     char buf[4096] = {0};
-    char s_buf = 0;
 
     for( int i = 0; i < num_conn; i++ )
     {
         if( Fds[i].fd == -1 ) { continue; }
-
-        rc = send( Fds[i].fd, (void *) &s_buf, sizeof(s_buf), MSG_NOSIGNAL );
-        if( ( rc < 0 ) )
-        {
-            perror("send");
-        }
-        
-        
+ 
         rc = recv( Fds[i].fd, (void*) &buf, sizeof(buf) , MSG_DONTWAIT );
         if( ( rc < 0 ) && ( errno != ( EAGAIN | EWOULDBLOCK ) ) )
         {
@@ -76,7 +68,10 @@ do_read( struct pollfd *Fds )
         //Conection is closed on remote side
         if( rc == 0 )
         {
-            printf("Socket %d closed\n", Fds[i].fd);
+            printf("recv returned 0 for socket %d, removing"
+                   "from poll list\n", Fds[i].fd);
+            Fds[i].fd = -1;
+            Fds[i].revents = 0;
         }
     }
 
@@ -119,6 +114,7 @@ do_poll( struct pollfd *Fds )
 
         if( ( Fds[i].revents & POLLHUP ) )
         {
+            printf("POLLHUP recieved for socket: %d\n", Fds[i].fd );
             Fds[i].fd = -1;
             Fds[i].revents = 0;
         }
@@ -209,9 +205,8 @@ main( int argc, const char* argv[] )
     {
         printf( "\nPoll iteration %d\n", i );
 
-#ifndef KEEPALIVE
         do_read( fds );
-#endif
+
         if( do_poll( fds ) == false )
         {
             printf( "All connections closed\n" );
@@ -232,5 +227,3 @@ main( int argc, const char* argv[] )
 
     return 0;
 }
-
-
