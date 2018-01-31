@@ -103,6 +103,8 @@ ErrorExit:
 }
 */
 
+
+
 // @brief Perform non-blocking poll against one socket
 int
 xe_pollset_query_one( IN  int   Fd,
@@ -116,7 +118,7 @@ xe_pollset_query_one( IN  int   Fd,
     fds.revents = 0;
 
     // Non-blocking poll against 1 FD
-    rc = poll( &fds, 1, 0 );
+    rc = poll( &fds, 1, INFTIM );
     if ( rc < 0 )
     {
         rc = XE_GET_NEG_ERRNO();
@@ -146,11 +148,16 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 {
     int               rc = 0;
     int           pollct = 0;
-
+    int         item_idx = 0;
+    
     // Some of this data can stay the same across calls. Only the main
     // thread will be calling this function.
-    static bool     init = false;
-    static struct pollfd fds[ MAX_THREAD_COUNT ];
+    static bool          init = false;
+    static struct pollfd fds[ MAX_THREAD_COUNT ] = {0};
+    static uint32_t      cur_pos = 0;
+
+
+    //MT_POLLSET_QUERY_MAX_ITEMS XXXXXXXXXXXXXXXXXXXXX
 
     // Set the input flags, which don't change across calls
     if ( !init )
@@ -165,19 +172,22 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
     }
 
     // Set the FDs, which do change
-    for ( int i = 0; i < MAX_THREAD_COUNT; ++i )
-    {
-        thread_item_t * thisti = &g_state.worker_threads[i];
+    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {   
+        
+        thread_item_t * thisti = &g_state.worker_threads[ i ];
         if ( !thisti->in_use ) ///XXXXXXXX || thisti->blocking )
         {
             fds[ i ].fd = -1;
             continue;
         }
-        DEBUG_PRINT( "Including FD %x/%d in poll()\n",
+        VERBOSE_PRINT( "Including FD %lx/%d in poll()\n",
                      thisti->public_fd, thisti->local_fd );
         fds[ i ].fd =  thisti->local_fd;
     }
 
+
+    
     // Make the call, do not block
     pollct = poll( fds, (nfds_t)MAX_THREAD_COUNT, 0 );
     if ( pollct < 0 )
@@ -186,20 +196,25 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
         MYASSERT( !"poll" );
         goto ErrorExit;
     }
-
-    for ( int i = 0, itemidx = 0;
-          i < MAX_THREAD_COUNT && itemidx < pollct;
+    
+    for ( int i = 0;
+          i < MAX_THREAD_COUNT &&
+              item_idx < pollct &&
+              item_idx < MT_POLLSET_QUERY_MAX_ITEMS;
           ++i )
     {
-        struct pollfd * thisfd = &fds[i];
-        mt_response_pollset_query_item_t * thisqi = &Response->items[ itemidx ];
-        thread_item_t * thisti = &g_state.worker_threads[i];
+        cur_pos = cur_pos % MAX_THREAD_COUNT;
+        
+        struct pollfd * thisfd = &fds[ cur_pos ];
+        mt_response_pollset_query_item_t * thisqi = &Response->items[ item_idx ];
+        thread_item_t * thisti = &g_state.worker_threads[ cur_pos ];
 
         thisti->poll_events = 0;
 
-        if ( !fds[ i ].revents )
+        if ( !fds[ cur_pos ].revents )
         {
             // nothing to report
+            cur_pos++;
             continue;
         }
 
@@ -218,17 +233,23 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 
         thisti->poll_events = thisqi->events;
 
-        DEBUG_PRINT( "Found IO events %x => %x on socket %x/%d\n",
+        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n"
+                     "item_idx: %d cur_pos: %d pollct: %d\n",
                      thisfd->revents, thisqi->events,
-                     thisti->public_fd, thisti->local_fd );
-        ++itemidx;
+                     thisti->public_fd, thisti->local_fd,
+                     item_idx, cur_pos, pollct );
+
+        ++item_idx;
+        ++cur_pos;
     }
 
-    Response->count = pollct;
+    Response->count = item_idx;
+
+    MYASSERT( item_idx <= MT_POLLSET_QUERY_MAX_ITEMS );
 
     xe_net_set_base_response( (mt_request_generic_t *) Request,
                               MT_RESPONSE_POLLSET_QUERY_SIZE +
-                              MT_RESPONSE_POLLSET_QUERY_ITEM_SIZE * pollct,
+                              MT_RESPONSE_POLLSET_QUERY_ITEM_SIZE * item_idx,
                               (mt_response_generic_t *) Response );
 ErrorExit:
     return rc;

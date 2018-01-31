@@ -1,3 +1,9 @@
+/**************************************************************************
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2018, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ **************************************************************************/
+
 #ifndef xenevent_common_h
 #define xenevent_common_h
 
@@ -27,6 +33,7 @@
 // #define BMK_ETIMEDOUT           60
 // #define BMK_ENOSYS              78
 
+typedef uint16_t domid_t;
 typedef uint32_t status_t;
 
 // These need to be defined for the below macros to work

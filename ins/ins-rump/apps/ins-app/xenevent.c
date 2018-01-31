@@ -1,6 +1,6 @@
 /*************************************************************************
 * STAR LAB PROPRIETARY & CONFIDENTIAL
-* Copyright (C) 2016, Star Lab — All Rights Reserved
+* Copyright (C) 2018, Star Lab — All Rights Reserved
 * Unauthorized copying of this file, via any medium is strictly prohibited.
 ***************************************************************************/
 
@@ -75,6 +75,8 @@
 #include <unistd.h>
 #include <string.h>
 
+#include <sys/resource.h>
+
 #include <errno.h>
 
 #include <sched.h>
@@ -89,7 +91,7 @@
 
 #include "mwerrno.h"
 
-#include "ins-ioctls.h"
+#include "ins-ioctls.h" // needs xenevent_app_common.h for domid_t
 
 #ifdef NODEVICE // for debugging outside of Rump
 #  define DEBUG_OUTPUT_FILE "outgoing_responses.bin"
@@ -99,15 +101,6 @@
 
 // Global data
 xenevent_globals_t g_state;
-
-// XXXX: put this in globals and share globals; add IOCTL to driver to get domid.
-
-// What's my domid? Needed by networking.c
-domid_t   client_id;
-
-pthread_t heartbeat_thread;
-bool continue_heartbeat = true;
-struct timeval elapsed;
 
 #define XE_PROCESS_IN_MAIN_THREAD( _mytype )      \
     ( MtRequestSocketCreate == _mytype ||         \
@@ -335,7 +328,7 @@ debug_print_state( void )
         
         (void) sem_getvalue( &curr->awaiting_work_sem, &pending );
         
-        printf("  %d: used %d sock %x/%d, pending items %d\n",
+        printf("  %d: used %d sock %lx/%d, pending items %d\n",
                curr->idx, curr->in_use,
                curr->public_fd, curr->local_fd,
                pending );
@@ -364,7 +357,6 @@ open_device( void )
     int rc = 0;
 
     g_state.input_fd = open( XENEVENT_DEVICE, O_RDWR );
-    
     if ( g_state.input_fd < 0 )
     {
         rc = errno;
@@ -431,7 +423,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 
         if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
         {
-            DEBUG_PRINT( "Reserving unused buffer %d\n", curr->idx );
+            VERBOSE_PRINT( "Reserving unused buffer %d\n", curr->idx );
             // Value was 0 (now it's 1), so it was available and we
             // have acquired it
             MYASSERT( 1 == curr->in_use );
@@ -441,14 +433,15 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
         }
         else
         {
-            DEBUG_PRINT( "NOT reserving used buffer %d\n", curr->idx );
+            VERBOSE_PRINT( "NOT reserving used buffer %d\n", curr->idx );
         }
     }
 
     //MYASSERT( 0 == rc );
     if ( rc )
     {
-        DEBUG_PRINT( "All buffers are in use!!\n" );
+        MYASSERT( !"All buffers are in use" );
+        //DEBUG_PRINT( "All buffers are in use!!\n" );
     }
 
     return rc;
@@ -471,7 +464,7 @@ release_buffer_item( buffer_item_t * BufferItem )
     if ( prev )
     {
         BufferItem->assigned_thread = NULL;
-        DEBUG_PRINT( "Released buffer %d\n", BufferItem->idx );
+        VERBOSE_PRINT( "Released buffer %d\n", BufferItem->idx );
     }
 }
 
@@ -493,7 +486,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %x\n", Fd );
+    DEBUG_PRINT( "Looking for worker thread for socket %lx\n", Fd );
 
     if ( MT_INVALID_SOCKET_FD == Fd )
     {
@@ -501,7 +494,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
         {
             curr = &g_state.worker_threads[i];
 
-            DEBUG_PRINT( "Worker thread %d: busy %d sock %x\n",
+            DEBUG_PRINT( "Worker thread %d: busy %d sock %lx\n",
                          i, curr->in_use, curr->public_fd );
 
             // Look for any available thread and secure ownership of it.
@@ -581,8 +574,8 @@ release_worker_thread( thread_item_t * ThreadItem )
     ThreadItem->state_flags = 0;
     ThreadItem->sock_domain = 0;
     ThreadItem->sock_type   = 0;
-    ThreadItem->sock_protocol = 0;
-    ThreadItem->port_num    = 0;
+    ThreadItem->sock_protocol  = 0;
+    ThreadItem->bound_port_num = 0;
 
     bzero( &ThreadItem->remote_host, sizeof(ThreadItem->remote_host) );
     
@@ -640,6 +633,61 @@ send_dispatch_error_response( mt_request_generic_t * Request )
 
 
 /**
+ * @brief Computes string describing ports that are in LISTEN
+ * state. If there has been a change, then updates that string in
+ * XenStore via an IOCTL.
+ */
+static int
+update_listening_ports( void )
+{
+    int rc = 0;
+    char listening_ports[ INS_LISTENING_PORTS_MAX_LEN ];
+
+    if ( !g_state.pending_port_change ) { goto ErrorExit; }
+    
+    DEBUG_PRINT( "Scanning for change in set of listening ports\n" );
+    g_state.pending_port_change = false;
+    listening_ports[0] = '\0';
+
+    for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
+    {
+        thread_item_t * curr = &g_state.worker_threads[i];
+
+        if ( !curr->in_use ) { continue; }
+
+        // Only add the port if it is nonzero
+        if ( 0 != curr->bound_port_num )
+        {
+            char port[6];
+            snprintf( port, sizeof(port), "%x ", curr->bound_port_num );
+
+            if ( strlen( listening_ports ) > sizeof( listening_ports ) - strlen( port ) - 1 )
+            {
+                rc = -EOVERFLOW;
+                MYASSERT( !"Error: Too much data for string listening_ports" );
+                goto ErrorExit;
+            }
+            
+            strncat( listening_ports, port, sizeof( listening_ports ) - strlen( listening_ports ) - 1 );
+        }
+    }
+
+    DEBUG_PRINT( "Listening ports: %s\n", listening_ports );
+    rc = ioctl( g_state.input_fd,
+                INS_PUBLISH_LISTENERS_IOCTL,
+                (const char *)listening_ports );
+    if ( rc )
+    {
+        MYASSERT( !"ioctl" );
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+
+/**
  * @brief Perform internal steps required after a buffer item has been
  * processed.
  */
@@ -675,7 +723,7 @@ post_process_response( mt_request_generic_t  * Request,
         {
             // A thread was available - record the assignment now
             accept_thread->public_fd =
-                MW_SOCKET_CREATE( client_id, accept_thread->idx );
+                MW_SOCKET_CREATE( g_state.client_id, accept_thread->idx );
             accept_thread->local_fd = Response->base.status;
 
             // Mask the native FD with the exported one
@@ -683,6 +731,8 @@ post_process_response( mt_request_generic_t  * Request,
             Response->base.sockfd = accept_thread->public_fd;
         }
     }
+
+    rc = update_listening_ports();
 
     return rc;
 }
@@ -706,12 +756,15 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     mt_request_type_t reqtype = MT_REQUEST_GET_TYPE( request );
 
+    
     bzero( &response.base, sizeof(response.base) );
     
-    DEBUG_PRINT( "Processing buffer item %d (request ID %lx)\n",
+    VERBOSE_PRINT( "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
+
+    
     switch( request->base.type )
     {
     case MtRequestSocketCreate:
@@ -750,6 +803,7 @@ process_buffer_item( buffer_item_t * BufferItem )
                                    worker );
         break;
     case MtRequestSocketAccept:
+
         rc = xe_net_accept_socket( &request->socket_accept,
                                    &response.socket_accept,
                                    worker );
@@ -804,7 +858,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     // How to handle failure?
     (void) post_process_response( request, &response, worker );
 
-    DEBUG_PRINT( "Writing response ID %lx len %hx to ring\n",
+    VERBOSE_PRINT( "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
 
     size_t written = write( g_state.output_fd,
@@ -832,7 +886,7 @@ process_buffer_item( buffer_item_t * BufferItem )
         release_worker_thread( worker );
     }
 
-    DEBUG_PRINT( "Done with response %lx\n", response.base.id );
+    VERBOSE_PRINT( "Done with response %lx\n", response.base.id );
     //debug_print_state();
 
     return rc;
@@ -866,7 +920,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // this is false we release the buffer item.
     *ProcessFurther = true;
     
-    DEBUG_PRINT( "Looking for thread for request in buffer item %d\n",
+    VERBOSE_PRINT( "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
 
@@ -878,7 +932,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     {
         // Processed in current thread without a worker
     case MtRequestPollsetQuery:
-        MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
+        MYASSERT( MW_SOCKET_IS_FD( request->base.sockfd ) );
         *AssignedThread = NULL;
         process_now = true;
         break;
@@ -1000,19 +1054,17 @@ worker_thread_func( void * Arg )
     thread_item_t * myitem = (thread_item_t *) Arg;
     buffer_item_t * currbuf;
     bool empty = false;
-    
-    DEBUG_PRINT( "Thread %d is executing\n", myitem->idx );
-    
 
     while ( true )
     {
+
         currbuf = NULL;
-        
+
         // Block until work arrives
         DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
         sem_wait( &myitem->awaiting_work_sem );
-        DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
 
+        DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
         if ( empty )
@@ -1025,7 +1077,6 @@ worker_thread_func( void * Arg )
         }
 
         DEBUG_PRINT( "Thread %d is working on buffer %d\n", myitem->idx, buf_idx );
-
         currbuf = &g_state.buffer_items[buf_idx];
         rc = process_buffer_item( currbuf );
         if ( rc )
@@ -1058,13 +1109,20 @@ worker_thread_func( void * Arg )
 }
 
 void *
-heartbeat_thread_func( void* Args )
+heartbeat_thread_func( void * Args )
 {
-    while( continue_heartbeat )
+    while ( !g_state.shutdown_pending )
     {
+        char stats[ INS_NETWORK_STATS_MAX_LEN ] = {0};
 
-        ioctl( g_state.input_fd, INSHEARTBEATIOCTL );
-        sleep(1);
+        (void) snprintf( stats, sizeof(stats), "%lx:%lx:%llx:%llx",
+                         (unsigned long) MAX_THREAD_COUNT,
+                         (unsigned long) g_state.network_stats_socket_ct,
+                         (unsigned long long) g_state.network_stats_bytes_recv,
+                         (unsigned long long) g_state.network_stats_bytes_sent );
+
+        ioctl( g_state.input_fd, INS_HEARTBEAT_IOCTL, (const char *)stats );
+        sleep( HEARTBEAT_INTERVAL_SEC );
     }
 
     pthread_exit( Args );
@@ -1109,8 +1167,23 @@ init_state( void )
             goto ErrorExit;
         }
 
-        sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
-        sem_init( &curr->oplock, 0, 1 );
+        rc = sem_init( &curr->awaiting_work_sem, BUFFER_ITEM_COUNT, 0 );
+        if( rc )
+        {
+            perror( "sem_init()" );
+            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            fflush(stdout);
+            sched_yield();
+        }
+
+        rc = sem_init( &curr->oplock, 0, 1 );
+        if( rc )
+        {
+            perror( "sem_init()" );
+            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            fflush(stdout);
+            sched_yield();
+        }
         curr->oplock_acquired = false;
     }
 
@@ -1134,24 +1207,30 @@ init_state( void )
         goto ErrorExit;
     }
 
+    rc = xe_net_init();
+    if ( 0 != rc )
+    {
+        goto ErrorExit;
+    }
 
-    client_id = 1;
-/*
-    // XXXX: use IOCTL to get domid
-    rc = ioctl( g_state.input_fd, DOMIDIOCTL, &client_id );
+    rc = ioctl( g_state.input_fd, INS_DOMID_IOCTL, &g_state.client_id );
     if ( 0 != rc )
     {
        MYASSERT( !"Getting dom id from ioctl failed");
        goto ErrorExit;
     }
-*/
-    DEBUG_PRINT( "INS got domid: %u from ioctl\n", client_id );
+
+    DEBUG_PRINT( "INS got domid: %u from ioctl\n", g_state.client_id );
     
     //
     // Start up the threads
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
+        DEBUG_PRINT( "creating thread %d\n", i );
+        DEBUG_PRINT( "worker_threads[%d].idx = %d", i,
+                     g_state.worker_threads[i].idx );
+
         rc = pthread_create( &g_state.worker_threads[ i ].self,
                              NULL,//&g_state.attr,
                              worker_thread_func,
@@ -1161,16 +1240,13 @@ init_state( void )
             MYASSERT( !"pthread_create" );
             goto ErrorExit;
         }
+        sched_yield();
     }
 
-
-
-#define runthread    
-#ifdef runthread
     //
     // Start up heartbeat thread
     //
-    rc = pthread_create( &heartbeat_thread,
+    rc = pthread_create( &g_state.heartbeat_thread,
                          NULL,
                          heartbeat_thread_func,
                          NULL );
@@ -1180,11 +1256,9 @@ init_state( void )
         goto ErrorExit;
     }
 
-#endif
-
 
     DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
-    //xe_yield();
+
     sched_yield();
     
 ErrorExit:
@@ -1215,8 +1289,7 @@ fini_state( void )
         sem_destroy( &curr->awaiting_work_sem );
     }
 
-    continue_heartbeat = false;
-    pthread_join( heartbeat_thread, NULL );
+    pthread_join( g_state.heartbeat_thread, NULL );
 
     if ( g_state.input_fd > 0 )
     {
@@ -1256,12 +1329,8 @@ message_dispatcher( void )
     {
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
-        mt_request_type_t request_type;
 
-        // Always allow other threads to run in case there's work.
-        //xe_yield();
-
-        DEBUG_PRINT( "Dispatcher looking for available buffer\n" );
+        VERBOSE_PRINT( "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
         rc = reserve_available_buffer_item( &myitem );
         if ( rc )
@@ -1276,8 +1345,9 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        DEBUG_PRINT( "Attempting to read %ld bytes from input FD\n",
+        VERBOSE_PRINT( "Attempting to read %ld bytes from input FD\n",
                      ONE_REQUEST_REGION_SIZE );
+
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
         if ( size < (ssize_t) sizeof(mt_request_base_t)
@@ -1299,10 +1369,12 @@ message_dispatcher( void )
             goto ErrorExit;
         }
 
-        DEBUG_PRINT( "Read request %lx type %x size %x off ring\n",
+
+        VERBOSE_PRINT( "Read request %lx type %x size %x off ring\n",
                      (unsigned long) myitem->request->base.id,
                      myitem->request->base.type,
                      myitem->request->base.size );
+
 
         // Assign the buffer to a thread. If fails, reports to PVM but
         // keeps going.
@@ -1315,36 +1387,64 @@ message_dispatcher( void )
 
         if ( more_processing )
         {
-            // Tell the thread to process the buffer
+            // Tell the thread to process the buffer. No yield should be needed.
             DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
 
             sem_post( &assigned_thread->awaiting_work_sem );
         }
-
-        // Remember: we'll yield next...
-        request_type = MT_REQUEST_GET_TYPE( myitem->request );
-        if ( request_type == MtRequestSocketConnect
-             || request_type == MtRequestSocketAccept)
-        {
-            xe_yield();
-        }
-        else 
-        {
-            sched_yield();
-        }
     } // while
     
 ErrorExit:
-    xe_yield();
     return rc;
 
 } // message_dispatcher
+
+
+static int
+setlimit( void )
+{
+    int rc = 0;
+    struct rlimit lim = { 0 };
+
+    lim.rlim_max = RLIM_INFINITY;
+    lim.rlim_cur = lim.rlim_max;
+    rc = setrlimit( RLIMIT_NTHR, &lim );
+    if ( rc )
+    {
+        perror( "setrlimit" );
+    }
+
+    lim.rlim_max = RLIM_INFINITY;
+    lim.rlim_cur = lim.rlim_max;
+    rc = setrlimit( RLIMIT_NOFILE, &lim );
+    if ( rc )
+    {
+        perror( "setrlimit" );
+    }
+
+    rc = getrlimit( RLIMIT_STACK, &lim );
+    if ( rc )
+    {
+        perror( "getrlimit" );
+    }
+
+//    lim.rlim_cur = lim.rlim_cur/2;
+    lim.rlim_max = lim.rlim_max/2;
+    rc = setrlimit( RLIMIT_STACK, &lim );
+    if( rc )
+    {
+        perror("setrlimit\n");
+    }
+
+    return 0;
+}
 
 
 int main(void)
 {
     int rc = 0;
 
+    setlimit();
       
     rc = init_state();
     if ( rc )

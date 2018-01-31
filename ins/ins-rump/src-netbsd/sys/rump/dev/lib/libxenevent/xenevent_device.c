@@ -1,3 +1,9 @@
+/**************************************************************************
+ * STAR LAB PROPRIETARY & CONFIDENTIAL
+ * Copyright (C) 2018, Star Lab — All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited.
+ **************************************************************************/
+
 // Define a character device
 
 // Headers in src-netbsd/sys/sys
@@ -26,10 +32,15 @@
 #include <sys/stat.h>
 #include <sys/systm.h> // printf
 
+#include <net/route.h>
+#include <net/if.h>
+#include <netinet/in.h>
+
 #include <sys/vfs_syscalls.h>
 
 #include <rump-sys/kern.h>
 #include <rump-sys/vfs.h>
+#include <sys/time.h>
 
 #include "xenevent_common.h"
 #include "xenevent_device.h"
@@ -38,11 +49,13 @@
 #include "xenevent_netbsd.h"
 #include "xenevent_minios.h"
 
+#include "xen_keystore_defs.h"
 #include "ioconf.h"
-
-#include <sys/time.h>
-
 #include "ins-ioctls.h"
+
+
+// Should we emit message contents? Very verbose!!
+#define XE_EMIT_MESSAGE_CONTENTS 0
 
 // Function prototypes 
 
@@ -88,10 +101,94 @@ typedef struct _xen_dev_state
     // Only one handle to device allowed
     //
     uint32_t open_count;
-    
+
+    //
+    // Have we found the IP address?
+    //
+    bool ip_found;
+
 } xen_dev_state_t;
 
 static xen_dev_state_t g_state;
+#define IP_BUF_SIZE 128
+
+
+//
+// The next 2 functions are used to discover the public IP address of
+// the Rump instance. Presently they just publish the first AF_INET
+// address found, which works for now.
+//
+static int
+xe_dev_iface_callback( struct rtentry * RtEntry, void * Arg )
+{
+    int rc = 0;
+    char ip[ 4 * 4 ]; // IP4: 4 chars per octet
+    struct ifaddr *ifa = NULL;
+
+    char * buf = (char *) Arg;
+
+    IFADDR_READER_FOREACH( ifa, RtEntry->rt_ifp )
+    {
+        if ( AF_INET == ifa->ifa_addr->sa_family )
+        {
+            sin_print( ip, sizeof(ip), (const void *) ifa->ifa_addr );
+
+            if ( 0 == strstr( buf, ip ) )
+            {
+                snprintf( buf, IP_BUF_SIZE, "%s %s", buf, ip );
+            }
+            break;
+        }
+    }
+
+    return rc;
+}
+
+
+static int
+xe_dev_publish_ip( void )
+{
+    int rc = 0;
+    char * buf = NULL;
+
+    if ( g_state.ip_found )
+    {
+        goto ErrorExit;
+    }
+
+    // Whether or not we find the IP, we are starting a search for it
+    // not and won't do it again.
+    g_state.ip_found = true;
+
+    buf = (char *) malloc( IP_BUF_SIZE, 0, M_WAITOK | M_ZERO | M_CANFAIL );
+    if ( NULL == buf )
+    {
+        MYASSERT( !"malloc" );
+        rc = ENOMEM;
+        goto ErrorExit;
+    }
+    memset( buf, 0, IP_BUF_SIZE );
+
+    // Invoke the callback for each network interface
+    rc = rt_walktree( AF_INET, xe_dev_iface_callback, buf );
+    if ( rc )
+    {
+        MYASSERT( !"rt_walktree" );
+        goto ErrorExit;
+    }
+
+    rc = xe_comms_publish_ip_addr( buf );
+    if ( rc ) { goto ErrorExit; }
+
+ErrorExit:
+    if ( buf )
+    {
+        free( buf, 0 );
+    }
+
+    return rc;
+}
+
 
 
 // TODO: we don't get or establish meaningful major/minor numbers here
@@ -103,6 +200,15 @@ xe_dev_init( void )
     devmajor_t cmaj = NODEVMAJOR;
     devmajor_t bmaj = NODEVMAJOR;
     devminor_t cmin = 0;
+
+    memset( &g_state, 0, sizeof(g_state) );
+
+    rc = xe_comms_init();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
     // Attach driver to device
     // See driver for /dev/random for example
 /*
@@ -159,43 +265,54 @@ xe_dev_fini( void )
 int
 xe_dev_ioctl( dev_t Dev, u_long Cmd, void *Data, int Num, struct lwp *Thing )
 {
-    int rc = -1;
-    
-    domid_t *outbound = (domid_t*)Data;
+    int rc = 0;
 
-    switch ( Cmd ){
-    
-    case INSHEARTBEATIOCTL:
+    switch ( Cmd )
+    {
 
-        rc = xe_comms_heartbeat();
-
+    case INS_GET_SOCK_PARAMS_IOCTL:
+        rc = xe_comms_get_sock_params( (char *) Data );
         if ( 0 != rc )
         {
-            rc = EPASSTHROUGH;
             goto ErrorExit;
         }
-
         break;
-
-    case DOMIDIOCTL:
-
         
-        rc =  xe_comms_get_domid();
-
-        if( rc <= 0 )
+    case INS_HEARTBEAT_IOCTL:
+        rc = xe_comms_heartbeat( (const char *) Data );
+        if ( 0 != rc )
         {
+            MYASSERT( !"heartbeat failed" );
+            rc = EPASSTHROUGH;
+            goto ErrorExit;
+        }
+        break;
+
+    case INS_DOMID_IOCTL:
+        rc = xe_comms_get_domid();
+        if ( rc <= 0 )
+        {
+            MYASSERT( !"get domid failed" );
             rc = EPASSTHROUGH;
             goto ErrorExit;
         }
 
-        *outbound = (domid_t)rc;
-        DEBUG_PRINT( "xe_dev_ioctl returning domid: %u\n", *outbound );
+        *(domid_t *) Data = (domid_t) rc;
+        DEBUG_PRINT( "xe_dev_ioctl returning domid: %u\n", rc );
         rc = 0;
-
         break;
 
+    case INS_PUBLISH_LISTENERS_IOCTL:
+        rc = xe_comms_listeners( (const char *) Data );
+        if ( 0 != rc )
+        {
+            goto ErrorExit;
+        }
+        break;
+        
     default:
-        DEBUG_PRINT( "xe_dev_ioctl called, but command not found\n" );
+        rc = EINVAL;
+        MYASSERT( !"Invalid IOCTL code" );
     }
 
 ErrorExit:
@@ -204,15 +321,15 @@ ErrorExit:
 
 
 static int
-xe_dev_open( dev_t Dev,
-             int Flags,
-             int Fmt,
+xe_dev_open( dev_t        Dev,
+             int          Flags,
+             int          Fmt,
              struct lwp * Lwp )
 {
     int rc = 0;
     DEBUG_PRINT("Opened device=%p, Flags=%x Fmt=%x Lwp=%p\n",
                 (void *)Dev, Flags, Fmt, Lwp);
-
+    DEBUG_BREAK();
     if ( xenevent_atomic_inc( &g_state.open_count ) > 1 )
     {
         rc = BMK_EBUSY;
@@ -231,8 +348,20 @@ xe_dev_open( dev_t Dev,
     {
         goto ErrorExit;
     }
-    
-    rc = xe_comms_init();// g_state.messages_available );
+
+    rc = xe_comms_register();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
+
+    // Publish the IP only after user-mode component has loaded;
+    // otherwise the IP hasn't been assigned yet. Do it only once.
+    rc = xe_dev_publish_ip();
+    if ( rc )
+    {
+        goto ErrorExit;
+    }
 
 ErrorExit:
     return rc;
@@ -319,11 +448,13 @@ xe_dev_read( dev_t Dev,
         {
             goto ErrorExit;
         }
-        
+
+#if XE_EMIT_MESSAGE_CONTENTS
         DEBUG_PRINT( "Read request: %d bytes at %p\n",
                      (int)Uio->uio_iov[i].iov_len, Uio->uio_iov[i].iov_base );
 
         hex_dump( "Read request", iov->iov_base, (int) iov->iov_len );
+#endif // XE_EMIT_MESSAGE_CONTENTS
 
         // Inform system of data transfer
         iov->iov_len -= bytes_read;
@@ -377,11 +508,13 @@ xe_dev_write( dev_t Dev,
         {
             goto ErrorExit;
         }
-        
+
+#if XE_EMIT_MESSAGE_CONTENTS
         DEBUG_PRINT( "Write response: %d bytes at %p\n",
                      (int)iov->iov_len, iov->iov_base );
         hex_dump( "Write response", 
                   iov->iov_base, (int) iov->iov_len );
+#endif // XE_EMIT_MESSAGE_CONTENTS
 
         // Inform system of data transfer
         iov->iov_len -= bytes_written;

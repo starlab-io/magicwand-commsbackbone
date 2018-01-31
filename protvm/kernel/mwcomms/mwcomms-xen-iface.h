@@ -7,6 +7,8 @@
 #ifndef mwcomms_xen_iface_h
 #define mwcomms_xen_iface_h
 
+#include "mwcomms-common.h"
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -14,16 +16,19 @@
 #include <xen/interface/callback.h>
 #include <xen/interface/io/ring.h>
 
-#include "mwcomms-common.h"
+#include <message_types.h>
+#include <xen_keystore_defs.h>
 
 
 typedef int
-mw_xen_init_complete_cb_t( domid_t ClientId );
+mw_xen_init_complete_cb_t( domid_t Domid );
 
 typedef void
 mw_xen_event_handler_cb_t( void );
 
 
+typedef int
+mw_xen_per_ins_cb_t( IN domid_t Domid, IN void * Arg );
 
 /// @brief Initializes the Xen subsystem and initiates handshake with client
 ///
@@ -36,8 +41,7 @@ mw_xen_event_handler_cb_t( void );
 /// @param
 /// @param Function that is invoked when handshake is complete.
 int
-mw_xen_init( mw_region_t * SharedMem,
-             mw_xen_init_complete_cb_t CompletionCallback,
+mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback,
              mw_xen_event_handler_cb_t EventCallback );
 
 
@@ -50,19 +54,49 @@ mw_xen_fini( void );
 domid_t
 mw_xen_get_local_domid( void );
 
-
+/*
 // @brief Sends an event on the common event channel.
 void
-mw_xen_send_event( void );
+mw_xen_send_event( void * Handle );
+*/
+
+int
+mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
+                          IN void *              Arg );
 
 
 int
 mw_xen_write_to_key( const char * Dir, const char * Node, const char * Value );
 
+int
+mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
+                              IN  domid_t                 DomId,
+                              OUT mt_request_generic_t ** Dest,
+                              OUT void                 ** Handle );
 
-char *
-mw_xen_read_from_key( const char * Dir, const char * Node );
+int
+mw_xen_release_request( IN void * Handle,
+                         IN bool   SendRequest );
+
+int
+mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
+                          IN  void                   * Handle );
+
+int
+mw_xen_mark_response_consumed( void * Handle );
+
+bool
+mw_xen_iface_ready( void );
+
+int
+mw_xen_read_old_ins( void );
 
 
+bool
+mw_xen_response_available( void ** Handle );
+
+
+int
+mw_xen_reap_dead_ins( void );
 
 #endif // mwcomms_xen_iface_h

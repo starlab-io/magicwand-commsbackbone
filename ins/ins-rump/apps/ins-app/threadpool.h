@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef thread_pool_h
 #define thread_pool_h
 
@@ -78,6 +84,13 @@ typedef struct _thread_item
     mt_flags_t     state_flags;
 
     //
+    // Workaround for TCP_DEFER_ACCEPT support ideally we could use
+    // NetBSD's accf_data filter, but there doesn't seem to be rump
+    // support for the pseudo device yet
+    //
+    bool defer_accept;
+
+    //
     // The native socket under management - save it's metadata for
     // easy state lookup.
     //
@@ -90,7 +103,10 @@ typedef struct _thread_item
     int            sock_type;
     int            sock_protocol;
 
-    mt_port_t      port_num;
+    //
+    // The port the socket is bound to; only populated by bind()
+    //
+    mt_port_t      bound_port_num;
 
     uint8_t        remote_host[MESSAGE_TYPE_MAX_HOSTNAME_BYTE_LEN];
 

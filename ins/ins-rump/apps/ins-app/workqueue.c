@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #include <stdio.h>
 #include <pthread.h>
 #include "user_common.h"

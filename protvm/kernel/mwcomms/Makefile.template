@@ -1,4 +1,10 @@
 ##
+## STAR LAB PROPRIETARY & CONFIDENTIAL
+## Copyright (C) 2018, Star Lab — All Rights Reserved
+## Unauthorized copying of this file, via any medium is strictly prohibited.
+##
+
+##
 ## To preserve changes to Makefile, edit Makefile.template
 ## See also: utils/mw_prep
 ##
@@ -12,16 +18,17 @@ obj-m += mwcomms.o
 
 # The objects that are linked to create the module
 mwcomms-y += mwcomms-base.o mwcomms-xen-iface.o mwcomms-socket.o
-
-# experimental
-mwcomms-y += mwcomms-backchannel.o
+mwcomms-y += mwcomms-netflow.o
 
 ccflags-y := -std=gnu99 -Wno-declaration-after-statement -Wno-missing-braces
-ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common
+ccflags-y += -I$(PWD) -I$(PWD)/../../common -I$(PWD)/../../../common 
+ccflags-y += -I$(PWD)/../../../exports/imports
 
-# experimental
-ccflags-y += -DBACKCHANNEL # support the netflow side-channel
-#ccflags-y += -DDEBUG_BACKCHANNEL
+# Name of external-facing network interface
+ccflags-y += -DEXT_IFACE=\"eth0\"
+
+# Support polling. You probably want this.
+ccflags-y += -DENABLE_POLLING
 
 # For debugging
 ccflags-y += -ggdb
@@ -30,8 +37,9 @@ ccflags-y += -ggdb
 # know what you're doing.
 
 #ccflags-y += -DMYTRAP
+#ccflags-y += -DMYDEBUG
 #ccflags-y += -DDEBUG # enable pr_debug
-#ccflags-y += -DVERBOSE # enable our custom "pr_verbose"
+#ccflags-y += -DMYVERBOSE # enable our custom "pr_verbose"
 
 
 all:

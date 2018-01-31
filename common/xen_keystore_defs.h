@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef xenevent_config_h
 #define xenevent_config_h
 
@@ -50,22 +56,33 @@
 #define SERVER_ID_KEY               "id"
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
-#define SERVER_BACKCHANNEL_PORT_KEY  "backchannel_port"
-#define SERVER_BACKCHANNEL_PORT_PATH XENEVENT_XENSTORE_PVM "/" SERVER_BACKCHANNEL_PORT_KEY
-
+#define SERVER_NETFLOW_PORT_KEY     "netflow"
+#define SERVER_NETFLOW_PORT_PATH    XENEVENT_XENSTORE_PVM "/" SERVER_NETFLOW_PORT_KEY
 
 // INS constants
 #define XENEVENT_PATH_STR_LEN       32
 
-#define CLIENT_ID_KEY               "ins_dom_id" 
-
 #define GNT_REF_KEY                 "gnt_ref" 
-
 #define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
-
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
 
-#define HEARTBEAT_KEY               "heartbeat"
+#define INS_ID_KEY                   "ins_dom_id"
+#define INS_IP_ADDR_KEY              "ip_addrs"
+#define INS_HEARTBEAT_KEY            "heartbeat"
+
+#define INS_SOCKET_PARAMS_KEY        "sockopts"
+
+// Format of value: "socket_ct:bytes_recv:bytes_sent". All numbers are
+// base 16. See also ins-ioctls.h.
+#define INS_NETWORK_STATS_KEY        "network_stats"
+
+#define INS_LISTENER_KEY             "listening_ports"
+
+//This defines the index of the domid string once
+//a xenstore path has been returned and split with
+//token  ex /mw/5/vm_evt_chn_is_bound -> 5 is the
+//domid at index 2
+#define XEN_DOMID_INDEX             2
 
 //
 //  Grant Mapping Variables 

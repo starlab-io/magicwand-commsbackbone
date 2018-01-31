@@ -1,4 +1,10 @@
 ##
+## STAR LAB PROPRIETARY & CONFIDENTIAL
+## Copyright (C) 2016, Star Lab — All Rights Reserved
+## Unauthorized copying of this file, via any medium is strictly prohibited.
+##
+
+##
 ## To preserve changes to Makefile, edit Makefile.template
 ## See also: utils/mw_prep
 ##
@@ -16,14 +22,21 @@ CC = x86_64-rumprun-netbsd-gcc
 CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -ggdb
 
+MWROOT  = ../../../..
+
 CFLAGS += -I..
-CFLAGS += -I../../../../common
+CFLAGS += -I$(MWROOT)/common
+CFLAGS += -I$(MWROOT)/exports/imports
 CFLAGS += -I../platform/xen/xen/include 
 CFLAGS += -I../../rump-common
 
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
+#CFLAGS += -DMYVERBOSE
+
+# Experimental feature: breaks protected app
+CFLAGS += -DMODIFY_NETWORK_PARAMETERS=0
 
 BAKE=rumprun-bake
 BAKE_FLAGS=-c ../xenevents.conf xen_events

@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef xenevent_app_networking_h
 #define xenevent_app_networking_h
 
@@ -5,6 +11,7 @@
 #include "user_common.h"
 #include "message_types.h"
 #include "threadpool.h"
+
 
 void
 xe_net_set_base_response( IN mt_request_generic_t   * Request,
@@ -74,6 +81,10 @@ int
 xe_net_get_name( IN mt_request_socket_getname_t  * Request,
                  IN mt_response_socket_getname_t * Response,
                  IN thread_item_t                * WorkerThread );
+
+
+int
+xe_net_init( void );
 
 
 #endif // xenevent_app_networking_h

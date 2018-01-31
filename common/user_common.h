@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef app_common_h
 #define app_common_h
 
@@ -47,7 +53,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
 
 // Using gettid() would be better, but it's only available on Linux
-#define _DEBUG_EMIT_META() \
+#define _DEBUG_EMIT_META()                                              \
     DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "%d [%s:%d] ", getpid(), SHORT_FILE, __LINE__ )
 
 #define _DEBUG_EMIT_BREAKPOINT()                \
@@ -74,15 +80,19 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #  define DEBUG_EMIT_BREAKPOINT() ((void)0)
 #endif
 
+#define INS_DEBUG_ATTRIB  __attribute__((optimize("O0")))
+
 // Unconditionally emits breakpoint
 #define BARE_DEBUG_BREAK() _DEBUG_EMIT_BREAKPOINT()
 
 #ifdef MYTRAP
 
 #  define DEBUG_BREAK()                                                 \
+    pthread_mutex_lock( &__debug_mutex );                               \
     _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( "At breakpoint\n" );                          \
-    DEBUG_FLUSH_FUNCTION(stdout);                                       \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "At breakpoint\n" );       \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
+    pthread_mutex_unlock( &__debug_mutex );                             \
     _DEBUG_EMIT_BREAKPOINT()
 
 #else
@@ -98,7 +108,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
     if(!(x)) {                                                          \
         pthread_mutex_lock( &__debug_mutex );                           \
         _DEBUG_EMIT_META();                                             \
-        DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "Assertion failure: %s\n", #x );          \
+        DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, "Assertion failure: %s\n", #x ); \
         DEBUG_EMIT_BREAKPOINT();                                        \
         pthread_mutex_unlock( &__debug_mutex );                         \
     }
@@ -106,6 +116,12 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #else
 #  define MYASSERT(x)     ((void)0)
 #endif
+
+
+// MYDEBUG might not be defined, so don't rely on __debug_mutex
+#define FORCE_PRINT(...)                                                \
+    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );
 
 
 #ifdef MYDEBUG
@@ -119,10 +135,21 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
       pthread_mutex_unlock( &__debug_mutex );                             \
     }
 
+//#  define DEBUG_PRINT FORCE_PRINT
 
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG
+
+
+#ifdef MYVERBOSE
+
+#  define VERBOSE_PRINT( ... )                                       \
+        DEBUG_PRINT( __VA_ARGS__ )
+#else
+#   define VERBOSE_PRINT( ... ) ((void)0)
+
+#endif //MYVERBOSE
 
 
 #ifndef MIN

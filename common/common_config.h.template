@@ -30,7 +30,30 @@
 // boot parameter - specifically look at gnttab_max_frames. N.B. we
 // must create one grant reference per shared page.
 //
-#define XENEVENT_GRANT_REF_ORDER  6 // (2^order == page count)
+// For initial development, each INS will get 32 pages of shared mem.
+//
+#define XENEVENT_GRANT_REF_ORDER  5 // (2^order == page count)
+
+
+//
+// Maximum number of ins clients allowed the shared memory will
+// need to be broken upand distributed evenly among this number
+// number of clients
+//
+#define MAX_INS_COUNT 2
+
+
+//
+// How often should an INS emit a heartbeat?
+//
+#define HEARTBEAT_INTERVAL_SEC  15
+
+
+//
+// How many heartbeats can an INS miss before it is considered dead?
+//
+#define HEARTBEAT_MAX_MISSES     2
+
 
 //
 // The items we're sharing on the ring buffer are big and we want to
@@ -57,7 +80,7 @@
 //
 // Useful sizes to consider:
 //     mt_request_base_t: 0x18
-//     non-buffer portion of mt_response_socket_recvfrom_t: 0x3a
+//     non-buffer portion of mt_response_socket_recvfrom_t: 0x3e
 //     non-buffer portion of mt_request_socket_send_t:      0x1c
 //
 //
@@ -71,7 +94,7 @@
 //#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
 //#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
 
-#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3a - 1)
+#define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3e - 1)
 
 //
 // The macros below determine whether we use the event channel. In the

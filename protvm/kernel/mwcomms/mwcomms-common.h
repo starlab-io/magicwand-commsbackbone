@@ -24,7 +24,7 @@ typedef struct _mw_region
 #define   OUT
 #define INOUT
 
-// Disables optimization on a per-function basis. 
+// Disables optimization on a per-function basis.
 #define MWSOCKET_DEBUG_ATTRIB  __attribute__((optimize("O0")))
 
 
@@ -38,6 +38,10 @@ typedef struct _mw_region
 #ifndef bzero
 #  define bzero(p, sz) memset( (p), 0, (sz) )
 #endif // bzero
+
+#ifndef CHECK_FREE
+#  define CHECK_FREE(_p) { if(_p) { kfree(_p); } }
+#endif
 
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")

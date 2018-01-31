@@ -9,8 +9,8 @@ CFLAGS=-ggdb -I../platform/xen/xen/include
 
 #BAKE=/bin/bash -v rumprun-bake
 BAKE=rumprun-bake
-#BAKE_FLAGS=xen-pv
-BAKE_FLAGS=-c ../xenevents.conf xen_events
+BAKE_FLAGS=xen-pv
+#BAKE_FLAGS=-c ../xenevents.conf xen_events
 
 APPNAME=listdir
 

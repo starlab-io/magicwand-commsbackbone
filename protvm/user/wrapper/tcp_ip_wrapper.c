@@ -13,6 +13,11 @@
  *          network calls.
  */
 
+#define _GNU_SOURCE // dladdr()
+#include <dlfcn.h>
+#include <elf.h>
+#include <link.h> // ^^^ for introspection
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -29,7 +34,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-#include <dlfcn.h>
+
 #include <pthread.h>
 #include <signal.h>
 
@@ -53,7 +58,8 @@
 
 
 //
-// Which send() implementation should we use?
+// Which send() implementation should we use? This choice has big
+// implications for performance.
 //
 
 //#define SEND_ALLSYNC
@@ -185,6 +191,8 @@ get_libc_symbol( void ** Addr, const char * Symbol )
         exit(1);
     }
 
+    DEBUG_PRINT( "libc: %s ==> %p\n", Symbol, *Addr );
+
     return *Addr;
 }
 
@@ -220,8 +228,8 @@ ErrorExit:
 
 
 static int
-mwcomms_write_request( IN  int         MwFd,
-                       IN  bool        ReadResponse,
+mwcomms_write_request( IN  int                     MwFd,
+                       IN  bool                    ReadResponse,
                        IN  mt_request_generic_t  * Request,
                        OUT mt_response_generic_t * Response )
 {
@@ -259,12 +267,13 @@ mwcomms_write_request( IN  int         MwFd,
     do
     {
         ct = libc_write( MwFd, Request, Request->base.size );
-        if ( !( ct < 0 && EAGAIN == errno ) )
+        if ( !( ct < 0 &&
+                ( EINTR == errno || EAGAIN == errno ) ) )
         {
             break;
         }
 
-        // rc == -1, errno == EAGAIN. So, try again...
+        // rc == -1, errno == EAGAIN or errno == EINTR. So, try again...
         DEBUG_PRINT( "write() failed, trying again.\n" );
 #if EAGAIN_TRIGGERS_SLEEP
         // The cost of this failing is negligible, so ignore return code.
@@ -274,6 +283,7 @@ mwcomms_write_request( IN  int         MwFd,
     } while ( true );
 
     err = errno;
+    MYASSERT( 0 == err );
 
     if ( ct < 0 )
     {
@@ -418,25 +428,31 @@ hex_dump( const char *desc, void *addr, int len )
 
 
 int 
-socket( int domain, 
-        int type, 
-        int protocol )
+socket( int Domain, 
+        int Type, 
+        int Protocol )
 {
     int rc = 0;
     int err = 0;
 
-    if ( AF_INET != domain || (!USE_MWCOMMS) )
+    // See socket(2); N.B. Type can be OR-ed with specific flags
+    if ( AF_INET != Domain
+         || ( 0 == (SOCK_STREAM & Type ) )
+         || (!USE_MWCOMMS) )
     {
-        rc = libc_socket( domain, type, protocol );
+        rc = libc_socket( Domain, Type, Protocol );
+        err = errno;
+        DEBUG_PRINT( "libc_socket( %d, 0x%x, %d ) ==> %d\n",
+                     Domain, Type, Protocol, rc );
         goto ErrorExit;
     }
 
 #if USE_MWCOMMS
     mwsocket_create_args_t create;
 
-    create.domain   = xe_net_get_mt_protocol_family( domain );
+    create.domain   = xe_net_get_mt_protocol_family( Domain );
     create.type     = MT_ST_STREAM;
-    create.protocol = protocol;
+    create.protocol = Protocol;
     create.outfd = -1;
 
     rc = ioctl( devfd, MW_IOCTL_CREATE_SOCKET, &create );
@@ -444,19 +460,17 @@ socket( int domain,
     {
         err = errno;
         MYASSERT( !"ioctl" );
-        errno = err;
         goto ErrorExit;
     }
+
+    DEBUG_PRINT( "mwsocket( %d, 0x%x, %d ) ==> %d\n",
+                 Domain, Type, Protocol, create.outfd );
 
     rc = create.outfd;
 #endif
 
 ErrorExit:
-    err = errno;
-    DEBUG_PRINT( "socket( %d, %d, %d ) ==> %d\n",
-                 domain, type, protocol, rc );
     errno = err;
-
     return rc;
 }
 
@@ -472,7 +486,7 @@ close( int Fd )
 int
 bind( int                     SockFd,
       const struct sockaddr * SockAddr, 
-      socklen_t                AddrLen )
+      socklen_t               AddrLen )
 {
     mt_request_generic_t   request;
     mt_response_generic_t  response = {0};
@@ -554,13 +568,14 @@ ErrorExit:
 
 
 int
-accept( int SockFd, 
+accept( int               SockFd,
         struct sockaddr * SockAddr, 
-        socklen_t * SockLen)
+        socklen_t       * SockLen)
 {
     mt_request_generic_t  request;
     mt_response_generic_t response = {0};
     ssize_t rc = 0;
+    int e = 0;
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -579,10 +594,8 @@ accept( int SockFd,
         goto ErrorExit;
     }
 
-    if ( response.base.status < 0 )
+    if ( (int) response.base.status < 0 )
     {
-        rc = -1;
-        errno = -response.base.status;
         goto ErrorExit;
     }
 
@@ -591,7 +604,9 @@ accept( int SockFd,
                           &response.socket_accept.sockaddr );
 
 ErrorExit:
+    e = errno;
     DEBUG_PRINT( "accept(%d, ...) ==> %d\n", SockFd, (int)rc );
+    errno = e;
     return rc;
 }
 
@@ -610,10 +625,10 @@ accept4( int               SockFd,
 
 
 ssize_t
-recvfrom( int    SockFd,
-          void * Buf,
-          size_t Len,
-          int    Flags,
+recvfrom( int               SockFd,
+          void            * Buf,
+          size_t            Len,
+          int               Flags,
           struct sockaddr * SrcAddr,
           socklen_t       * AddrLen )
 {
@@ -635,6 +650,7 @@ recvfrom( int    SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "recvfrom(%d, buf, %d, %d, ... )\n", SockFd, (int)Len, Flags );
     mwcomms_init_request( &request,
                           MtRequestSocketRecv,
                           MT_REQUEST_SOCKET_RECV_SIZE,
@@ -651,8 +667,8 @@ recvfrom( int    SockFd,
         received = &response.socket_recvfrom.count;
     }
 
-    //DEBUG_PRINT( "Receiving %d bytes\n",
-    //request.socket_recv.requested );
+    DEBUG_PRINT( "Receiving %d bytes\n", request.socket_recv.requested );
+
     rc = (ssize_t)mwcomms_write_request( SockFd, true, &request, &response );
     err = errno;
     if ( rc )
@@ -797,9 +813,9 @@ ErrorExit:
 
 
 int 
-connect( int SockFd, 
+connect( int                     SockFd, 
          const struct sockaddr * Addr,
-         socklen_t AddrLen )
+         socklen_t               AddrLen )
 {
    mt_request_generic_t request;
    mt_response_generic_t response = {0};
@@ -1114,6 +1130,8 @@ send( int          SockFd,
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "send( %d, buf, %d, %x )\n", SockFd, (int)Len, Flags );
+
     mwcomms_init_request( &request,
                           MtRequestSocketSend,
                           MT_REQUEST_SOCKET_SEND_SIZE,
@@ -1234,6 +1252,8 @@ shutdown( int SockFd, int How )
         goto ErrorExit;
     }
 
+    DEBUG_PRINT( "shutdown( %d, %d )\n", SockFd, How );
+
     mwcomms_init_request( &request,
                           MtRequestSocketShutdown,
                           MT_REQUEST_SOCKET_SHUTDOWN_SIZE,
@@ -1276,13 +1296,25 @@ mwcomms_set_sockattr( IN int Level,
         switch( OptName )
         {
         case SO_REUSEADDR:
-            Attribs->attrib = MtSockAttribReuseaddr;
+            Attribs->name = MtSockAttribReuseaddr;
             break;
         case SO_KEEPALIVE:
-            Attribs->attrib = MtSockAttribKeepalive;
+            Attribs->name = MtSockAttribKeepalive;
             break;
         case SO_REUSEPORT:
-            Attribs->attrib = MtSockAttribReuseport;
+            Attribs->name = MtSockAttribReuseport;
+            break;
+        case SO_RCVTIMEO:
+            Attribs->name = MtSockAttribRcvTimeo;
+            break;
+        case SO_SNDTIMEO:
+            Attribs->name = MtSockAttribSndTimeo;
+            break;
+        case SO_RCVLOWAT:
+            Attribs->name = MtSockAttribRcvLoWat;
+            break;
+        case SO_SNDLOWAT:
+            Attribs->name = MtSockAttribSndLoWat;
             break;
         default:
             DEBUG_PRINT( "Failing on unsupported SOL_SOCKET option %d\n", OptName );
@@ -1295,10 +1327,10 @@ mwcomms_set_sockattr( IN int Level,
         {
         case TCP_DEFER_ACCEPT:
             // Linux-only option.
-            Attribs->attrib = MtSockAttribDeferAccept;
+            Attribs->name = MtSockAttribDeferAccept;
             break;
         case TCP_NODELAY:
-            Attribs->attrib = MtSockAttribNodelay;
+            Attribs->name = MtSockAttribNodelay;
             break;
         default:
             DEBUG_PRINT( "Failing on unsupported SOL_TCP option %d\n", OptName );
@@ -1315,15 +1347,15 @@ mwcomms_set_sockattr( IN int Level,
 
 
 int
-getsockopt( int Fd,
-            int Level,
-            int OptName,
-            void * OptVal,
-            socklen_t  *OptLen )
+getsockopt( int         Fd,
+            int         Level,
+            int         OptName,
+            void      * OptVal,
+            socklen_t * OptLen )
 {
     int rc = 0;
     int err = 0;
-    mwsocket_attrib_t attribs = {0};
+    mwsocket_attrib_t attr = {0};
 
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
@@ -1332,7 +1364,7 @@ getsockopt( int Fd,
         goto ErrorExit;
     }
 
-    rc = mwcomms_set_sockattr( Level, OptName, &attribs );
+    rc = mwcomms_set_sockattr( Level, OptName, &attr );
     if ( rc )
     {
         err = rc;
@@ -1340,9 +1372,9 @@ getsockopt( int Fd,
         goto ErrorExit;
     }
 
-    attribs.modify = false;
+    attr.modify = false;
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attribs );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         err = errno;
@@ -1350,9 +1382,17 @@ getsockopt( int Fd,
         goto ErrorExit;
     }
 
-    if ( OptLen > 0 )
+    if ( MtSockAttribSndTimeo == attr.name
+         || MtSockAttribRcvTimeo == attr.name )
     {
-        *(uint32_t *) OptVal = attribs.value;
+        MYASSERT( *OptLen >= sizeof(struct timeval) );
+        ((struct timeval *) OptVal)->tv_sec  = attr.val.t.s;
+        ((struct timeval *) OptVal)->tv_usec = attr.val.t.us;
+        *OptLen = sizeof( struct timeval );
+    }
+    else if ( *OptLen > 0 && *OptLen <= sizeof( attr.val ) )
+    {
+        memcpy( OptVal, &attr.val, *OptLen );
     }
 
 ErrorExit:
@@ -1364,14 +1404,14 @@ ErrorExit:
 
 
 int
-setsockopt( int Fd,
-            int Level,
-            int OptName,
+setsockopt( int          Fd,
+            int          Level,
+            int          OptName,
             const void * OptVal,
-            socklen_t OptLen )
+            socklen_t    OptLen )
 {
     int rc = 0;
-    mwsocket_attrib_t attrib = {0};
+    mwsocket_attrib_t attr = {0};
     int err = 0;
 
     if ( !mwcomms_is_mwsocket( Fd ) )
@@ -1381,21 +1421,33 @@ setsockopt( int Fd,
         goto ErrorExit;
     }
 
-    rc = mwcomms_set_sockattr( Level, OptName, &attrib );
+    rc = mwcomms_set_sockattr( Level, OptName, &attr );
     if ( rc )
     {
         err = rc;
         rc = -1;
         goto ErrorExit;
     }
-    
-    attrib.modify = true;
-    if ( OptLen > 0 )
+
+    attr.modify = true;
+    if ( MtSockAttribSndTimeo == attr.name
+         || MtSockAttribRcvTimeo == attr.name )
     {
-        attrib.value = *(uint32_t *) OptVal;
+        MYASSERT( OptLen >= sizeof(struct timeval) );
+        attr.val.t.s  = ((struct timeval *) OptVal)->tv_sec;
+        attr.val.t.us = ((struct timeval *) OptVal)->tv_usec;
+    }
+    else if ( OptLen > 0 && OptLen <= sizeof( attr.val ) )
+    {
+        memcpy( &attr.val, OptVal, OptLen );
+        //attr.value.v = (uint64_t) *(uint32_t *) OptVal;
+    }
+    else
+    {
+        MYASSERT( !"Unhandled option value" );
     }
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         err = errno;
@@ -1411,7 +1463,7 @@ ErrorExit:
 
 
 int
-getsockname(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
+getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
 {
     int rc = 0;
     mt_request_generic_t request = {0};
@@ -1521,7 +1573,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     va_list ap;
     void * arg = NULL;
     int err = 0;
-    mwsocket_attrib_t attrib = {0};
+    mwsocket_attrib_t attr = {0};
     int oldflags = 0;
     int newflags = 0;
 
@@ -1563,11 +1615,11 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
         goto ErrorExit;
     }
 
-    attrib.modify = true;
-    attrib.attrib = MtSockAttribNonblock;
-    attrib.value  = (uint32_t) (bool) ( newflags & O_NONBLOCK );
+    attr.modify  = true;
+    attr.name    = MtSockAttribNonblock;
+    attr.val.v32 = (uint32_t) (bool) ( newflags & O_NONBLOCK );
 
-    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attrib );
+    rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
     if ( rc )
     {
         DEBUG_PRINT( "ioctl() failed: %d\n", rc );
@@ -1584,15 +1636,95 @@ ErrorExit:
     return rc;
 }
 
+#ifdef WRAP_CHECK_FUNCTIONS
 
-void
-get_libc_symbols( void )
+//
+// Set up function aliases here for reason stated in the Makefile. The
+// signature doesn't matter; we're instructing the loader to redirect
+// one function call to another. Since only socket-related calls are
+// intercepted, just a few functions are aliased.
+//
+
+void __read_chk(void)     __attribute__((weak, alias ("read")     ));
+void __recv_chk(void)     __attribute__((weak, alias ("recv")     ));
+void __recvfrom_chk(void) __attribute__((weak, alias ("recvfrom") ));
+
+#endif // WRAP_CHECK_FUNCTIONS
+
+
+#ifdef DEBUG
+static int
+dl_callback(struct dl_phdr_info * Info,
+            size_t                Size,
+            void                * Data)
 {
+    char buf[64];
 
+    snprintf( buf, sizeof(buf), "%s => %p\n",
+              Info->dlpi_name,
+              (void *) Info->dlpi_addr );
+
+    (void) fwrite( buf, strlen(buf), 1, stdout );
+
+    for (int j = 0; j < Info->dlpi_phnum; j++)
+    {
+        printf( "\t header %2d: address=%16p size=%6lx fl=%lx\n",
+                j,
+                (void *) (Info->dlpi_addr + Info->dlpi_phdr[j].p_vaddr),
+                (unsigned long) Info->dlpi_phdr[j].p_memsz,
+                (unsigned long) Info->dlpi_phdr[j].p_flags );
+    }
+
+    return 0;
+}
+#endif // DEBUG
+
+
+void __attribute__((constructor))
+init_wrapper( void )
+{
+    //
+    // Prepare the log file for writing
+    // 
+    char shim_log[32] = {0};
+
+    snprintf( shim_log, sizeof(shim_log),
+              "%s/ins_%d.log", SHIM_LOG_PATH, getpid() );
+
+    g_log_file = fopen( shim_log, "w" );
+    if ( NULL == g_log_file )
+    {
+        fprintf( stderr, "Failed to open log file %s: %s\n",
+                 shim_log, strerror( errno ) );
+        exit(1);
+    }
+
+    DEBUG_PRINT( "Intercept module loaded\n" );
+
+    //
+    // Open the kernel module's device (mwcomms)
+    //
+#if (!USE_MWCOMMS)
+    devfd = -1;
+#else
+    devfd = open( DEV_FILE, O_RDWR );
+    if (devfd < 0)
+    {
+        fprintf( stderr, "Failed to open device %s: %s\n",
+                 DEV_FILE, strerror( errno ) );
+        exit(1);
+    }
+#endif
+
+    //
+    // Find the TCP/IP functions in libc and save their
+    // locations. This module hooks them and forwards their uses in
+    // some cases.
+    //
     g_dlh_libc = dlopen( "libc.so.6", RTLD_NOW );
     if ( NULL == g_dlh_libc )
     {
-        //Without libc we cannot write an error message :(
+        DEBUG_PRINT( "Failure: %s\n", dlerror() );
         exit(1);
     }
 
@@ -1622,43 +1754,12 @@ get_libc_symbols( void )
 
     get_libc_symbol( (void **) &libc_fcntl,       "fcntl" );
 
-}
-
-void __attribute__((constructor))
-init_wrapper( void )
-{
-    char wrapper_log[SHIM_LOG_PATH_SIZE] = {0};
-    
-    //The first thing we need to do is get the libc symbols
-    //so the shim can write to stdout without breaking ourselves.
-    get_libc_symbols();
-
-
-    snprintf( wrapper_log,
-              sizeof( wrapper_log ),
-              "%s/ins_%d.log",
-              SHIM_LOG_PATH,
-              getpid() );
-    
-    g_log_file = fopen( wrapper_log, "w" );
-    if ( NULL == g_log_file )
-    {
-        fprintf( stderr, "Could not open log file %s\n", wrapper_log );
-        exit(1);
-    }
-    
-    DEBUG_PRINT("Intercept module loaded\n");
-
-#if (!USE_MWCOMMS)
-    devfd = -1;
-#else
-    devfd = open( DEV_FILE, O_RDWR);
-    if (devfd < 0)
-    {
-        wrapper_error("Failed to open the device...");
-        exit(1);
-    }
-#endif
+#ifdef DEBUG
+    //
+    // XXXX: Linux-only function
+    //
+    dl_iterate_phdr(dl_callback, NULL);
+#endif // DEBUG
 
 }
 
@@ -1666,7 +1767,6 @@ init_wrapper( void )
 void __attribute__((destructor))
 fini_wrapper( void )
 {
-    
     if ( g_dlh_libc )
     {
         dlclose( g_dlh_libc );
@@ -1678,10 +1778,11 @@ fini_wrapper( void )
         libc_close( devfd );
     }
 
-    if( NULL != g_log_file )
+    // Don't call DEBUG_PRINT() after g_log_file is closed!
+    DEBUG_PRINT( "Intercept module unloaded\n" );
+
+    if ( NULL != g_log_file )
     {
         fclose( g_log_file );
     }
-
-    DEBUG_PRINT("Intercept module unloaded\n");
 }
