@@ -1697,6 +1697,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
         MYASSERT( ActiveRequest->deliver_response );
 
+        if ( ActiveRequest->sockinst->remote_close_requested )
+        {
+            ActiveRequest->deliver_response = false;
+        }
+
         // Put this AR in the inbound queue. Copy in the response now.
         memcpy( &ActiveRequest->rr.response, Response, Response->base.size );
         ActiveRequest->response_populated = true;
@@ -2162,6 +2167,7 @@ mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
     }
 
     // Success
+    mwsocket_destroy_active_request( actreq );
     rc = 0;
     remoterc = -actreq->rr.response.base.status;
     pr_debug( "Response arrived: %lx\n", (unsigned long)actreq->id );
@@ -3148,12 +3154,13 @@ mwsocket_release( struct inode * Inode,
         // fall-through
     }
 
-    // XXXX: The socket must be destroyed. We force its refct down to
-    // 1 here. Cases where it isn't 1 should be investigated; one such
-    // case is on accept().
+    // XXXX: The socket must be destroyed. We decrement its refct here,
+    // so that it will be destroyed once all pending requests have been
+    // satisfied. Any requests that do not get deleted after recieving
+    // a response, resulting in a memory leak, should be investigated.
 
     // MYASSERT( 1 == atomic_read( &sockinst->refct ) );
-    atomic_set( &sockinst->refct, 1 );
+    // atomic_set( &sockinst->refct, 1 );
 
     mwsocket_put_sockinst( sockinst );
 
