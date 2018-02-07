@@ -2631,7 +2631,10 @@ mwsocket_monitor( void * Arg )
         rc = mwsocket_poll_handle_notifications( sockinst );
         if( rc )
         {
-            pr_err( "Error handling poll notifications: %d\n", rc );
+            pr_err( "Error handling poll notifications: %d poll_sock_count: %d\n",
+                    rc,
+                    g_mwsocket_state.poll_sock_count );
+            
             continue;
         }
 #endif // ENABLE_POLLING
