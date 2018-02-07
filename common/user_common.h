@@ -59,8 +59,11 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")
 
+
+#define SHIM_LOG_PATH_SIZE 64
+
 #ifdef DEVLOG
-#  define SHIM_LOG_PATH "/tmp"
+#  define SHIM_LOG_PATH "/tmp/ins_log"
 #else
 #  define SHIM_LOG_PATH "/var/log/output"
 #endif
@@ -122,13 +125,15 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 #ifdef MYDEBUG
-
-#  define DEBUG_PRINT(...)                                              \
-    pthread_mutex_lock( &__debug_mutex );                               \
-    _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__ );             \
-    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
-    pthread_mutex_unlock( &__debug_mutex )
+#  define DEBUG_PRINT(...)                                                \
+    if( NULL != DEBUG_FILE_STREAM )                                       \
+    {                                                                     \
+      pthread_mutex_lock( &__debug_mutex );                               \
+      _DEBUG_EMIT_META();                                                 \
+      DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+      DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
+      pthread_mutex_unlock( &__debug_mutex );                             \
+    }
 
 //#  define DEBUG_PRINT FORCE_PRINT
 
