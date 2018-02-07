@@ -732,8 +732,8 @@ xe_net_defer_accept_socket( int LocalFd,
 
             if( listen_poll_fd.revents & POLLNVAL )
             {
-                DEBUG_PRINT("Listening socket closed while defer accept was waiting\n");
-                error = -ENOINT;
+                DEBUG_PRINT("Listening socket closed while defer accept was waiting");
+                errno = -ENOENT;
                 rc = -1;
                 goto ErrorExit;
             }
