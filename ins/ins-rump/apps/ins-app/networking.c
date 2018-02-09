@@ -749,6 +749,7 @@ xe_net_defer_accept_socket( int LocalFd,
                 if( rc < 0 )
                 {
                     perror("Defer accept call to accept failed");
+                    rc = -1;
                     break;
                 }
 
