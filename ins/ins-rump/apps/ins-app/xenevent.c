@@ -88,6 +88,7 @@
 #include "pollset.h"
 
 #include "xenevent_app_common.h"
+#include "logging.h"
 
 #include "mwerrno.h"
 
@@ -386,7 +387,7 @@ DEBUG_open_device( void )
         goto ErrorExit;
     }
 
-    DEBUG_PRINT( "Opened %s <== FD %d\n", DEBUG_INPUT_FILE, g_state.input_fd );
+    log_write( LOG_DEBUG, "Opened %s <== FD %d\n", DEBUG_INPUT_FILE, g_state.input_fd );
     
     g_state.output_fd = open( DEBUG_OUTPUT_FILE,
                               O_WRONLY | O_CREAT | O_TRUNC,
@@ -398,7 +399,7 @@ DEBUG_open_device( void )
         goto ErrorExit;
     }
 
-    DEBUG_PRINT( "Opened %s <== FD %d\n", DEBUG_OUTPUT_FILE, g_state.output_fd );
+    log_write( LOG_DEBUG, "Opened %s <== FD %d\n", DEBUG_OUTPUT_FILE, g_state.output_fd );
 ErrorExit:
     return rc;
 }
@@ -423,7 +424,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
 
         if ( 0 == atomic_cas_32( &(curr->in_use), 0, 1 ) )
         {
-            VERBOSE_PRINT( "Reserving unused buffer %d\n", curr->idx );
+            log_write( LOG_VERBOSE, "Reserving unused buffer %d\n", curr->idx );
             // Value was 0 (now it's 1), so it was available and we
             // have acquired it
             MYASSERT( 1 == curr->in_use );
@@ -433,7 +434,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
         }
         else
         {
-            VERBOSE_PRINT( "NOT reserving used buffer %d\n", curr->idx );
+            log_write( LOG_VERBOSE, "NOT reserving used buffer %d\n", curr->idx );
         }
     }
 
@@ -441,7 +442,7 @@ reserve_available_buffer_item( OUT buffer_item_t ** BufferItem )
     if ( rc )
     {
         MYASSERT( !"All buffers are in use" );
-        //DEBUG_PRINT( "All buffers are in use!!\n" );
+        //log_write( LOG_DEBUG, "All buffers are in use!!\n" );
     }
 
     return rc;
@@ -464,7 +465,7 @@ release_buffer_item( buffer_item_t * BufferItem )
     if ( prev )
     {
         BufferItem->assigned_thread = NULL;
-        VERBOSE_PRINT( "Released buffer %d\n", BufferItem->idx );
+        log_write( LOG_VERBOSE, "Released buffer %d\n", BufferItem->idx );
     }
 }
 
@@ -486,7 +487,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
     
     *WorkerThread = NULL;
 
-    DEBUG_PRINT( "Looking for worker thread for socket %lx\n", Fd );
+    log_write( LOG_DEBUG, "Looking for worker thread for socket %lx\n", Fd );
 
     if ( MT_INVALID_SOCKET_FD == Fd )
     {
@@ -494,7 +495,7 @@ get_worker_thread_for_fd( IN mw_socket_fd_t Fd,
         {
             curr = &g_state.worker_threads[i];
 
-            DEBUG_PRINT( "Worker thread %d: busy %d sock %lx\n",
+            log_write( LOG_DEBUG, "Worker thread %d: busy %d sock %lx\n",
                          i, curr->in_use, curr->public_fd );
 
             // Look for any available thread and secure ownership of it.
@@ -583,7 +584,7 @@ release_worker_thread( thread_item_t * ThreadItem )
     prev = atomic_cas_32( &ThreadItem->in_use, 1, 0 );
     if ( prev )
     {
-        DEBUG_PRINT( "Released worker thread %d\n", ThreadItem->idx );
+        log_write( LOG_DEBUG, "Released worker thread %d\n", ThreadItem->idx );
     }
 }
 
@@ -645,7 +646,7 @@ update_listening_ports( void )
 
     if ( !g_state.pending_port_change ) { goto ErrorExit; }
     
-    DEBUG_PRINT( "Scanning for change in set of listening ports\n" );
+    log_write( LOG_DEBUG, "Scanning for change in set of listening ports\n" );
     g_state.pending_port_change = false;
     listening_ports[0] = '\0';
 
@@ -672,7 +673,7 @@ update_listening_ports( void )
         }
     }
 
-    DEBUG_PRINT( "Listening ports: %s\n", listening_ports );
+    log_write( LOG_DEBUG, "Listening ports: %s\n", listening_ports );
     rc = ioctl( g_state.input_fd,
                 INS_PUBLISH_LISTENERS_IOCTL,
                 (const char *)listening_ports );
@@ -711,7 +712,7 @@ post_process_response( mt_request_generic_t  * Request,
          && Response->base.status >= 0 )
     {
         thread_item_t * accept_thread = NULL;
-        DEBUG_PRINT( "accept() succeeded - allocating thread for the socket\n" );
+        log_write( LOG_DEBUG, "accept() succeeded - allocating thread for the socket\n" );
         rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD,  &accept_thread );
         if ( rc )
         {
@@ -759,7 +760,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     
     bzero( &response.base, sizeof(response.base) );
     
-    VERBOSE_PRINT( "Processing buffer item %d (request ID %lx)\n",
+    log_write( LOG_VERBOSE, "Processing buffer item %d (request ID %lx)\n",
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
@@ -858,7 +859,7 @@ process_buffer_item( buffer_item_t * BufferItem )
     // How to handle failure?
     (void) post_process_response( request, &response, worker );
 
-    VERBOSE_PRINT( "Writing response ID %lx len %hx to ring\n",
+    log_write( LOG_VERBOSE, "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
 
     size_t written = write( g_state.output_fd,
@@ -880,13 +881,13 @@ process_buffer_item( buffer_item_t * BufferItem )
     if ( MT_DEALLOCATES_FD( reqtype )
          || (MtRequestSocketCreate == reqtype && response.base.status < 0 ) )
     {
-        DEBUG_PRINT( "Releasing thread due to request type or response: "
+        log_write( LOG_DEBUG, "Releasing thread due to request type or response: "
                      "ID %lx type %x status %d\n",
                      response.base.id, reqtype, response.base.status );
         release_worker_thread( worker );
     }
 
-    VERBOSE_PRINT( "Done with response %lx\n", response.base.id );
+    log_write( LOG_VERBOSE, "Done with response %lx\n", response.base.id );
     //debug_print_state();
 
     return rc;
@@ -920,7 +921,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     // this is false we release the buffer item.
     *ProcessFurther = true;
     
-    VERBOSE_PRINT( "Looking for thread for request in buffer item %d\n",
+    log_write( LOG_VERBOSE, "Looking for thread for request in buffer item %d\n",
                  BufferItem->idx );
 
 
@@ -1012,7 +1013,7 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
     
     if ( *ProcessFurther )
     {
-        DEBUG_PRINT( "Work item %d assigned to thread %d\n",
+        log_write( LOG_DEBUG, "Work item %d assigned to thread %d\n",
                      BufferItem->idx, (*AssignedThread)->idx );
     }
 
@@ -1023,7 +1024,7 @@ ErrorExit:
     if ( rc )
     {
         *ProcessFurther = false;
-        DEBUG_PRINT( "An internal failure occured. Sending error response.\n" );
+        log_write( LOG_DEBUG, "An internal failure occured. Sending error response.\n" );
         (void) send_dispatch_error_response( request );
     }
 
@@ -1061,10 +1062,10 @@ worker_thread_func( void * Arg )
         currbuf = NULL;
 
         // Block until work arrives
-        DEBUG_PRINT( "**** Thread %d is waiting for work\n", myitem->idx );
+        log_write( LOG_DEBUG, "**** Thread %d is waiting for work\n", myitem->idx );
         sem_wait( &myitem->awaiting_work_sem );
 
-        DEBUG_PRINT( "**** Thread %d is working\n", myitem->idx );
+        log_write( LOG_DEBUG, "**** Thread %d is working\n", myitem->idx );
         work_queue_buffer_idx_t buf_idx = workqueue_dequeue( myitem->work_queue );
         empty = (WORK_QUEUE_UNASSIGNED_IDX == buf_idx);
         if ( empty )
@@ -1076,7 +1077,7 @@ worker_thread_func( void * Arg )
             goto next;
         }
 
-        DEBUG_PRINT( "Thread %d is working on buffer %d\n", myitem->idx, buf_idx );
+        log_write( LOG_DEBUG, "Thread %d is working on buffer %d\n", myitem->idx, buf_idx );
         currbuf = &g_state.buffer_items[buf_idx];
         rc = process_buffer_item( currbuf );
         if ( rc )
@@ -1095,12 +1096,12 @@ worker_thread_func( void * Arg )
         {
             if ( empty )
             {
-                DEBUG_PRINT( "Thread %d is shutting down\n", myitem->idx );
+                log_write( LOG_DEBUG, "Thread %d is shutting down\n", myitem->idx );
                 break;
             }
             else
             {
-                DEBUG_PRINT( "Thread %d has more work before shutting down\n", myitem->idx );
+                log_write( LOG_DEBUG, "Thread %d has more work before shutting down\n", myitem->idx );
             }
         }
     } // while
@@ -1171,7 +1172,7 @@ init_state( void )
         if( rc )
         {
             perror( "sem_init()" );
-            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            log_write( LOG_DEBUG, "Semaphore %d failed init\n", i );
             fflush(stdout);
             sched_yield();
         }
@@ -1180,7 +1181,7 @@ init_state( void )
         if( rc )
         {
             perror( "sem_init()" );
-            DEBUG_PRINT( "Semaphore %d failed init\n", i );
+            log_write( LOG_DEBUG, "Semaphore %d failed init\n", i );
             fflush(stdout);
             sched_yield();
         }
@@ -1195,7 +1196,7 @@ init_state( void )
     rc = DEBUG_open_device();
     if ( rc )
     {
-        DEBUG_PRINT( "Can't open device in test mode. Ignoring.\n" );
+        log_write( LOG_DEBUG, "Can't open device in test mode. Ignoring.\n" );
         rc = 0;
     }
 #else
@@ -1220,15 +1221,15 @@ init_state( void )
        goto ErrorExit;
     }
 
-    DEBUG_PRINT( "INS got domid: %u from ioctl\n", g_state.client_id );
+    log_write( LOG_DEBUG, "INS got domid: %u from ioctl\n", g_state.client_id );
     
     //
     // Start up the threads
     //
     for ( int i = 0; i < MAX_THREAD_COUNT; i++ )
     {
-        DEBUG_PRINT( "creating thread %d\n", i );
-        DEBUG_PRINT( "worker_threads[%d].idx = %d", i,
+        log_write( LOG_DEBUG, "creating thread %d\n", i );
+        log_write( LOG_DEBUG, "worker_threads[%d].idx = %d", i,
                      g_state.worker_threads[i].idx );
 
         rc = pthread_create( &g_state.worker_threads[ i ].self,
@@ -1257,7 +1258,7 @@ init_state( void )
     }
 
 
-    DEBUG_PRINT( "All %d threads have been created\n", MAX_THREAD_COUNT );
+    log_write( LOG_DEBUG, "All %d threads have been created\n", MAX_THREAD_COUNT );
 
     sched_yield();
     
@@ -1274,7 +1275,7 @@ fini_state( void )
     // semaphores so they exit, then join them and clean up their resources.
     //
 
-    DEBUG_PRINT( "Shutting down all threads\n" );
+    log_write( LOG_DEBUG, "Shutting down all threads\n" );
     
     g_state.shutdown_pending = true;
     
@@ -1303,6 +1304,7 @@ fini_state( void )
     }
 #endif
 
+    log_close();
     return 0;
 }
 
@@ -1330,13 +1332,13 @@ message_dispatcher( void )
         thread_item_t * assigned_thread = NULL;
         buffer_item_t * myitem = NULL;
 
-        VERBOSE_PRINT( "Dispatcher looking for available buffer\n" );
+        log_write( LOG_VERBOSE, "Dispatcher looking for available buffer\n" );
         // Identify the next available buffer item
         rc = reserve_available_buffer_item( &myitem );
         if ( rc )
         {
             // Failed to find an available buffer item. Yield and try again.
-            DEBUG_PRINT( "Warning: No buffer items are available. Yielding for now." );
+            log_write( LOG_DEBUG, "Warning: No buffer items are available. Yielding for now." );
             continue;
         }
 
@@ -1345,8 +1347,8 @@ message_dispatcher( void )
         // buffer. Block until a command arrives.
         //
 
-        VERBOSE_PRINT( "Attempting to read %ld bytes from input FD\n",
-                     ONE_REQUEST_REGION_SIZE );
+        log_write( LOG_VERBOSE, "Attempting to read %ld bytes from input FD\n",
+                   ONE_REQUEST_REGION_SIZE );
 
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
@@ -1369,12 +1371,11 @@ message_dispatcher( void )
             goto ErrorExit;
         }
 
-
-        VERBOSE_PRINT( "Read request %lx type %x size %x off ring\n",
-                     (unsigned long) myitem->request->base.id,
-                     myitem->request->base.type,
-                     myitem->request->base.size );
-
+        log_write( LOG_VERBOSE,
+                   "Read request %lx type %x size %x off ring\n",
+                   (unsigned long) myitem->request->base.id,
+                   myitem->request->base.type,
+                   myitem->request->base.size );
 
         // Assign the buffer to a thread. If fails, reports to PVM but
         // keeps going.
@@ -1388,7 +1389,7 @@ message_dispatcher( void )
         if ( more_processing )
         {
             // Tell the thread to process the buffer. No yield should be needed.
-            DEBUG_PRINT( "Instructing thread %d to resume\n", assigned_thread->idx );
+            log_write( LOG_DEBUG, "Instructing thread %d to resume\n", assigned_thread->idx );
 
             sem_post( &assigned_thread->awaiting_work_sem );
         }
@@ -1445,7 +1446,12 @@ int main(void)
     int rc = 0;
 
     setlimit();
-      
+
+    // LOG_LEVEL comes from Makefile
+    log_init( NULL, NULL, NULL, LOG_LEVEL );
+
+    log_write( LOG_WARN, "test message #%d\n", 1 );
+
     rc = init_state();
     if ( rc )
     {

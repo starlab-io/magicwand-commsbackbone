@@ -32,7 +32,7 @@
 //This constant is for defer accept functionality, this will determine
 //how many seconds an idle connection will wait for data before disconnecting
 
-#define DEFER_ACCEPT_MAX_IDLE 5.0
+#define DEFER_ACCEPT_MAX_IDLE 30.0
 
 //
 // Xen event device

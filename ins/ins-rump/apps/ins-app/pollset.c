@@ -15,6 +15,7 @@
 
 #include "pollset.h"
 #include "networking.h"
+#include "logging.h"
 
 #include <errno.h>
 
@@ -181,13 +182,12 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
             fds[ i ].fd = -1;
             continue;
         }
-        VERBOSE_PRINT( "Including FD %lx/%d in poll()\n",
-                     thisti->public_fd, thisti->local_fd );
+        log_write( LOG_VERBOSE,
+                   "Including FD %lx/%d in poll()\n",
+                   thisti->public_fd, thisti->local_fd );
         fds[ i ].fd =  thisti->local_fd;
     }
 
-
-    
     // Make the call, do not block
     pollct = poll( fds, (nfds_t)MAX_THREAD_COUNT, 0 );
     if ( pollct < 0 )
@@ -233,11 +233,12 @@ xe_pollset_query( mt_request_pollset_query_t  * Request,
 
         thisti->poll_events = thisqi->events;
 
-        DEBUG_PRINT( "Found IO events %x => %x on socket %lx/%d\n"
-                     "item_idx: %d cur_pos: %d pollct: %d\n",
-                     thisfd->revents, thisqi->events,
-                     thisti->public_fd, thisti->local_fd,
-                     item_idx, cur_pos, pollct );
+        log_write( LOG_DEBUG,
+                   "Found IO events %x => %x on socket %lx/%d\n"
+                   "item_idx: %d cur_pos: %d pollct: %d\n",
+                   thisfd->revents, thisqi->events,
+                   thisti->public_fd, thisti->local_fd,
+                   item_idx, cur_pos, pollct );
 
         ++item_idx;
         ++cur_pos;

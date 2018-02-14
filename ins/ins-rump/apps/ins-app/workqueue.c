@@ -17,6 +17,7 @@
 #include <errno.h>
 
 #include "workqueue.h"
+#include "logging.h"
 
 struct _workqueue
 {
@@ -100,7 +101,7 @@ int workqueue_enqueue( workqueue_t * wq, work_queue_buffer_idx_t item )
 
     --wq->available_slots;
 
-    DEBUG_PRINT("%d - Enqueued item: %d\n", wq->id, item );
+    log_write( LOG_DEBUG, "%d - Enqueued item: %d\n", wq->id, item );
 
 ErrorExit:
     pthread_mutex_unlock( &wq->lock );
@@ -129,7 +130,7 @@ workqueue_dequeue( workqueue_t * wq )
 
     ++wq->available_slots;
 
-    DEBUG_PRINT("%d - dequeued item: %d\n", wq->id, item );
+    log_write( LOG_DEBUG, "%d - dequeued item: %d\n", wq->id, item );
 
 ErrorExit:
     pthread_mutex_unlock( &wq->lock );
