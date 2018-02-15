@@ -285,6 +285,7 @@ int xe_get_mwerrno( int NativeErrno )
     rc = MW_EPERM;
 
 ErrorExit:
+    // N.B. No need to restore native errno
     return rc;
 }
 
@@ -1448,10 +1449,13 @@ int main(void)
     setlimit();
 
     // LOG_LEVEL comes from Makefile
-    log_init( NULL, NULL, NULL, LOG_LEVEL );
-
-    log_write( LOG_WARN, "test message #%d\n", 1 );
-
+    rc = log_init( NULL, NULL, NULL, LOG_LEVEL );
+    if( rc )
+    {
+        fprintf( stderr, "Failed to open log file" );
+        goto ErrorExit;
+    }
+    
     rc = init_state();
     if ( rc )
     {

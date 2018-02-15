@@ -5,6 +5,9 @@
  * @version 0.1
  * @brief   MagicWand INS logging API
  *
+ * Copyright (C) 2018 Matt Leinhos
+ * Copyright (C) 2018 Two Six Labs
+ *
  * This file defines the API that the INS uses for logging.
  */
 
@@ -13,16 +16,21 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <stdarg.h> 
+#include <stdarg.h>
+#include <errno.h>
+
 #include <sys/time.h>
 #include <time.h>
 
-#define SEPARATOR ('/') // hard-coded Linux path separator
+//#define SEPARATOR ('/') // hard-coded Linux path separator
+#define SEPARATOR ("/") // hard-coded Linux path separator
 
 #define MAX_PATH_LENGTH 512
 #define MAX_FILENAME 256
 #define MAX_FILE_EXTN 20
 #define LOG_FILENAME "program"
+
+#define LOG_DEFAULT_OUTPUT_STREAM stderr
 
 
 static log_level loglevel = LOG_WARN;
@@ -39,22 +47,21 @@ get_log_filename()
 
 
 static void
-set_log_filename(const char* name)
+set_log_filename(const char* Name)
 {
-    if (name && *name)
-        strncpy(filename, name, MAX_FILENAME);
+    if (Name && *Name)
+    {
+        strncpy(filename, Name, MAX_FILENAME);
+    }
 }
 
 
 static void
-set_path(const char* path)
+set_path(const char * Path)
 {
-    int len;
-    if (path && *path != '\0') {
-        strncpy(logpath, path, MAX_PATH_LENGTH);
-        len = strlen(logpath);
-        if (len > 0 && logpath[len - 1] != SEPARATOR)
-            logpath[len] = SEPARATOR;
+    if (Path && *Path != '\0')
+    {
+        strncpy(logpath, Path, MAX_PATH_LENGTH);
     }
 }
 
@@ -64,19 +71,9 @@ get_path()
 {
     if (!logpath[0])
     {
-        sprintf(logpath, ".%c", SEPARATOR);
+        sprintf(logpath, ".%s", SEPARATOR);
     }
     return logpath;
-}
-
-
-static char *
-get_append_name(char* buf)
-{
-    time_t now;
-    time(&now);
-    strftime(buf, 20, "%y%m%d", localtime(&now));
-    return buf;
 }
 
 
@@ -88,69 +85,24 @@ get_log_filename_extension()
 
 
 static void
-set_log_filename_extension(const char* name)
+set_log_filename_extension(const char * Name)
 {
-    if (name && *name != '\0')
-        strncpy(file_extn, name, MAX_FILE_EXTN);
-}
-
-
-static char* construct_full_path(char* path)
-{
-    char append[20] = { 0 };
-    sprintf(path, "%s%s%s.%s", get_path(), get_log_filename(), get_append_name(append), get_log_filename_extension());
-    return path;
-}
-
-
-void
-log_init( const char* path,
-          const char* filename,
-          const char* file_extension,
-          log_level   level )
-{
-    char fullpath[MAX_PATH_LENGTH];
-    if (path && *path != '\0' && filename && *filename != '\0') {
-        set_path(path);
-        set_log_filename(filename);
-        set_log_filename_extension(file_extension);
-        fp = fopen(construct_full_path(fullpath), "a");
-        MYASSERT( fp != NULL );
-        /* just in case fopen fails, revert to stdout */
-        if (fp == NULL) {
-            fp = stdout;
-            fprintf(fp, "Failed to change logging target\n");
-        }
-    }
-    else
-    {
-        if (fp != NULL && fp != stdout)
-        {
-            fclose(fp);
-        }
-
-        fp = stdout;
-    }
-
-    loglevel = level;    
+    if (Name && *Name != '\0')
+        strncpy(file_extn, Name, MAX_FILE_EXTN);
 }
 
 
 static char *
-get_timestamp( char * buf, size_t len )
+construct_full_path(char * Path)
 {
-    struct timeval tmnow;
-    //   char usec_buf[6];
+    snprintf( Path, MAX_PATH_LENGTH,
+              "%s%s%s.%s",
+              get_path(),
+              SEPARATOR,
+              get_log_filename(),
+              get_log_filename_extension() );
 
-    gettimeofday(&tmnow, NULL);
-
-    struct tm *tm = localtime(&tmnow.tv_sec);
-
-    size_t bytes = strftime(buf, len, "%H:%M:%S.", tm);
-
-    snprintf( &buf[bytes], len - bytes, "%03d", (int) tmnow.tv_usec );
-
-    return buf;
+    return Path;
 }
 
 
@@ -161,17 +113,88 @@ get_log_level()
 }
 
 
+void log_set_level( log_level Level )
+{
+    loglevel = Level;
+}
+
+
+int
+log_init( const char * Path,
+          const char * Filename,
+          const char * FileExtension,
+          log_level    Level )
+{
+    char fullpath[MAX_PATH_LENGTH];
+    int rc = 0;
+    int err = 0;
+
+    if (Path     && *Path != '\0' &&
+        Filename && *Filename != '\0')
+    {
+        set_path(Path);
+        set_log_filename( Filename );
+        set_log_filename_extension( FileExtension );
+
+        construct_full_path( fullpath );
+        fprintf( LOG_DEFAULT_OUTPUT_STREAM, "Logging to file: %s\n", fullpath );
+
+        fp = fopen( fullpath, "a" );
+        if (fp == NULL)
+        {
+            rc = -1;
+            err = errno;
+            fprintf( LOG_DEFAULT_OUTPUT_STREAM, "Failed to open logging target.\n" );
+            goto ErrorExit;
+        }
+
+    }
+    else
+    {
+        if (fp != NULL && fp != LOG_DEFAULT_OUTPUT_STREAM )
+        {
+            fclose(fp);
+        }
+        fprintf( LOG_DEFAULT_OUTPUT_STREAM, "Logging to stderr\n" );
+        fp = LOG_DEFAULT_OUTPUT_STREAM;
+    }
+
+    log_set_level( Level );
+
+ErrorExit:
+    errno = err;
+    return rc;
+}
+
+
+static char *
+get_timestamp( char * Buf, size_t Len )
+{
+    struct timeval tmnow;
+
+    gettimeofday(&tmnow, NULL);
+
+    struct tm *tm = localtime(&tmnow.tv_sec);
+
+    size_t bytes = strftime(Buf, Len, "%H:%M:%S.", tm);
+
+    snprintf( &Buf[bytes], Len - bytes, "%03d", (int) tmnow.tv_usec );
+
+    return Buf;
+}
+
+
 void
-log_write(log_level level, const char* format, ...)
+log_write(log_level Level, const char* Format, ...)
 {
     char tmp[50] = { 0 };
     
-    if( level <= loglevel )
+    if( Level <= loglevel )
     {
         va_list args;
-        fprintf( fp, "[%s] ", get_timestamp( tmp, sizeof(tmp) ) );
-        va_start (args, format);
-        vfprintf (fp, format, args);
+        fprintf( fp, "[%s] <%d>", get_timestamp( tmp, sizeof(tmp) ), Level );
+        va_start (args, Format);
+        vfprintf (fp, Format, args);
         va_end (args);
    }
 }
@@ -182,9 +205,10 @@ void log_flush( void )
     fflush(fp);
 }
 
+
 void log_close( void )
 {
-    if( fp != stdout )
+    if( fp != LOG_DEFAULT_OUTPUT_STREAM )
     {
         fclose(fp);
     }

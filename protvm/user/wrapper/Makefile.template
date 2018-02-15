@@ -33,9 +33,9 @@ LIBS = -lpthread
 
 PRE_LOAD_LIB_NAME=tcp_ip_wrapper
 
-all: $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so
+all: $(PRE_LOAD_LIB_NAME).so
 
-$(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o
+$(PRE_LOAD_LIB_NAME).so: tcp_ip_wrapper.o logging.o
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl
 
 %.o : %.c

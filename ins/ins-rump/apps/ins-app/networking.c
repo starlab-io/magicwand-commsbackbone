@@ -263,7 +263,7 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     ++g_state.network_stats_socket_ct;
 
-    log_write( LOG_INFO,
+    log_write( LOG_NOTICE,
                "**** Thread %d <== socket %lx / %d\n",
                WorkerThread->idx, WorkerThread->public_fd, sockfd );
 ErrorExit:
@@ -292,8 +292,14 @@ xe_net_sock_fcntl( IN  mt_request_socket_attrib_t  * Request,
                    Request->val.v32 ? "non" : "" );
 
         rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
-        err = errno;
-        MYASSERT( 0 == rc );
+        if( -1 == rc )
+        {
+            err = errno;
+            log_write( LOG_ERROR,
+                       "fcntl(%d, ... ) failed: %d\n",
+                       WorkerThread->local_fd, err );
+            MYASSERT( !"fcntl" );
+        }
     }
     else
     {
@@ -675,27 +681,26 @@ xe_net_set_sock_nonblock( int  SockFd,
     int err = 0;
 
     //Set flag to non blocking (xe_net_accept_socket will handle
-    //accept4 flags
+    //accept4 flags ???)
     flags = fcntl( SockFd, F_GETFL, 0 );
-    if( flags < 0 )
+    if( -1 == flags )
     {
         err = errno;
         rc = -EIO;
-        perror("Could not get flags for fd in defer_accept_socket");
+        log_write( LOG_ERROR, "fcntl(%d) failed: %d\n", SockFd, err );
         goto ErrorExit;
     }
 
     if( NonBlock ) { flags |= O_NONBLOCK; }
     else           { flags &= ~O_NONBLOCK; }
 
-    log_write( LOG_INFO, "%d %slocking\n", SockFd, NonBlock ? "non" : "" );
-
     rc = fcntl( SockFd, F_SETFL, flags );
-    if( rc < 0 )
+    if( -1 == rc )
     {
         err = errno;
         rc = -EIO;
-        perror("Unsetting O_NONBLOCK failed");
+        log_write( LOG_ERROR, "fcntl(%d, F_SETFL, ...) failed: %d\n",
+                   SockFd, err );
     }
 
 ErrorExit:
@@ -713,6 +718,7 @@ xe_net_defer_accept_socket( int LocalFd,
     int rc = 0;
     struct pollfd listen_poll_fd = {0};
     int sockfd = -1;
+    int err = 0;
 
 //For some reason, gdb will not work if we have thread local storage defined here
 //if that is the case, use a single threaded version of apache and standard
@@ -750,16 +756,18 @@ xe_net_defer_accept_socket( int LocalFd,
             rc = poll( &listen_poll_fd, 1, 0 );
             if( rc < 0 )
             {
-                perror("Polling listening socket failed");
+                err = errno;
+                log_write( LOG_ERROR, "poll() on socket %d failed: %d\n",
+                           LocalFd, err );
                 break;
             }
 
             if( listen_poll_fd.revents & POLLNVAL )
             {
-                log_write( LOG_DEBUG,
-                           "Listening socket closed while defer accept was waiting" );
-                errno = -ENOENT;
+                err = ENOENT;
                 rc = -1;
+                log_write( LOG_NOTICE,
+                           "Listening socket closed while defer accept was waiting\n" );
                 goto ErrorExit;
             }
 
@@ -774,21 +782,31 @@ xe_net_defer_accept_socket( int LocalFd,
                               SOCK_NONBLOCK );
                 if( rc < 0 )
                 {
-                    perror("Defer accept call to accept failed");
+                    err = errno;
                     rc = -1;
+                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
+                               LocalFd, errno );
                     break;
                 }
 #endif
                 sockfd = accept( LocalFd, sockaddr, addrlen );
                 if( sockfd < 0 )
                 {
-                    perror( "accept() failed" );
+                    err = errno;
                     rc = -1;
+                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
+                               LocalFd, errno );
                     break;
                 }
+
+                log_write( LOG_NOTICE,
+                           "deferring accept of new socket %d from listener %d\n",
+                           sockfd, LocalFd );
+
                 rc = xe_net_set_sock_nonblock( sockfd, true );
                 if( rc )
                 {
+                    err = errno;
                     goto ErrorExit;
                 }
 
@@ -824,7 +842,8 @@ xe_net_defer_accept_socket( int LocalFd,
         rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 50 );
         if( rc < 0 )
         {
-            perror("Defer accept poll failed");
+            err = errno;
+            log_write( LOG_ERROR, "poll() failed: %d\n", err );
         }
 
         // Copy results of poll call into mw_peer_poll_fds
@@ -862,8 +881,8 @@ xe_net_defer_accept_socket( int LocalFd,
 
             if( rc == 0 )
             {
-                log_write( LOG_INFO,
-                           "Defer accept peer disconnect detected, local fd: %d\n",
+                log_write( LOG_NOTICE,
+                           "Defer accept peer disconnect detected. Closing local fd: %d\n",
                             mw_peer_poll_fds[last_idx].poll_fd.fd );
 
                 // Peer has disconnected
@@ -873,25 +892,22 @@ xe_net_defer_accept_socket( int LocalFd,
                 mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
 
                 last_idx++;
-
                 continue;
             }
 
             if( mw_peer_poll_fds[last_idx].poll_fd.revents &
                 ( POLLNVAL | POLLERR | POLLHUP ) )
             {
-                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
-                
-                log_write( LOG_INFO,
+                log_write( LOG_NOTICE,
                            "Error: Closing socket %d revents: %x\n",
                            mw_peer_poll_fds[last_idx].poll_fd.fd,
                            mw_peer_poll_fds[last_idx].poll_fd.revents );
 
+                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
                 mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
                 mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
 
                 last_idx++;
-
                 continue;
             }
 
@@ -899,11 +915,11 @@ xe_net_defer_accept_socket( int LocalFd,
         }
 
 //        xe_net_defer_accept_wait();
-
     } while( true );
 
 ErrorExit:
     log_write( LOG_INFO, "Defer accept returning with value: %d\n", rc );
+    errno = err;
     return rc;
 }
 
@@ -919,7 +935,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     int sockfd = 0;
     int rc = 0;
     int addrlen = sizeof(sockaddr);
-    
+
     bzero( &sockaddr, addrlen );
 
     log_write( LOG_DEBUG,
@@ -959,14 +975,12 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     }
     else
     {
-        // Poor man's implementation of SOCK_NONBLOCK flag
         if ( Request->flags & MW_SOCK_NONBLOCK )
         {
             rc = xe_net_set_sock_nonblock( sockfd, true );
             if ( rc )
             {
                 Response->base.status = XE_GET_NEG_ERRNO();
-                MYASSERT( !"fcntl" );
                 Response->base.sockfd = -1;
                 close( sockfd );
                 goto ErrorExit; // internal error
@@ -1229,7 +1243,7 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 
     if ( MT_INVALID_SOCKET_FD != WorkerThread->local_fd )
     {
-        log_write( LOG_INFO, "Worker thread %d (socket %lx/%d) is closing\n",
+        log_write( LOG_NOTICE, "Worker thread %d (socket %lx/%d) is closing\n",
                    WorkerThread->idx,
                    WorkerThread->public_fd, WorkerThread->local_fd );
 
@@ -1326,6 +1340,12 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
             }
 
             Response->base.status = XE_GET_NEG_ERRNO_VAL( err );
+
+            log_write( LOG_ERROR,
+                       "Failure: socket %lx / %d, send %ld, errno = %d\n",
+                       WorkerThread->public_fd, WorkerThread->local_fd,
+                       maxExpected, Response->base.status );
+
             // The remote side of this connection has closed
             if ( -MW_EPIPE == Response->base.status )
             {

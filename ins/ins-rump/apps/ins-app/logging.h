@@ -5,7 +5,12 @@
  * @version 0.1
  * @brief   MagicWand INS logging API
  *
- * This file defines the API that the INS uses for logging.
+ * Copyright (C) 2018 Matt Leinhos
+ * Copyright (C) 2018 Two Six Labs
+ *
+ * This file defines the API that the INS uses for logging. Based on
+ * https://codereview.stackexchange.com/questions/120715/lightweight-logging-library-in-c
+ *
  */
 
 #ifndef _logging_h
@@ -15,31 +20,35 @@
 extern "C" {
 #endif
 
+// Logging levels, from least to most verbose
 typedef enum {
-    LOG_FORCE   = 0,
-    LOG_ERROR   = 10,
-    LOG_WARN    = 20,
-    LOG_INFO    = 30,
-    LOG_DEBUG   = 40,
-    LOG_VERBOSE = 50
+    LOG_FORCE   =  0,
+    LOG_FATAL   = 10,
+    LOG_ERROR   = 20,
+    LOG_WARN    = 30,
+    LOG_NOTICE  = 40,
+    LOG_INFO    = 50,
+    LOG_DEBUG   = 60,
+    LOG_VERBOSE = 70
 } log_level;
 
 
+// Configuration
+int
+log_init( const char * Path,
+          const char * Filename,
+          const char * FileExtension,
+          log_level    Level );
 
-/* configuration */
-void log_init(const char* path,
-              const char* filename,
-              const char* file_extension,
-              log_level level);
-    
-log_level log_get_level();
+void log_set_level( log_level Level );
+log_level log_get_level( void );
 
-/* logging functions */
-void log_write( log_level Level, const char* Format, ...); /* error log */
+// Logging functions
+void log_write( log_level Level, const char* Format, ... );
 
-/* cleanup / ancillary */
-void log_flush();
-void log_close();
+// Cleanup
+void log_flush( void );
+void log_close( void );
 
 
 #ifdef __cplusplus
