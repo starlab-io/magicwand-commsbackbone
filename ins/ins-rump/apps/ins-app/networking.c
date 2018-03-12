@@ -1292,6 +1292,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
 
 int
+INS_DEBUG_ATTRIB
 xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      OUT mt_response_socket_send_t   * Response,
                      IN thread_item_t                * WorkerThread )
@@ -1316,6 +1317,8 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                WorkerThread->public_fd, WorkerThread->local_fd,
                maxExpected );
 
+
+
     // base.size is the total size of the request; account for the
     // header.
     while ( Response->count < maxExpected )
@@ -1332,10 +1335,38 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
             // the send() blocking and it relieves the PVM of doing
             // send requests serially, where it must wait for a
             // response before issuing the next send().
-            if ( (EAGAIN == err || EWOULDBLOCK == err)  )
+            if ( ( EAGAIN == err || EWOULDBLOCK == err )  )
             {
+
                 // The send would block on this non-blocking
-                // socket. Force retry.
+                // socket. Force retry, and block to give kernel
+                // time to clear the buffers.
+
+                int rc = 0;
+
+                struct pollfd pollfd[1] = {0,};
+
+                pollfd[0].fd = WorkerThread->local_fd;
+                pollfd[0].events = POLLOUT;
+
+                log_write( LOG_DEBUG,
+                           "Worker thread %d (socket %lx / %d) send buffer is full, polling"
+                           " until space is available\n",
+                           WorkerThread->idx,
+                           WorkerThread->public_fd,
+                           WorkerThread->local_fd );
+
+                rc = poll( pollfd, 1, -1 );
+
+                if( rc < 0 )
+                {
+                    log_write( LOG_ERROR,
+                               "Worker thread %d (socket %lx / %d) Poll to drain socket failed\n" ,
+                               WorkerThread->idx,
+                               WorkerThread->public_fd,
+                               WorkerThread->local_fd );
+                }
+
                 continue;
             }
 
@@ -1363,6 +1394,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         Response->count += sent;
     }
 
+    
     g_state.network_stats_bytes_sent += Response->count;
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
