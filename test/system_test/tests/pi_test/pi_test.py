@@ -5,6 +5,7 @@ import threading
 import os.path
 import struct
 import sys
+import logging
 
 s = socket.socket()
 
@@ -21,8 +22,12 @@ else:
 print(address)
 print(port)
 
-s.connect((address, port))
-
+try:
+    s.connect((address, port))
+except Exception as e:
+    logging.exception(e)
+    sys.exit(e.errno)
+    
 f = open("{0}/pi.txt".format(os.path.expanduser("~")))
 
 # b = 2000
@@ -49,4 +54,4 @@ while (True):
     if txtlen >= b:
         print("Test complete.")
         del(s)
-        quit()
+        sys.exit(0)

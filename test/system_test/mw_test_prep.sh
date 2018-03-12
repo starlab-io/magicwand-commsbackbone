@@ -5,7 +5,7 @@ if [[ -z $PVM_CONF ]]; then
 fi
 
 if [[ -z $PVM_HOSTNAME ]]; then
-    PVM_HOSTNAME=pvm-j
+    PVM_HOSTNAME=pvm
 fi
 
 if [[ -z $startdir ]]; then
@@ -37,13 +37,14 @@ echo
 echo cd $(pwd)
 echo
 
-git pull
+#git pull
 
 cd $MWROOT/util
 echo
 echo cd $(pwd)
 echo
 
+./mw_setkeys
 ./mw_prep
 
 for i in {1,2,3,4,5}; do
@@ -59,9 +60,9 @@ done
 echo
 
 # Build on PVM
-ssh $PVM_IP "cd ~/protvm/kernel/mwcomms && make clean all"
-ssh $PVM_IP "cd ~/protvm/user/tcp_ip_server && make clean all"
-ssh $PVM_IP "cd ~/protvm/user/http_server && make clean all"
+ssh $PVM_USER@$PVM_IP "cd ~/protvm/kernel/mwcomms && make clean all"
+ssh $PVM_USER@$PVM_IP "cd ~/protvm/user/tcp_ip_server && make clean all"
+ssh $PVM_USER@$PVM_IP "cd ~/protvm/user/http_server && make clean all"
 
 cd $MWROOT/test/apache_bench
 echo
@@ -82,7 +83,7 @@ if [[ $? -ne 0 ]] ; then
     echo
 fi
 
-dbgrebuildrump
+#dbgrebuildrump
 
 cd apps/ins-app
 echo
