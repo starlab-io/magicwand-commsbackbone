@@ -2238,6 +2238,198 @@ ErrorExit:
 }
 
 
+int
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
+{
+    int rc = 0;
+
+    if( Dead_INS_Array[0] != 0 )
+    {
+
+        // Handle active requests associated with dead INSes.
+        mwsocket_active_request_t * curr_ar = NULL;
+        mwsocket_active_request_t * next_ar = NULL;
+        list_for_each_entry_safe( curr_ar, next_ar, &g_mwsocket_state.active_request_list, list_all )
+        {
+            int i = 0;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
+                i++;
+
+            if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
+                continue;
+
+            if( curr_ar->deliver_response )
+            {
+                // TODO: Handle these scenarios. Otherwise, active requests
+                // and socket instances will pile up and cause a memory leak
+
+                bool copy_response = false;
+
+                if( curr_ar->rr.request.base.type == MtRequestSocketAccept
+                    && !(curr_ar->sockinst->mwflags & MWSOCKET_FLAG_USER) )
+                {
+                    // If sibling listener on accept(), disappear
+                    mwsocket_destroy_active_request( curr_ar );
+                }
+                else if( curr_ar->rr.request.base.type != MtRequestSocketAccept &&
+                        !curr_ar->response_populated )
+                {
+                    // If create(), bind(), listen(), connect(), close() are going out,
+                    // or if the connection has been made already, send error to application
+                    copy_response = true;
+                }
+
+                if( copy_response )
+                {
+                    mt_response_generic_t response = {0};
+
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = curr_ar->rr.request.base.id;
+                    response.base.sockfd = curr_ar->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( curr_ar, &response );
+                    mwsocket_postproc_emit_netflow( curr_ar, &response );
+
+                    memcpy( &curr_ar->rr.response, &response, response.base.size );
+                    curr_ar->response_populated = true;
+                    complete( &curr_ar->arrived );
+                }
+
+            }
+            else
+            {
+                mwsocket_destroy_active_request( curr_ar );
+            }
+        }
+
+        //mutex_lock( &g_mwsocket_state.sockinst_lock );
+
+        mwsocket_instance_t * curr_si = NULL;
+        mwsocket_instance_t * next_si = NULL;
+        list_for_each_entry_safe( curr_si, next_si, &g_mwsocket_state.sockinst_list, list_all )
+        {
+            mwsocket_active_request_t * blockreq = NULL;
+
+            int i = 0;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
+                i++;
+
+            if( MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
+                continue;
+
+            curr_si->ins_alive = false;
+            mwsocket_set_pollable( curr_si, false );
+
+            mwsocket_find_active_request_by_id( &blockreq, curr_si->blockid );
+
+            // If accepting and a sibling listener, destroy the sockinst
+            if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT
+                && !(curr_si->mwflags & MWSOCKET_FLAG_USER) )
+            {
+                // If a sibling listener is accepting, it should have only had
+                // the accept() actreq, which was destroyed. If the sockinst is
+                // still alive, it should have no active requests.
+                MYASSERT( !(curr_si->mwflags & MWSOCKET_FLAG_RELEASED) &&
+                          atomic_read( &curr_si->refct ) == 1 );
+                mwsocket_put_sockinst( curr_si );
+            }
+            else if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT )
+            {
+                mwsocket_instance_t * sockinst = NULL;
+                mwsocket_instance_t * curr_si2 = NULL;
+                list_for_each_entry( curr_si2, &curr_si->sibling_listener_list, sibling_listener_list )
+                {
+                    if( !curr_si2->ins_alive ) continue;
+
+                    i = 0;
+                    while( i < MAX_INS_COUNT
+                           && MW_SOCKET_CLIENT_ID( curr_si2->remote_fd ) != Dead_INS_Array[i] )
+                        i++;
+
+                    if( i < MAX_INS_COUNT )
+                        continue;
+
+                    sockinst = curr_si2;
+                    break;
+                }
+
+                // If there is no replacement INS, return failure to user on the accept() actreq
+                if( sockinst == NULL )
+                {
+                    mt_response_generic_t response = {0};
+
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( blockreq->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = blockreq->rr.request.base.id;
+                    response.base.sockfd = blockreq->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( blockreq, &response );
+                    mwsocket_postproc_emit_netflow( blockreq, &response );
+
+                    memcpy( &blockreq->rr.response, &response, response.base.size );
+                    blockreq->response_populated = true;
+                    complete( &blockreq->arrived );
+
+                    continue;
+                }
+
+                curr_ar = NULL;
+                next_ar = NULL;
+                list_for_each_entry_safe( curr_ar, next_ar, &g_mwsocket_state.active_request_list, list_all )
+                {
+                    if( curr_ar->sockinst == curr_si )
+                        mwsocket_destroy_active_request( curr_ar );
+                    else if( curr_ar->sockinst == sockinst )
+                    {
+                        curr_ar->sockinst = curr_si;
+                        mwsocket_put_sockinst( sockinst );
+                        mwsocket_get_sockinst( curr_si );
+                    }
+                }
+
+                curr_si->remote_fd              = sockinst->remote_fd;
+                curr_si->mwflags                = sockinst->mwflags | MWSOCKET_FLAG_USER;
+                curr_si->poll_events            = sockinst->poll_events;
+                curr_si->send_tally             = sockinst->send_tally;
+                curr_si->pending_errno          = sockinst->pending_errno;
+                curr_si->est_time               = sockinst->est_time;
+                curr_si->tot_sent               = sockinst->tot_sent;
+                curr_si->tot_recv               = sockinst->tot_recv;
+                curr_si->read_expected          = sockinst->read_expected;
+                curr_si->remote_close_requested = sockinst->remote_close_requested;
+                curr_si->remote_surprise_close  = sockinst->remote_surprise_close;
+                curr_si->close_lock_write       = sockinst->close_lock_write;
+                atomic64_set( &curr_si->close_blockid, atomic64_read( &sockinst->close_blockid ) );
+
+                // Destroy old sockinst
+                mwsocket_put_sockinst( sockinst );
+
+                curr_si->ins_alive = true;
+                mwsocket_set_pollable( curr_si, true );
+            }
+        }
+
+        //mutex_unlock( &g_mwsocket_state.sockinst_lock );
+    }
+
+    // Return something
+    return rc;
+
+}
+
+
 /******************************************************************************
  * Main functions for worker threads. There are two: the response
  * consumer, and the poll monitor.
@@ -2612,9 +2804,15 @@ mwsocket_monitor( void * Arg )
         // Sleep
         mwsocket_wait( MONITOR_QUERY_INTERVAL );
 
-        // Reap dead INS's, using this thread. TODO: track dead INSes
+        int dead_ins_array[ MAX_INS_COUNT ] = {0};
+
+        // Reap dead INS's, using this thread. Then track dead INSes
         // and destroy their associated sockets.
-        rc = mw_xen_reap_dead_ins();
+        rc = mw_xen_reap_dead_ins( dead_ins_array );
+        MYASSERT( 0 == rc );
+        rc = 0;
+
+        rc = mwsocket_reap_dead_sock_instances( dead_ins_array );
         MYASSERT( 0 == rc );
         rc = 0;
 
@@ -2633,6 +2831,12 @@ mwsocket_monitor( void * Arg )
         {
             pr_err( "Error handling poll notifications: %d\n", rc );
             continue;
+        }
+
+        if( !sockinst->ins_alive )
+        {
+            MYASSERT( !"Polling sockinst->ins_alive got set to false" );
+            sockinst->ins_alive = true;
         }
 #endif // ENABLE_POLLING
 
@@ -3145,6 +3349,9 @@ mwsocket_release( struct inode * Inode,
 
         rc = mwsocket_close_remote( curr, true );
         MYASSERT( 0 == rc );
+
+        curr->mwflags |= MWSOCKET_FLAG_RELEASED;
+        mwsocket_put_sockinst( curr );
     }
 
     // Now close the user socket

@@ -97,6 +97,6 @@ mw_xen_response_available( void ** Handle );
 
 
 int
-mw_xen_reap_dead_ins( void );
+mw_xen_reap_dead_ins( OUT int Dead_INS_Array[ MAX_INS_COUNT ] );
 
 #endif // mwcomms_xen_iface_h
