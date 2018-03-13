@@ -941,9 +941,11 @@ ErrorExit:
 
 int
 MWSOCKET_DEBUG_ATTRIB
-mw_xen_reap_dead_ins( void )
+mw_xen_reap_dead_ins( OUT int Dead_INS_Array[ MAX_INS_COUNT ] )
 {
     unsigned long now = jiffies;
+
+    int dead_ins_num = 0;
 
     for ( int i = 0; i < MAX_INS_COUNT; i++ )
     {
@@ -971,6 +973,7 @@ mw_xen_reap_dead_ins( void )
         if ( ins->missed_heartbeats == HEARTBEAT_MAX_MISSES )
         {
             pr_warn( "INS %d is now considered dead\n", ins->domid );
+            Dead_INS_Array[ dead_ins_num++ ] = ins->domid;
             mw_xen_release_ins( ins );
         }
     }
@@ -1079,7 +1082,7 @@ mw_xen_get_ins_from_domid( IN domid_t               Domid,
     int rc = -ENXIO;
     int idx = 0;
 
-    for( int idx = 0; idx < MAX_INS_COUNT; idx++ )
+    for( idx = 0; idx < MAX_INS_COUNT; idx++ )
     {
         if( g_mwxen_state.ins[idx].domid == Domid )
         {
