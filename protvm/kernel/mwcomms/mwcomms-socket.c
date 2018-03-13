@@ -2398,7 +2398,7 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 if( sockinst == NULL )
                 {
 
-                    mwcomms_return_reaped_response( &blockreq )
+                    mwcomms_return_reaped_response( blockreq );
                     continue;
                 }
 
@@ -2846,10 +2846,7 @@ mwsocket_monitor( void * Arg )
         rc = mwsocket_poll_handle_notifications( sockinst );
         if( rc )
         {
-            pr_err( "Error handling poll notifications: %d poll_sock_count: %d\n",
-                    rc,
-                    g_mwsocket_state.poll_sock_count );
-            
+            pr_err( "Error handling poll notifications: %d\n", rc );
             continue;
         }
 
