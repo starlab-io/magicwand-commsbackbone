@@ -1,4 +1,10 @@
 ##
+## STAR LAB PROPRIETARY & CONFIDENTIAL
+## Copyright (C) 2016, Star Lab — All Rights Reserved
+## Unauthorized copying of this file, via any medium is strictly prohibited.
+##
+
+##
 ## To preserve changes to Makefile, edit Makefile.template
 ## See also: utils/mw_prep
 ##
@@ -16,12 +22,15 @@ CC = x86_64-rumprun-netbsd-gcc
 CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -ggdb
 
+MWROOT  = ../../../..
+
 CFLAGS += -I..
-CFLAGS += -I../../../../common
+CFLAGS += -I$(MWROOT)/common
+CFLAGS += -I$(MWROOT)/exports/imports
 CFLAGS += -I../platform/xen/xen/include 
 CFLAGS += -I../../rump-common
 
-#CFLAGS += -DMYDEBUG
+CFLAGS += -DLOG_LEVEL=LOG_INFO
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
 
@@ -59,7 +68,7 @@ $(APPNAME).run: $(APPNAME).bin
 	@echo "Or debug with ./debug.sh and"
 	@echo " gdb -ex 'target remote localhost:1234' $@"
 
-$(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c
+$(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c logging.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 

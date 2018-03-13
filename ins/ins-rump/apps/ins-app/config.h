@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef config_h
 #define config_h
 
@@ -11,18 +17,22 @@
 // open to fail with EMFILE errno.
 //
 
-// Hard max: 62
-#define MAX_THREAD_COUNT 62   // for production
-//#define MAX_THREAD_COUNT 2  // for testing
+//#define MAX_THREAD_COUNT 4000   // for production
+#define MAX_THREAD_COUNT 500 // for testing
 
 //
 // Number of buffer items. This is the number of requests (from the
-// protected VM) that we can queue.
+// protected VM) that we can queue. Accounts for each thread blocking
+// plus one buffer item to handle poll requests
 //
-#define BUFFER_ITEM_COUNT 8
+#define BUFFER_ITEM_COUNT ( MAX_THREAD_COUNT + 50 )
 
-#define WORK_QUEUE_ITEM_COUNT BUFFER_ITEM_COUNT
+#define WORK_QUEUE_ITEM_COUNT 4
 
+//This constant is for defer accept functionality, this will determine
+//how many seconds an idle connection will wait for data before disconnecting
+
+#define DEFER_ACCEPT_MAX_IDLE 30.0
 
 //
 // Xen event device

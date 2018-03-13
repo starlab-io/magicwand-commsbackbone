@@ -17,7 +17,6 @@ xe_pollset_mod( mt_request_pollset_mod_t *  Request,
                 mt_response_pollset_mod_t * Response );
 */
 
-
 int
 xe_pollset_query_one( IN  int   Fd,
                       OUT int * Events );

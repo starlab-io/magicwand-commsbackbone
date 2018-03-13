@@ -1,0 +1,11 @@
+#!/bin/sh
+
+##
+## Turns off tracing for the module but leaves behind the trace
+##
+
+_d=/sys/kernel/debug/tracing
+
+echo 0 > $_d/tracing_on
+
+echo "Examine $_d/trace"

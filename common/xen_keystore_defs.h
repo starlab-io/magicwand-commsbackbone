@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef xenevent_config_h
 #define xenevent_config_h
 
@@ -50,8 +56,8 @@
 #define SERVER_ID_KEY               "id"
 #define SERVER_ID_PATH              XENEVENT_XENSTORE_PVM "/" SERVER_ID_KEY
 
-#define SERVER_BACKCHANNEL_PORT_KEY  "netflow"
-#define SERVER_BACKCHANNEL_PORT_PATH XENEVENT_XENSTORE_PVM "/" SERVER_BACKCHANNEL_PORT_KEY
+#define SERVER_NETFLOW_PORT_KEY     "netflow"
+#define SERVER_NETFLOW_PORT_PATH    XENEVENT_XENSTORE_PVM "/" SERVER_NETFLOW_PORT_KEY
 
 // INS constants
 #define XENEVENT_PATH_STR_LEN       32
@@ -71,6 +77,12 @@
 #define INS_NETWORK_STATS_KEY        "network_stats"
 
 #define INS_LISTENER_KEY             "listening_ports"
+
+//This defines the index of the domid string once
+//a xenstore path has been returned and split with
+//token  ex /mw/5/vm_evt_chn_is_bound -> 5 is the
+//domid at index 2
+#define XEN_DOMID_INDEX             2
 
 //
 //  Grant Mapping Variables 

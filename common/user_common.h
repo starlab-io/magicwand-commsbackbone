@@ -1,3 +1,9 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef app_common_h
 #define app_common_h
 
@@ -53,8 +59,11 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define _DEBUG_EMIT_BREAKPOINT()                \
     asm("int $3")
 
+
+#define SHIM_LOG_PATH_SIZE 64
+
 #ifdef DEVLOG
-#  define SHIM_LOG_PATH "/tmp"
+#  define SHIM_LOG_PATH "/tmp/ins_log"
 #else
 #  define SHIM_LOG_PATH "/var/log/output"
 #endif
@@ -70,6 +79,8 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 #else
 #  define DEBUG_EMIT_BREAKPOINT() ((void)0)
 #endif
+
+#define INS_DEBUG_ATTRIB  __attribute__((optimize("O0")))
 
 // Unconditionally emits breakpoint
 #define BARE_DEBUG_BREAK() _DEBUG_EMIT_BREAKPOINT()
@@ -114,19 +125,31 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 #ifdef MYDEBUG
-
-#  define DEBUG_PRINT(...)                                              \
-    pthread_mutex_lock( &__debug_mutex );                               \
-    _DEBUG_EMIT_META();                                                 \
-    DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__ );             \
-    DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
-    pthread_mutex_unlock( &__debug_mutex )
+#  define DEBUG_PRINT(...)                                                \
+    if( NULL != DEBUG_FILE_STREAM )                                       \
+    {                                                                     \
+      pthread_mutex_lock( &__debug_mutex );                               \
+      _DEBUG_EMIT_META();                                                 \
+      DEBUG_PRINT_FUNCTION( DEBUG_FILE_STREAM, __VA_ARGS__);              \
+      DEBUG_FLUSH_FUNCTION( DEBUG_FILE_STREAM );                          \
+      pthread_mutex_unlock( &__debug_mutex );                             \
+    }
 
 //#  define DEBUG_PRINT FORCE_PRINT
 
 #else
 #  define DEBUG_PRINT(...) ((void)0)
 #endif // MYDEBUG
+
+
+#ifdef MYVERBOSE
+
+#  define VERBOSE_PRINT( ... )                                       \
+        DEBUG_PRINT( __VA_ARGS__ )
+#else
+#   define VERBOSE_PRINT( ... ) ((void)0)
+
+#endif //MYVERBOSE
 
 
 #ifndef MIN

@@ -1,6 +1,13 @@
+/*************************************************************************
+* STAR LAB PROPRIETARY & CONFIDENTIAL
+* Copyright (C) 2018, Star Lab — All Rights Reserved
+* Unauthorized copying of this file, via any medium is strictly prohibited.
+***************************************************************************/
+
 #ifndef translate_h
 #define translate_h
 
+#ifndef __KERNEL__
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -9,6 +16,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <stdio.h>
+#endif
 
 #include "message_types.h"
 #include "translate.h"
@@ -31,7 +39,10 @@ xe_net_get_mt_protocol_family( sa_family_t Fam )
         break;
 
     default:
+#ifndef __KERNEL__
         perror("Invalid protocol family");
+#endif
+        break;
     }
 
     return mt_fam;
@@ -58,8 +69,11 @@ xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
         break;
 
     default:
+#ifndef __KERNEL__
         perror("Invalid protocol family");
-    }   
+#endif
+        break;
+    }
 
     return pfam;
 }
@@ -82,7 +96,10 @@ xe_net_get_native_sock_type( mt_sock_type_t Type )
 
     case MT_ST_UNSET:
     default:
+#ifndef __KERNEL__
         perror("Invalid socket type requested");
+#endif
+        break;
     }
 
     return stype;

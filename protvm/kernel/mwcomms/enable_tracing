@@ -1,0 +1,24 @@
+#!/bin/sh
+
+##
+## Turns on tracing for the module
+##
+
+_d=/sys/kernel/debug/tracing
+echo > $_d/trace
+echo > $_d/set_ftrace_filter
+echo function_graph > $_d/current_tracer
+
+for sym in :mod:mwcomms *down* *wait* *lock* ; do
+    echo $sym >> $_d/set_ftrace_filter
+done
+
+echo > $_d/set_ftrace_pid
+
+for proc in mw_consumer mw_monitor mw_netflow_moni; do
+    pidof $proc >> $_d/set_ftrace_pid
+done
+
+echo "Append $_d/set_ftrace_pid with PID(s) of target process(es)"
+
+echo 1 > $_d/tracing_on

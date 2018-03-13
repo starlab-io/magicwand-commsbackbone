@@ -41,14 +41,15 @@
 
 #include "user_common.h"
 #include "xenevent_app_common.h"
+#include "logging.h"
 #include "networking.h"
 #include "message_types.h"
 #include "threadpool.h"
 #include "translate.h"
 #include "mwerrno.h"
 #include "ins-ioctls.h"
-
 #include "pollset.h"
+#include <mw_netflow_iface.h>
 
 #define XE_NET_NETWORK_PARAM_WIDTH 30
 
@@ -85,6 +86,17 @@ static xe_net_param_t g_net_params[] =
     { "congctl",        "net.inet.tcp.congctl.selected", 0 }, // str val
 };
 #endif // MODIFY_NETWORK_PARAMETERS
+
+
+//This is a struct that is required for the defer accept code to work
+//it holds the pollfd and the time a connection was accepted
+//so we can close a socket if it's been idle for too long
+struct mw_pollfd
+{
+    struct pollfd poll_fd;
+    struct timeval conn_tv;
+};
+
 
 static int
 xe_net_translate_msg_flags( IN mt_flags_t MsgFlags )
@@ -124,7 +136,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_sndbuf )
     {
         len = sizeof( g_state.so_sndbuf );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF, &g_state.so_sndbuf, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDBUF,
+                         &g_state.so_sndbuf, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -134,7 +147,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_rcvbuf )
     {
         len = sizeof( g_state.so_rcvbuf );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF, &g_state.so_rcvbuf, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVBUF,
+                         &g_state.so_rcvbuf, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -144,7 +158,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_sndtimeo.tv_sec || g_state.so_sndtimeo.tv_usec )
     {
         len = sizeof( g_state.so_sndtimeo );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO, &g_state.so_sndtimeo, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_SNDTIMEO,
+                         &g_state.so_sndtimeo, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -154,7 +169,8 @@ xe_net_init_socket( IN int SockFd )
     if ( g_state.so_rcvtimeo.tv_sec || g_state.so_rcvtimeo.tv_usec )
     {
         len = sizeof( g_state.so_rcvtimeo );
-        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO, &g_state.so_rcvtimeo, len );
+        rc = setsockopt( SockFd, SOL_SOCKET, SO_RCVTIMEO,
+                         &g_state.so_rcvtimeo, len );
         if ( rc )
         {
             MYASSERT( !"setsockopt" );
@@ -205,13 +221,19 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
     MYASSERT( SOCK_STREAM == native_type );
 
     Response->base.status = 0;
+
+    do
+    {
+        sockfd = socket( native_fam,
+                         native_type,
+                         native_proto );
+        // XXXX: handle occasional error from socket()
+    } while ( sockfd < 0 && ENOBUFS == errno );
     
-    sockfd = socket( native_fam,
-                     native_type,
-                     native_proto );
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        MYASSERT( !"socket" );
     }
     else
     {
@@ -241,9 +263,51 @@ xe_net_create_socket( IN  mt_request_socket_create_t  * Request,
 
     ++g_state.network_stats_socket_ct;
 
-    DEBUG_PRINT ( "**** Thread %d <== socket %x / %d\n",
-                  WorkerThread->idx, WorkerThread->public_fd, sockfd );
+    log_write( LOG_NOTICE,
+               "**** Thread %d <== socket %lx / %d\n",
+               WorkerThread->idx, WorkerThread->public_fd, sockfd );
 ErrorExit:
+    return rc;
+}
+
+
+static int
+xe_net_sock_fcntl( IN  mt_request_socket_attrib_t  * Request,
+                   OUT mt_response_socket_attrib_t * Response,
+                   IN  thread_item_t               * WorkerThread )
+{
+    MYASSERT( MtSockAttribNonblock == Request->name );
+
+    int rc = 0;
+    int err = 0;
+    int flags = fcntl( WorkerThread->local_fd, F_GETFL );
+
+    if ( Request->modify )
+    {
+        if ( Request->val.v32 ) { flags |= O_NONBLOCK; }
+        else                    { flags &= ~O_NONBLOCK; }
+
+        log_write( LOG_INFO, "fcntl: %llx / %d %sblocking\n",
+                   WorkerThread->public_fd, WorkerThread->local_fd,
+                   Request->val.v32 ? "non" : "" );
+
+        rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
+        if( -1 == rc )
+        {
+            err = errno;
+            log_write( LOG_ERROR,
+                       "fcntl(%d, ... ) failed: %d\n",
+                       WorkerThread->local_fd, err );
+            MYASSERT( !"fcntl" );
+        }
+    }
+    else
+    {
+        Response->val.v32 = (uint32_t) (flags & O_NONBLOCK);
+    }
+
+    errno = err;
+    Response->base.status = rc ? XE_GET_NEG_ERRNO_VAL( err ) : 0;
     return rc;
 }
 
@@ -253,87 +317,113 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
                     OUT mt_response_socket_attrib_t * Response,
                     IN  thread_item_t               * WorkerThread )
 {
-    int flags = 0;
-    int rc    = 0;
-    int level = 0;
-    int name  = 0;
-    int err   = 0;
-
     MYASSERT( NULL != Request );
     MYASSERT( NULL != Response );
     MYASSERT( NULL != WorkerThread );
     MYASSERT( 1 == WorkerThread->in_use );
     MYASSERT( WorkerThread->idx >= 0 );
 
-    if ( MtSockAttribNonblock == Request->attrib )
+    int rc    = 0;
+    int level = SOL_SOCKET; // good for most cases
+    int name  = 0;
+    int err   = 0;
+    // We have to manage the input/output buffer. If input, point to
+    // Request; if output, point to response.
+
+    bool timeval = false;
+    // Unconditionally stuff the optval into this struct....
+    struct timeval t = {0};
+    // set to reasonable default values
+    //mt_sockfeat_arg_t * optval = &Request->val.v32;
+    socklen_t len = sizeof( Request->val.v32 );
+    *(uint32_t *) &t = Request->val.v32;
+
+    if ( MtSockAttribNonblock == Request->name )
     {
-        flags = fcntl( WorkerThread->local_fd, F_GETFL );
-        if ( Request->modify )
-        {
-            if ( Request->value )
-            {
-                flags |= O_NONBLOCK;
-            }
-            else
-            {
-                flags &= ~O_NONBLOCK;
-            }
-            rc = fcntl( WorkerThread->local_fd, F_SETFL, flags );
-            err = errno;
-            MYASSERT( 0 == rc );
-        }
-        else
-        {
-            Response->outval = (uint32_t) (flags & O_NONBLOCK);
-        }
+        rc = xe_net_sock_fcntl( Request, Response, WorkerThread );
         goto ErrorExit;
     }
 
-    switch( Request->attrib )
+    switch( Request->name )
     {
     case MtSockAttribReuseaddr:
-        level = SOL_SOCKET;
         name = SO_REUSEADDR;
         break;
+    case MtSockAttribReuseport:
+        name = SO_REUSEPORT;
+        break;
     case MtSockAttribKeepalive:
-        level = SOL_SOCKET;
         name = SO_KEEPALIVE;
         break;
     case MtSockAttribNodelay:
         level = IPPROTO_TCP; //SOL_TCP;
         name  = TCP_NODELAY;
+        break;
+    case MtSockAttribSndBuf:
+        name = SO_SNDBUF;
+        break;
+    case MtSockAttribRcvBuf:
+        name = SO_RCVBUF;
+        break;
+    case MtSockAttribSndTimeo:
+    case MtSockAttribRcvTimeo:
+        timeval = true;
+        name = (Request->name == MtSockAttribSndTimeo
+                ? SO_SNDTIMEO : SO_RCVTIMEO );
+        // Point arg to timeval; set t whether or not we modify
+        t.tv_sec  = Request->val.t.s;
+        t.tv_usec = Request->val.t.us;
+        //optval = (void *) &t;
+        len = sizeof( t );
+        break;
+    case MtSockAttribSndLoWat:
+        name = SO_SNDLOWAT;
+        break;
+    case MtSockAttribRcvLoWat:
+        name = SO_RCVLOWAT;
+        break;
+    case MtSockAttribGlobalCongctl:
+    case MtSockAttribGlobalDelackTicks:
+        // globals [ via sysctl() ]
+        goto ErrorExit;
     case MtSockAttribDeferAccept:
-        //level = SOL_TCP;
-        // This option is not supported on Rump. We'll drop it.
+        WorkerThread->defer_accept = true;
         rc = 0;
         goto ErrorExit;
-    case MtSockAttribReuseport:
-        level = SOL_SOCKET;
-        name = SO_REUSEPORT;
-        break;
     default:
         MYASSERT( !"Unrecognized attribute given" );
         rc = -EINVAL;
         goto ErrorExit;
     }
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is calling get/setsockopt %d/%d/%d\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  level, name, Request->value );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is calling get/setsockopt"
+               "%d/%d/%d\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               level, name, Request->val.v32 );
 
-    socklen_t len = sizeof(Request->value);
-    if ( Request->modify )
+    if ( Request->modify ) // Set the feature's value
     {
         rc = setsockopt( WorkerThread->local_fd,
                          level, name,
-                         &Request->value, len );
+                         (void *) &t, len );
     }
-    else
+    else // Get the feature's value, put it into t
     {
         rc = getsockopt( WorkerThread->local_fd,
                          level, name,
-                         &Request->value, &len );
+                         (void *) &t, &len );
+        if ( timeval )
+        {
+            Response->val.t.s  = t.tv_sec;
+            Response->val.t.us = t.tv_usec;
+        }
+        else
+        {
+            bzero( &Response->val, sizeof(Response->val) );
+            Response->val.v32 = *(uint32_t *) &t;
+        }
     }
 
     if ( rc )
@@ -351,6 +441,7 @@ ErrorExit:
 
     return 0;
 }
+
 
 int
 xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
@@ -371,10 +462,11 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is connecting to %s:%d\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is connecting to %s:%d\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
 
     rc = connect( WorkerThread->local_fd,
                   (const struct sockaddr * ) &sockaddr,
@@ -382,8 +474,11 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     if ( rc < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
-        DEBUG_PRINT( "connect() failed with status %ld\n",
-                     (unsigned long)Response->base.status );
+        log_write( LOG_ERROR,
+                   "socket %lx / %d: connect() to %s:%d failed: %d\n",
+                   WorkerThread->public_fd, WorkerThread->local_fd,
+                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port),
+                   (unsigned long)Response->base.status );
     }
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -407,10 +502,11 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
 
     populate_sockaddr_in( &sockaddr, &Request->sockaddr );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is binding on %s:%d\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is binding on %s:%d\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
 
     Response->base.status = bind( WorkerThread->local_fd,
                                   (const struct sockaddr*) &sockaddr,
@@ -418,6 +514,7 @@ xe_net_bind_socket( IN mt_request_socket_bind_t     * Request,
     if ( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror( "bind" );
         MYASSERT ( !"bind" );
     }
     else
@@ -441,15 +538,17 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     MYASSERT( Request->base.sockfd == WorkerThread->public_fd );
     MYASSERT( 1 == WorkerThread->in_use );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is listening\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is listening\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd );
 
     Response->base.status = listen( WorkerThread->local_fd,
                                     Request->backlog);
     if( Response->base.status < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
+        perror( "listen" );
         MYASSERT( !"listen" );
     }
     
@@ -458,6 +557,370 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
                               (mt_response_generic_t *) Response);
 
     return 0;
+}
+
+void
+xe_net_defer_accept_wait( void )
+{
+    struct timespec ts = {0,1000};
+
+    while ( ts.tv_nsec > 0 )
+    {
+        (void) nanosleep( &ts, &ts );
+    }
+}
+
+
+int
+xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
+{
+
+    struct timeval curr_tv = {0};
+    struct timeval res_tv  = {0};
+    double elapsed = 0.0;
+    int rc = 0;
+
+    MYASSERT( MwPollFd );
+
+    gettimeofday( &curr_tv, NULL );
+    
+    timersub( &curr_tv, &MwPollFd->conn_tv, &res_tv );
+
+    elapsed = (double)res_tv.tv_sec + ( res_tv.tv_usec/1000000.0 );
+
+    if ( elapsed >= DEFER_ACCEPT_MAX_IDLE )
+    {
+        log_write( LOG_WARN,
+                   "socket: %d idle for more than %f secs, closing\n",
+                   MwPollFd->poll_fd.fd, DEFER_ACCEPT_MAX_IDLE );
+        rc = 1;
+        goto ErrorExit;
+    }
+
+ErrorExit:
+    return rc;
+}
+
+
+// Checks status of socket by reading from the socket returns 0 for
+// disconnect, 1 for data available and -1 for error
+int
+INS_DEBUG_ATTRIB
+xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
+{
+    int rc = -1;
+    int bytes_read = 0;
+    char buf = 0;
+    int err = 0;
+
+    if( MwPollFd->poll_fd.fd == -1 )
+    {
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    // Check for socket timeout if timeout has passed, return 0
+    if( xe_net_idle_socket_timeout( MwPollFd ) == 1 )
+    {
+        rc = 0;
+        goto ErrorExit;
+    }
+
+    if( ( MwPollFd->poll_fd.revents & ( POLLIN | POLLRDNORM ) ) ||
+        ( MwPollFd->poll_fd.revents == 0 ) )
+    {
+        bytes_read = recv( MwPollFd->poll_fd.fd, ( void * ) &buf, 1, MSG_PEEK );
+
+        if( bytes_read > 0 )
+        {
+            rc = 1;
+            goto ErrorExit;
+        }
+
+        if( bytes_read == 0 )
+        {
+            rc = 0;
+            goto ErrorExit;
+        }
+        
+        // For some reason read sometimes returns -1 and errno:0 when
+        // it seems like errno should be EAGAIN
+        if( ( bytes_read < 0 && ( errno == EAGAIN ) ) ||
+            ( bytes_read < 0 && ( errno == 0 ) ) )
+        {
+            rc = -1;
+            goto ErrorExit;
+        }
+
+        // If we got here, this is not good
+        err = errno;
+        log_write( LOG_ERROR,
+                   "recieve error when checking for peer disconnect. rc: %d "
+                   "errno: %d sockfd: %d\n",
+                   bytes_read, err, MwPollFd->poll_fd.fd );
+        rc = -1;
+    }
+
+ErrorExit:
+    log_write( LOG_DEBUG,
+               "xe_net_data_on_socket returning: %d socket: %d "
+               "revents: 0x%x errno: %d\n",
+               rc, MwPollFd->poll_fd.fd, MwPollFd->poll_fd.revents, errno );
+    errno = err;
+    return rc;
+}
+
+
+int
+INS_DEBUG_ATTRIB
+xe_net_set_sock_nonblock( int  SockFd,
+                          bool NonBlock)
+{
+    int rc = 0;
+    int flags = 0;
+    int err = 0;
+
+    //Set flag to non blocking (xe_net_accept_socket will handle
+    //accept4 flags ???)
+    flags = fcntl( SockFd, F_GETFL, 0 );
+    if( -1 == flags )
+    {
+        err = errno;
+        rc = -EIO;
+        log_write( LOG_ERROR, "fcntl(%d) failed: %d\n", SockFd, err );
+        goto ErrorExit;
+    }
+
+    if( NonBlock ) { flags |= O_NONBLOCK; }
+    else           { flags &= ~O_NONBLOCK; }
+
+    rc = fcntl( SockFd, F_SETFL, flags );
+    if( -1 == rc )
+    {
+        err = errno;
+        rc = -EIO;
+        log_write( LOG_ERROR, "fcntl(%d, F_SETFL, ...) failed: %d\n",
+                   SockFd, err );
+    }
+
+ErrorExit:
+    errno = err;
+    return rc;
+}
+
+
+int
+INS_DEBUG_ATTRIB
+xe_net_defer_accept_socket( int LocalFd,
+                            struct sockaddr * sockaddr,
+                            socklen_t * addrlen )
+{
+    int rc = 0;
+    struct pollfd listen_poll_fd = {0};
+    int sockfd = -1;
+    int err = 0;
+
+//For some reason, gdb will not work if we have thread local storage defined here
+//if that is the case, use a single threaded version of apache and standard
+//static variables
+//    static int last_idx = 0;
+//    static bool init = false;
+//    static struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    static __thread int last_idx = 0;
+    static __thread bool init = false;
+    static __thread struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+
+    if( !init )
+    {
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            mw_peer_poll_fds[i].poll_fd.fd = -1;
+            mw_peer_poll_fds[i].poll_fd.events = POLLIN | POLLRDNORM;
+        }
+
+        init = true;
+    }
+
+    listen_poll_fd.fd = LocalFd;
+    listen_poll_fd.events = POLLIN | POLLRDNORM | POLLHUP | POLLNVAL;
+    listen_poll_fd.revents = 0;
+
+    do
+    {
+        // Poll for incoming connection
+        do
+        {
+            rc = poll( &listen_poll_fd, 1, 0 );
+            if( rc < 0 )
+            {
+                err = errno;
+                log_write( LOG_ERROR, "poll() on socket %d failed: %d\n",
+                           LocalFd, err );
+                break;
+            }
+
+            if( listen_poll_fd.revents & POLLNVAL )
+            {
+                err = ENOENT;
+                rc = -1;
+                log_write( LOG_NOTICE,
+                           "Listening socket closed while defer accept was waiting\n" );
+                goto ErrorExit;
+            }
+
+            // Listen FD has incoming connection
+            if( listen_poll_fd.revents & ( POLLIN | POLLRDNORM ) )
+            {
+#if 0
+                rc = paccept( LocalFd,
+                              sockaddr,
+                              addrlen,
+                              NULL,
+                              SOCK_NONBLOCK );
+                if( rc < 0 )
+                {
+                    err = errno;
+                    rc = -1;
+                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
+                               LocalFd, errno );
+                    break;
+                }
+#endif
+                sockfd = accept( LocalFd, sockaddr, addrlen );
+                if( sockfd < 0 )
+                {
+                    err = errno;
+                    rc = -1;
+                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
+                               LocalFd, errno );
+                    break;
+                }
+
+                log_write( LOG_NOTICE,
+                           "deferring accept of new socket %d from listener %d\n",
+                           sockfd, LocalFd );
+
+                rc = xe_net_set_sock_nonblock( sockfd, true );
+                if( rc )
+                {
+                    err = errno;
+                    goto ErrorExit;
+                }
+
+                // Add connection to peer pool
+                for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+                {
+                    if( mw_peer_poll_fds[i].poll_fd.fd == -1 )
+                    {
+                        gettimeofday( &mw_peer_poll_fds[i].conn_tv, NULL );
+                        mw_peer_poll_fds[i].poll_fd.fd = sockfd;
+                        mw_peer_poll_fds[i].poll_fd.revents = 0;
+
+                        log_write( LOG_INFO,
+                                   "Added socket %d (nonblocking) to defer accept list\n", sockfd );
+                        break;
+                    }
+
+                    if( i == ( MAX_THREAD_COUNT - 1 ) )
+                    {
+                        log_write( LOG_ERROR, "Socket count exceeded closing socket: %d\n", sockfd);
+                        close( sockfd );
+                    }
+                }
+            }
+        } while( rc > 0 );
+
+        // Copy mw_peer_poll_fds info into peer_poll_fds for poll call
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            peer_poll_fds[i] = mw_peer_poll_fds[i].poll_fd;
+        }
+
+        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 50 );
+        if( rc < 0 )
+        {
+            err = errno;
+            log_write( LOG_ERROR, "poll() failed: %d\n", err );
+        }
+
+        // Copy results of poll call into mw_peer_poll_fds
+        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
+        {
+            mw_peer_poll_fds[i].poll_fd = peer_poll_fds[i];
+        }
+
+        // first check for sockets that we already know have data
+        for( int i=0; i < MAX_THREAD_COUNT; i++ )
+        {
+            last_idx = last_idx % MAX_THREAD_COUNT;
+
+            if( mw_peer_poll_fds[last_idx].poll_fd.fd == -1 )
+            {
+                last_idx++;
+                continue;
+            }
+
+            rc = xe_net_check_idle_socket( &mw_peer_poll_fds[last_idx] );
+            if( rc == 1 )
+            {
+                // Return this FD to the caller in blocking state
+                rc = mw_peer_poll_fds[last_idx].poll_fd.fd;
+
+                xe_net_set_sock_nonblock( mw_peer_poll_fds[last_idx].poll_fd.fd, false );
+
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
+
+                last_idx++;
+
+                goto ErrorExit;
+            }
+
+            if( rc == 0 )
+            {
+                log_write( LOG_NOTICE,
+                           "Defer accept peer disconnect detected. Closing local fd: %d\n",
+                            mw_peer_poll_fds[last_idx].poll_fd.fd );
+
+                // Peer has disconnected
+                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
+
+                mw_peer_poll_fds[last_idx].poll_fd.fd = -1;
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+
+                last_idx++;
+                continue;
+            }
+
+            if( mw_peer_poll_fds[last_idx].poll_fd.revents &
+                ( POLLNVAL | POLLERR | POLLHUP ) )
+            {
+                log_write( LOG_NOTICE,
+                           "Error: Closing socket %d revents: %x\n",
+                           mw_peer_poll_fds[last_idx].poll_fd.fd,
+                           mw_peer_poll_fds[last_idx].poll_fd.revents );
+
+                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
+                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
+                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
+
+                last_idx++;
+                continue;
+            }
+
+            last_idx++;
+        }
+
+//        xe_net_defer_accept_wait();
+    } while( true );
+
+ErrorExit:
+    log_write( LOG_INFO, "Defer accept returning with value: %d\n", rc );
+    errno = err;
+    return rc;
 }
 
 
@@ -472,12 +935,13 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     int sockfd = 0;
     int rc = 0;
     int addrlen = sizeof(sockaddr);
-    
+
     bzero( &sockaddr, addrlen );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is accepting.\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx/%d) is accepting.\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd );
 
     // NetBSD does not implement accept4. Therefore the flags are
     // ignored here. However, they are copied into the response for
@@ -485,31 +949,38 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     Response->flags = 0;
     if ( Request->flags )
     {
-        DEBUG_PRINT( "Not observing PVM flags 0x%x in accept()\n", Request->flags );
+        log_write( LOG_DEBUG,
+                   "Not observing PVM flags 0x%x in accept()\n", Request->flags );
         Response->flags = Request->flags;
     }
 
-    sockfd = accept( WorkerThread->local_fd,
-                     (struct sockaddr *) &sockaddr,
-                     (socklen_t *) &addrlen );
+    if( WorkerThread->defer_accept )
+    {
+        sockfd = xe_net_defer_accept_socket( WorkerThread->local_fd,
+                                             (struct sockaddr *) &sockaddr,
+                                             (socklen_t *) &addrlen );
+    }
+    else
+    {
+        sockfd = accept( WorkerThread->local_fd,
+                         (struct sockaddr *) &sockaddr,
+                         (socklen_t *) &addrlen );
+    }
     if ( sockfd < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
-        Response->base.sockfd = -1;
+        perror( "accept" );
+        // N.B. Response->base.sockfd is set by xe_net_set_base_response()
         // This happens frequently in non-blocking IO. Don't assert.
     }
     else
     {
-        // Poor man's implementation of SOCK_NONBLOCK flag
         if ( Request->flags & MW_SOCK_NONBLOCK )
         {
-            int flags = fcntl( sockfd, F_GETFL );
-            flags |= O_NONBLOCK;
-            rc = fcntl( sockfd, F_SETFL, flags );
+            rc = xe_net_set_sock_nonblock( sockfd, true );
             if ( rc )
             {
                 Response->base.status = XE_GET_NEG_ERRNO();
-                MYASSERT( !"fcntl" );
                 Response->base.sockfd = -1;
                 close( sockfd );
                 goto ErrorExit; // internal error
@@ -528,13 +999,15 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
         ++g_state.network_stats_socket_ct;
 
-        DEBUG_PRINT ( "Worker thread %d (socket %x / %d) accepted from %s:%d\n",
-                      WorkerThread->idx,
-                      WorkerThread->public_fd, WorkerThread->local_fd,
-                      inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
-    }
+        populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
 
-    populate_mt_sockaddr_in( &Response->sockaddr, &sockaddr );
+        log_write( LOG_INFO,
+                   "Worker thread %d (socket %lx / %d) accepted from %s:%d\n",
+                   WorkerThread->idx,
+                   WorkerThread->public_fd, WorkerThread->local_fd,
+                   inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
+
+    }
 
     xe_net_set_base_response( (mt_request_generic_t *)  Request,
                               MT_RESPONSE_SOCKET_ACCEPT_SIZE,
@@ -565,10 +1038,11 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
     Response->count       = 0;
     Response->base.status = 0;
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is recvfrom() 0x%x bytes\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  Request->requested );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is recvfrom() 0x%x bytes\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               Request->requested );
 
     while( true )
     {
@@ -626,8 +1100,9 @@ xe_net_recvfrom_socket( IN mt_request_socket_recv_t         *Request,
         polled = true;
     } // while
 
-    DEBUG_PRINT( "recvfrom() got total of 0x%x bytes, status=%d\n",
-                 (int)Response->count, Response->base.status );
+    log_write( LOG_DEBUG,
+               "recvfrom() got total of 0x%x bytes, status=%d\n",
+               (int)Response->count, Response->base.status );
 
     populate_mt_sockaddr_in( &Response->src_addr, &src_addr );
 
@@ -665,15 +1140,17 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
 
     MYASSERT( WorkerThread->public_fd == Request->base.sockfd );
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is receiving 0x%x bytes\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  Request->requested );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is receiving 0x%x bytes\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               Request->requested );
 
     while ( true )
     {
         do
         {
+            errno = 0;
             callrc = recv( WorkerThread->local_fd,
                            &Response->bytes[ Response->count ],
                            Request->requested - Response->count,
@@ -719,8 +1196,9 @@ xe_net_recv_socket( IN   mt_request_socket_recv_t   * Request,
         polled = true;
     } // while
 
-    DEBUG_PRINT( "recv() got total of 0x%x bytes, status=%d\n",
-                 (int)Response->count, Response->base.status );
+    log_write( LOG_DEBUG,
+               "recv() got total of 0x%x bytes, status=%d\n",
+               (int)Response->count, Response->base.status );
 
     g_state.network_stats_bytes_recv += Response->count;
 
@@ -748,8 +1226,8 @@ xe_net_shutdown_socket( IN  mt_request_socket_shutdown_t  * Request,
                    Request->how );
 
     Response->base.status = (0 == rc) ? 0 : XE_GET_NEG_ERRNO();
-    DEBUG_PRINT( "shutdown(%d, %d) ==> %d\n",
-                 WorkerThread->local_fd, Request->how, Response->base.status );
+    log_write( LOG_DEBUG, "shutdown(%d, %d) ==> %d\n",
+               WorkerThread->local_fd, Request->how, Response->base.status );
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
                               MT_RESPONSE_SOCKET_SHUTDOWN_SIZE,
@@ -765,9 +1243,9 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 
     if ( MT_INVALID_SOCKET_FD != WorkerThread->local_fd )
     {
-        DEBUG_PRINT ( "Worker thread %d (socket %x/%d) is closing\n",
-                      WorkerThread->idx,
-                      WorkerThread->public_fd, WorkerThread->local_fd );
+        log_write( LOG_NOTICE, "Worker thread %d (socket %lx/%d) is closing\n",
+                   WorkerThread->idx,
+                   WorkerThread->public_fd, WorkerThread->local_fd );
 
         --g_state.network_stats_socket_ct;
 
@@ -814,6 +1292,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
 
 int
+INS_DEBUG_ATTRIB
 xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      OUT mt_response_socket_send_t   * Response,
                      IN thread_item_t                * WorkerThread )
@@ -832,10 +1311,13 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
     // Pass flags back to the PVM for processing
     Response->flags       = Request->flags;
 
-    DEBUG_PRINT ( "Worker thread %d (socket %x / %d) is sending %ld bytes\n",
-                  WorkerThread->idx,
-                  WorkerThread->public_fd, WorkerThread->local_fd,
-                  maxExpected );
+    log_write( LOG_DEBUG,
+               "Worker thread %d (socket %lx / %d) is sending %ld bytes\n",
+               WorkerThread->idx,
+               WorkerThread->public_fd, WorkerThread->local_fd,
+               maxExpected );
+
+
 
     // base.size is the total size of the request; account for the
     // header.
@@ -853,14 +1335,48 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
             // the send() blocking and it relieves the PVM of doing
             // send requests serially, where it must wait for a
             // response before issuing the next send().
-            if ( (EAGAIN == err || EWOULDBLOCK == err)  )
+            if ( ( EAGAIN == err || EWOULDBLOCK == err )  )
             {
+
                 // The send would block on this non-blocking
-                // socket. Force retry.
+                // socket. Force retry, and block to give kernel
+                // time to clear the buffers.
+
+                int rc = 0;
+
+                struct pollfd pollfd[1] = {0,};
+
+                pollfd[0].fd = WorkerThread->local_fd;
+                pollfd[0].events = POLLOUT;
+
+                log_write( LOG_DEBUG,
+                           "Worker thread %d (socket %lx / %d) send buffer is full, polling"
+                           " until space is available\n",
+                           WorkerThread->idx,
+                           WorkerThread->public_fd,
+                           WorkerThread->local_fd );
+
+                rc = poll( pollfd, 1, -1 );
+
+                if( rc < 0 )
+                {
+                    log_write( LOG_ERROR,
+                               "Worker thread %d (socket %lx / %d) Poll to drain socket failed\n" ,
+                               WorkerThread->idx,
+                               WorkerThread->public_fd,
+                               WorkerThread->local_fd );
+                }
+
                 continue;
             }
 
             Response->base.status = XE_GET_NEG_ERRNO_VAL( err );
+
+            log_write( LOG_ERROR,
+                       "Failure: socket %lx / %d, send %ld, errno = %d\n",
+                       WorkerThread->public_fd, WorkerThread->local_fd,
+                       maxExpected, Response->base.status );
+
             // The remote side of this connection has closed
             if ( -MW_EPIPE == Response->base.status )
             {
@@ -878,6 +1394,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
         Response->count += sent;
     }
 
+    
     g_state.network_stats_bytes_sent += Response->count;
 
     xe_net_set_base_response( (mt_request_generic_t *)Request,
@@ -949,20 +1466,22 @@ xe_net_set_net_param_int( const char * Name,
     rc = sysctlbyname( Name, &oldval, &oldlen, &NewVal, newlen );
     if ( rc )
     {
-        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        log_write( LOG_ERROR, "sysctlbyname failed on %s\n", Name );
         MYASSERT( !"sysctlbyname" );
         goto ErrorExit;
     }
 
     if ( Set )
     {
-        FORCE_PRINT( "%*s: curr val 0x%x, prev val 0x%x\n",
-                     XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
+        log_write( LOG_FORCE,
+                   "%*s: curr val 0x%x, prev val 0x%x\n",
+                   XE_NET_NETWORK_PARAM_WIDTH, Name, NewVal, oldval );
     }
     else
     {
-        FORCE_PRINT( "%*s: curr val 0x%x\n",
-                     XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
+        log_write( LOG_FORCE,
+                   "%*s: curr val 0x%x\n",
+                   XE_NET_NETWORK_PARAM_WIDTH, Name, oldval );
     }
 
 ErrorExit:
@@ -993,7 +1512,7 @@ xe_net_set_net_param_str( const char * Name,
     rc = sysctlbyname( Name, oldval, &oldlen, NewVal, newlen );
     if ( rc )
     {
-        DEBUG_PRINT( "sysctlbyname failed on %s\n", Name );
+        log_write( LOG_ERROR, "sysctlbyname failed on %s\n", Name );
         MYASSERT( !"sysctlbyname" );
         goto ErrorExit;
     }

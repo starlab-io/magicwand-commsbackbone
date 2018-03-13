@@ -123,10 +123,11 @@ xe_comms_write_str_to_key( const char * Path,
     int                     res = 0;
     bool             started = false;
 
-    // N.B. We must handle an empty string here
-
+#ifdef VERBOSE
     DEBUG_PRINT( "Writing to xenstore: %s <= %s\n", Path, Value );
+#endif
 
+    // N.B. We must handle an empty string here
     err = xenbus_transaction_start( &txn );
     if ( err )
     {

@@ -35,13 +35,24 @@
 ##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We 
 ##   interface with Xen by calling out to xl.
 ##
+##   The INS memory requirement is based on the number of sockets it
+##   supports. Take this into account here (manually or
+##   programmatically).
+##
 
 MW_XENSTORE_ROOT = b"/mw"
 
-INS_MEMORY_MB = 256
-POLL_INTERVAL = 0.01
-DEFAULT_TIMEOUT = 2
+# ToDo: INS will launch "successfully" with 256MB, but will not publish heartbeat/network_stats to xenstore, leading the PVM to think it's dead. Giving it 3GB allows the INS to function fully. Why is that?
+INS_MEMORY_MB = 1024
+POLL_INTERVAL = 0.05
+DEFAULT_TIMEOUT = 5
 
+# ToDo: Create a dependency on common/common_config.h to supply these values
+HEARTBEAT_INTERVAL_SEC = 15
+HEARTBEAT_MAX_MISSES = 2
+MAX_INS_COUNT = 2
+
+import logging
 import sys
 import os
 import random
@@ -115,6 +126,59 @@ net.inet.tcp.congctl.available: reno newreno cubic
 
 """
 
+
+
+
+# Map: domid => INS instance
+ins_map = dict()
+
+# List of INS's that do not have domids assigned
+ins_queue = list()
+
+# MACs for usage by INSs; this way we don't overflow DHCP's mappings
+macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
+         '00:16:3e:28:2a:51' : { 'in_use' : False },
+         '00:16:3e:28:2a:52' : { 'in_use' : False },
+         '00:16:3e:28:2a:53' : { 'in_use' : False },
+         '00:16:3e:28:2a:54' : { 'in_use' : False },
+         '00:16:3e:28:2a:55' : { 'in_use' : False },
+         '00:16:3e:28:2a:56' : { 'in_use' : False },
+         '00:16:3e:28:2a:57' : { 'in_use' : False },
+         '00:16:3e:28:2a:58' : { 'in_use' : False },
+         '00:16:3e:28:2a:59' : { 'in_use' : False },
+         '00:16:3e:28:2a:5a' : { 'in_use' : False },
+         '00:16:3e:28:2a:5b' : { 'in_use' : False },
+         '00:16:3e:28:2a:5c' : { 'in_use' : False },
+         '00:16:3e:28:2a:5d' : { 'in_use' : False },
+         '00:16:3e:28:2a:5e' : { 'in_use' : False },
+         '00:16:3e:28:2a:5f' : { 'in_use' : False },
+         '00:16:3e:28:2a:60' : { 'in_use' : False },
+         '00:16:3e:28:2a:61' : { 'in_use' : False },
+         '00:16:3e:28:2a:62' : { 'in_use' : False },
+         '00:16:3e:28:2a:63' : { 'in_use' : False },
+         '00:16:3e:28:2a:64' : { 'in_use' : False },
+         '00:16:3e:28:2a:65' : { 'in_use' : False },
+         '00:16:3e:28:2a:66' : { 'in_use' : False },
+         '00:16:3e:28:2a:67' : { 'in_use' : False },
+         '00:16:3e:28:2a:68' : { 'in_use' : False },
+         '00:16:3e:28:2a:69' : { 'in_use' : False },
+         '00:16:3e:28:2a:6a' : { 'in_use' : False },
+         '00:16:3e:28:2a:6b' : { 'in_use' : False },
+         '00:16:3e:28:2a:6c' : { 'in_use' : False },
+         '00:16:3e:28:2a:6d' : { 'in_use' : False },
+         '00:16:3e:28:2a:6e' : { 'in_use' : False },
+         '00:16:3e:28:2a:6f' : { 'in_use' : False } }
+
+inst_num = 0
+
+
+exit_requested = False
+def handler(signum, frame):
+    global exit_requested
+    logging.warn( "Caught signal {0}".format( signum ) )
+    exit_requested = True
+
+
 def generate_sys_net_opts():
     """ Randomly, but smartly generate INS network configuration """
     params = list()
@@ -150,50 +214,227 @@ def generate_sys_net_opts():
     params.append( "delack_ticks:{0:x}".format( random.randint( 10, 40) ) )
     params.append( "congctl:{0}".format( random.choice( ["reno", "newreno", "cubic"] ) ) )
 
-    print "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) )
+    logging.debug( "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) ) )
     opts = " ".join( params )
-    print "TCP/IP parameter value: {0}".format( opts )
+    logging.debug( "TCP/IP parameter value: {0}".format( opts ) )
     return opts
 
 
 # Generic storage for INS
 class INS:
-    def __init__( self, domid ):
-        self.domid        = domid
-        self.ip           = None
-        self.stats        = None
-        self.last_contact = time.time()
+    def __init__( self, domid=None ):
+        self.domid             = domid
+        self.ip                = None
+        self.stats             = dict()
+        self._last_contact      = time.time()
+        self._missed_heartbeats = 0
+        self._lock             = threading.Lock()
+        self._forwarders       = list()
+        self._active           = False
+
+        if domid == None:
+            self._create()
+
+    def __del__( self ):
+        """ Destroy the INS associated with this object. """
+
+        p = subprocess.Popen( ["xl", "destroy", "{0:d}".format(self.domid) ],
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+        (stdout, stderr ) = p.communicate()
+        rc = p.wait()
+        if rc:
+            raise RuntimeError( "Call to xl failed: {}\n".format( stderr ) )
+
+        macs[ self._mac ][ 'in_use' ] = False
+
+        logging.info( "Destroyed INS {}".format( self ) )
 
     def __str__( self ):
-        return ("id {0} IP {1} stats {2} contact {3}".
-                format( self.domid, self.ip, self.stats, self.last_contact ) )
+        rules = ""
+        if self._forwarders:
+            rules = "\n\t" + "\n\t".join( [str(f) for f in self._forwarders ] )
 
+        return ("id {} IP {} {}active{}".
+                format( self.domid, self.ip,
+                        { False : "in", True : "" }[self._active ], rules ) )
 
-# Map: domid => INS instance
-ins_map = dict()
+    def __repr__( self ):
+        return str( self )
 
-# MACs for usage by INSs; this way we don't overflow DHCP's mappings
-macs = { '00:16:3e:28:2a:58' : { 'in_use' : False },
-         '00:16:3e:28:2a:59' : { 'in_use' : False },
-         '00:16:3e:28:2a:5a' : { 'in_use' : False },
-         '00:16:3e:28:2a:5b' : { 'in_use' : False },
-         '00:16:3e:28:2a:5c' : { 'in_use' : False },
-         '00:16:3e:28:2a:5d' : { 'in_use' : False } }
+    def _create( self ):
+        """
+        Spawn the Rump INS domU. Normally this is done via rumprun, which
+        runs 'xl create xr.conf', where xr.conf looks like this:
 
-inst_num = 0
+        kernel="ins-rump.run"
+        name="mw-ins-rump"
+        vcpus=1
+        memory=256
+        on_poweroff="destroy"
+        on_crash="destroy"
+        vif=['xenif']
+        
+        --------------------
+        
+        Spawn the Rump INS domU. Normally this is done via rumprun like this:
+        
+        rumprun -T /tmp/rump.tmp -S xen -di -M 256 -N mw-ins-rump \
+        -I xen0,xenif \
+        -W xen0,inet,static,$RUMP_IP/8,$_GW \
+        ins-rump.run
+        """
 
+        global inst_num
 
-exit_requested = False
-def handler(signum, frame):
-    global exit_requested
-    print( "Caught signal {0}".format( signum ) )
-    exit_requested = True
+        ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
+
+        logging.debug( "PATH: {0}".format( os.environ['PATH'] ) )
+
+        # Find available MAC
+        mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
+        if not mac:
+            raise RuntimeError( "No more MACs are available" )
+        mac = mac[0]
+        macs[ mac ]['in_use'] = True
+        self._mac = mac
+
+        # We will not connect to the console (no "-i") so we won't wait for exit below.
+        cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
+        #cmd += '-p -D 1234 ' # DEBUGGING ONLY **********************
+        cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
+        cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
+
+        inst_num += 1
+
+        logging.info( "Running command {0}".format(cmd) )
+
+        p = subprocess.Popen( cmd.split(),
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+        #(stdout, stderr ) = p.communicate()
+
+        #rc = p.wait()
+        t = 0
+        while True:
+            rc = p.poll()
+            if exit_requested:
+                break
+            if rc is not None:
+                break
+            if t >= DEFAULT_TIMEOUT:
+                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
+            else:
+                time.sleep( POLL_INTERVAL )
+                t += POLL_INTERVAL
+
+        if p.returncode:
+            raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
+
+        # self.domid = int( p.stdout.read().split(':')[1] )
+        ins_queue.append(self)
+
+    def set_listening_ports( self, port_list ):
+        self.lock()
+        try:
+            for p in port_list:
+                if p in [ x.get_port() for x in self._forwarders ]:
+                    continue
+                fwd = PortForwarder( p, self.ip )
+                self._forwarders.append( fwd )
+            logging.debug( self )
+        finally:
+            self.unlock()
+    
+    def set_active( self, activated ):
+        self.lock()
+        try:
+            for f in self._forwarders:
+                f.set_active( activated )
+        finally:
+            self.unlock()
+        self._active = activated
+        if activated:
+            logging.info( "Active: {}".format( self.domid ) )
+        
+    def is_active( self ):
+        return self._active
+
+    def register_heartbeat( self ):
+        self.lock()
+        try:
+            self._last_contact = time.time()
+            self._missed_heartbeats = 0
+        finally:
+            self.unlock()
+
+    def check_heartbeat( self ):
+        """ False ==> this INS is dead """
+        alive = True
+        self.lock()
+        try:
+            if( time.time() - self._last_contact >
+                HEARTBEAT_INTERVAL_SEC * (self._missed_heartbeats + 1) + 1 ):
+                self._missed_heartbeats += 1
+                logging.warn( "INS {} has missed {} heartbeat(s)\n".
+                              format(self.domid, self._missed_heartbeats) )
+
+                if self._missed_heartbeats >= HEARTBEAT_MAX_MISSES:
+                    logging.warn( "INS {} is now considered dead\n".format(self.domid) )
+                    alive = False
+        finally:
+            self.unlock()
+
+        return alive
+            
+    def lock( self ):
+        self._lock.acquire()
+
+    def unlock( self ):
+        self._lock.release()
+
+    def update_stats( self, stats_str ):
+        self.lock()
+        try:
+            # See hearbeat_thread_func in xenevent.c for this format
+            stats = [ int(x,16) for x in stats_str.split(':') ]
+            self.stats[ 'max_sockets' ]  = stats[0]
+            self.stats[ 'used_sockets' ] = stats[1]
+            self.stats[ 'recv_bytes' ]   = stats[2]
+            self.stats[ 'sent_bytes' ]   = stats[3]
+        finally:
+            self.unlock()
+
+    def get_load( self ):
+        used = 1.0 * self.stats.get( 'used_sockets', 0 )
+        capacity = 1.0 * self.stats.get( 'max_sockets', 1 )
+        return used / capacity
+
+    def overloaded( self ):
+        """ At 80%+ of max load """
+        return self.get_load() >= 0.80
+
+    def wait( self ):
+        """ Waits until the INS is ready to use """
+
+        t = 0.0
+        # The watcher must have populated the INS's IP
+        while True:
+            if ( self.domid != None and
+                 self.domid in ins_map and
+                 self.ip != None ):
+                logging.info( "Ready: INS {}".format(self) )
+                logging.info( "All: {}".format(ins_map) )
+                break
+
+            time.sleep( POLL_INTERVAL )
+            t += POLL_INTERVAL
+            if t > DEFAULT_TIMEOUT:
+                raise RuntimeError( "wait() is taking too long" )
 
 
 class PortForwarder:
     """
-    Class that manages iptables rules for TCP traffic forwarding to
-    support MagicWand's management of multiple INSs. Each instance of
+    Class that manages iptables rules for TCP traffic forwarding;
+    supports MagicWand's management of multiple INSs. Each instance of
     this class forwards one port from the Dom0 to the same port on an
     INS.
 
@@ -201,11 +442,14 @@ class PortForwarder:
     These rules necessitate that incoming connections originate from 
     somewhere other than the Dom0 (or associated DomU's ???).
 
-    These two rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
+    These rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
     1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT 
 
     2. iptables -t nat -I PREROUTING -m tcp -p tcp --dport 2200 \
         -j DNAT --to-destination 1.2.3.4
+
+    3. iptables -A FORWARD -m conntrack --ctstate \
+        ESTABLISHED,RELATED -j ACCEPT
     """
 
     def __init__( self, in_port, dest_ip ):
@@ -214,16 +458,36 @@ class PortForwarder:
         self._rules = list()
         self._port = in_port
         self._dest = dest_ip
+        self._active = False
 
-        self._redirect_conn_to_addr()
+    def set_active( self, activate ):
+        if self._active == activate:
+            print( "Not activating already-active rule: {}".format(self) )
+            return
 
-    def __del__( self ):
-        #print "Stop redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        if activate:
+            self._redirect_conn_to_addr()
+        else:
+            self._deactivate()
+
+        self._active = activate
+
+    def active( self ):
+        return self._active
+    
+    def _deactivate( self ):
+        logging.info( "Deactivated: {}".format( self ) )
+
         for (c,r) in self._rules:
             c.delete_rule( r )
 
+        self._rules = list() # drop old refs
+
+    def __del__( self ):
+        self._deactivate()
+
     def __str__( self ):
-        return "0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        return "*:{0} ==> {1}:{0}".format( self._port, self._dest )
 
     def get_port( self ):
         return self._port
@@ -286,6 +550,8 @@ class PortForwarder:
 
         self._enable_rule(chain, rule)
 
+        logging.info( "Activated: {}".format( self ) )
+        
     def dump( self ):
         table = iptc.Table(iptc.Table.FILTER)
         for table in ( iptc.Table.FILTER, iptc.Table.NAT, 
@@ -328,29 +594,30 @@ class XenStoreEventHandler:
             # We can't do anything without the domid
             return
 
+        logging.debug( "Event on path: {}".format( path ) )
         if 'ins_dom_id' in path:
             assert domid == int(newval)
-            ins_map[ domid ] = INS( domid )
+            if len(ins_queue) == 0:
+                ins_map[ domid ] = INS( domid )
+            else:
+                ins_queue[0].lock()
+                ins_map[ domid ] = ins_queue.pop(0)
+                ins_map[ domid ].domid = domid
+                ins_map[ domid ].unlock()
         elif 'ip_addrs' in path:
             ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
             assert len(ips) == 1, "too many public IP addresses"
+            ins_map[ domid ].lock()
             ins_map[ domid ].ip = ips[0]
-            client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
+            ins_map[ domid ].unlock()
+            #client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
         elif 'network_stats' in path:
-            ins_map[ domid ].stats = [ int(x,16) for x in newval.split(':') ]
+            ins_map[ domid ].update_stats( newval )
         elif 'heartbeat' in path:
-            ins_map[ domid ].last_contact = time.time()
+            ins_map[ domid ].register_heartbeat()
         elif 'listening_ports' in path:
             ports = [ int(p, 16) for p in newval.split() ]
-            ip = ins_map[ domid ].ip
-
-            # Rebuild the forwarding rules: get rid of old ones and re-create
-            self._forwarders = list() # releases references to the old rules
-            print( "Redirections:\n------------------" )
-            for p in ports:
-                f = PortForwarder( p, ip )
-                print( "    {0}".format( f ) )
-                self._forwarders.append( f )
+            ins_map[ domid ].set_listening_ports( ports )
         else:
             #print( "Ignoring {0} => {1}".format( path, newval ) )
             pass
@@ -388,112 +655,6 @@ class XenStoreWatch( threading.Thread ):
 
                 self._handler.event( c, path, value )
 
-
-class Ins:
-    def __init__( self, xenstore_watcher ):
-        """ 
-        Spawn the Rump INS domU. Normally this is done via rumprun, which
-        runs 'xl create xr.conf', where xr.conf looks like this:
-
-        kernel="ins-rump.run"
-        name="mw-ins-rump"
-        vcpus=1
-        memory=256
-        on_poweroff="destroy"
-        on_crash="destroy"
-        vif=['xenif']
-        
-        --------------------
-        
-        Spawn the Rump INS domU. Normally this is done via rumprun like this:
-        
-        rumprun -T /tmp/rump.tmp -S xen -di -M 256 -N mw-ins-rump \
-        -I xen0,xenif \
-        -W xen0,inet,static,$RUMP_IP/8,$_GW \
-        ins-rump.run
-        """
-
-        global inst_num
-
-        self._watcher = xenstore_watcher
-
-        ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
-
-        print("PATH: {0}".format( os.environ['PATH'] ) )
-
-        # Find available MAC
-        mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
-        if not mac:
-            raise RuntimeError( "No more MACs are available" )
-        mac = mac[0]
-        macs[ mac ]['in_use'] = True
-        self._mac = mac
-
-        # We will not connect to the console (no "-i") so we won't wait for exit below.
-        cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
-        cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
-        cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
-
-        inst_num += 1
-
-        print( "Running command {0}".format(cmd) )
-
-        p = subprocess.Popen( cmd.split(),
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-        #(stdout, stderr ) = p.communicate()
-
-        #rc = p.wait()
-        t = 0
-        while True:
-            rc = p.poll()
-            if exit_requested:
-                break
-            if rc is not None:
-                break
-            if t >= DEFAULT_TIMEOUT:
-                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
-            else:
-                time.sleep( POLL_INTERVAL )
-                t += POLL_INTERVAL
-
-        if p.returncode:
-            raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
-
-        self._domid = int( p.stdout.read().split(':')[1] )
-
-    def __del__( self ):
-        """ Destroy the INS associated with this object. """
-
-        print( "Destroying INS {0}".format( self._domid ) )
-        p = subprocess.Popen( ["xl", "destroy", "{0}".format(self._domid) ],
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-        (stdout, stderr ) = p.communicate()
-        rc = p.wait()
-        if rc:
-            raise RuntimeError( "Call to xl failed: {0}\n".format( stderr ) )
-
-        macs[ self._mac ][ 'in_use' ] = True
-
-    def wait( self ):
-        """ Waits until the INS is ready to use """
-
-        t = 0.0
-        # The watcher must have populated the INS's IP
-        while True:
-            if ( self._domid in ins_map and
-                 ins_map[ self._domid ].ip ):
-                print( "INS {0} is ready with IP {1}".
-                       format( self._domid, ins_map[ self._domid ].ip ) )
-                break
-            time.sleep( POLL_INTERVAL )
-            t += POLL_INTERVAL
-            if t > DEFAULT_TIMEOUT:
-                raise RuntimeError( "wait() is taking too long" )
-
-    def get_domid( self ):
-        return self._domid
-
-
 class UDSHTTPConnection(httplib.HTTPConnection):
     """HTTPConnection subclass to allow HTTP over Unix domain sockets. """
     def connect(self):
@@ -526,7 +687,7 @@ class XenIface:
      def __init__( self ):
          """
          The Xen python bindings are very broken on Ubuntu 14.04, so we
-         just call out tothe xl program.
+         just call out to the xl program.
          """
 
      def get_vif( self, domid ):
@@ -593,27 +754,109 @@ def test_redir():
              return
          time.sleep( POLL_INTERVAL )
 
+
+def balance_load():
+    """
+    Serves as load balancer. Routes new connections to least busy INS
+    if the current one is too busy. If all of them are too busy, returns
+    True so caller will create a new one.
+    """
+
+    assert len(ins_map), "No INS is running at all"
+
+    all_active = [ v for (k,v) in ins_map.iteritems() if v.is_active() ]
+
+    if not all_active:
+        # There is no active INS; this can happen on initialization. Pick the first one.
+        curr = ins_map.values()[0]
+        curr.set_active( True )
+    else:
+        assert len(all_active) == 1, "Only one INS should be active here"
+        curr = all_active[0]
+
+    if not curr.overloaded():
+        # Nothing to do here
+        return False
+
+    # curr is overloaded: shift burden to the INS with the lowest load    
+    logging.debug( "Stats: {}, load: {}, overloaded: {}".
+                   format( curr.stats, curr.get_load(), curr.overloaded() ) )
+    logging.info( "INS {} is overloaded, looking for another one".format(curr) )
+
+    available = [ v for (k,v) in ins_map.iteritems() if not v.overloaded() ]
+    if not available:
+        # Nothing is available - the caller needs to create a new INS
+        return True
+
+    new = min( available, key=lambda x: x.get_load() )
+
+    logging.info( "{} is over-loaded. Directing traffic to {}"
+                  .format( curr, new ) )
+
+    new.set_active( True )   # 2 INSs are active
+    curr.set_active( False ) # 1 INS is active
+    return False
+
+
 def single_ins():
     x = XenIface()
     e = XenStoreEventHandler( x )
     w = XenStoreWatch( e )
     w.start()
-    
-    s = Ins( w )
+
+    s = INS()
     s.wait() # Wait for INS IP address to appear
 
     while w.is_alive():
         w.join( POLL_INTERVAL )
 
 
+def ins_runner():
+    """ Spawns INSs as needed, destroys as permissible. """
+
+    spawn_new = True
+
+    x = XenIface()
+    e = XenStoreEventHandler( x )
+    w = XenStoreWatch( e )
+    w.start()
+
+    # Create more INSs and monitor the workload here.
+    # INS activation is handled by balance_load()
+    while ( not exit_requested ):
+        if spawn_new and len(ins_map) < MAX_INS_COUNT:
+            spawn_new = False
+            i = INS()
+            i.wait()
+
+        # Fresh query of INSs in each iteration; the set may have
+        # changed. N.B. INSs are inserted into ins_map by the XS
+        # monitor.
+        for domid in ins_map.keys():
+            # Check for death
+            if not ins_map[domid].check_heartbeat():
+                del ins_map[domid]
+
+        spawn_new = balance_load()
+
+        time.sleep( POLL_INTERVAL )
 
 if __name__ == '__main__':
-    print( "Running in PID {0}".format( os.getpid() ) )
+    #global ins_map
+
+    logging.basicConfig( format='%(levelname)s: %(message)s',
+                         level=logging.DEBUG )
+
+    logging.debug( "Running in PID {0}".format( os.getpid() ) )
+
     signal.signal( signal.SIGINT,  handler )
     signal.signal( signal.SIGTERM, handler )
     signal.signal( signal.SIGABRT, handler )
     signal.signal( signal.SIGQUIT, handler )
 
-    single_ins()
+    #single_ins()
+    ins_runner()
 
-    print( "Exiting main thread" )
+    ins_map = None # deref all items
+    logging.info( "Exiting main thread" )
+

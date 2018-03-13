@@ -10,9 +10,6 @@
 util/mw_setaddrs.sh    
 mw_setaddrs.sh    
 *.so
-run_tcp_ip_app.sh
-debug.sh
-run.sh
 cscope.out
 tags
 GPATH
@@ -33,3 +30,4 @@ Makefile
 makefile
 common_config.h
 .idea
+.gdbinit

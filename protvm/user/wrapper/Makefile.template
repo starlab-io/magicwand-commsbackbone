@@ -13,8 +13,9 @@
 
 CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99 -Wno-missing-braces
-CFLAGS += -I.. -I../../../common -I../../common
+CFLAGS += -I.. -I../../../common -I../../common -I../../../exports/imports
 CFLAGS += -ggdb
+CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
 #CFLAGS +=  -DDEVLOG
@@ -33,9 +34,9 @@ LIBS = -lpthread
 
 PRE_LOAD_LIB_NAME=tcp_ip_wrapper
 
-all: $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so
+all: $(PRE_LOAD_LIB_NAME).so
 
-$(PRE_LOAD_LIB_NAME).so: $(PRE_LOAD_LIB_NAME).o
+$(PRE_LOAD_LIB_NAME).so: tcp_ip_wrapper.o logging.o
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl
 
 %.o : %.c
