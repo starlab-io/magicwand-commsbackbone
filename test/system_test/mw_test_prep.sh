@@ -48,7 +48,7 @@ echo
 ./mw_prep
 
 for i in {1,2,3,4,5}; do
-    ./mw_copy_to_pvm
+    sudo -E -u $SUDO_USER ./mw_copy_to_pvm
     if [[ $? -eq 0 ]]; then
         break
     elif [[ $i -eq 5 ]]; then
@@ -60,9 +60,9 @@ done
 echo
 
 # Build on PVM
-ssh $PVM_USER@$PVM_IP "cd ~/protvm/kernel/mwcomms && make clean all"
-ssh $PVM_USER@$PVM_IP "cd ~/protvm/user/tcp_ip_server && make clean all"
-ssh $PVM_USER@$PVM_IP "cd ~/protvm/user/http_server && make clean all"
+ssh -i $PVM_USER_KEY $PVM_USER@$PVM_IP "cd ~/protvm/kernel/mwcomms && make clean all"
+ssh -i $PVM_USER_KEY $PVM_USER@$PVM_IP "cd ~/protvm/user/tcp_ip_server && make clean all"
+ssh -i $PVM_USER_KEY $PVM_USER@$PVM_IP "cd ~/protvm/user/http_server && make clean all"
 
 cd $MWROOT/test/apache_bench
 echo
@@ -83,7 +83,7 @@ if [[ $? -ne 0 ]] ; then
     echo
 fi
 
-#dbgrebuildrump
+#sudo -E -u $SUDO_USER source RUMP_ENV.sh; dbgrebuildrump
 
 cd apps/ins-app
 echo

@@ -6,7 +6,7 @@ Optional env vars for test scripts: PVM_CONF (If not set, defaults to /etc/xen/p
 
 mw_run_full_test.py expects to be run with sudo privileges
 
-The user specified in PVM_USER will need passwordless sudo to the following files:
+The user specified in PVM_USER will need passwordless sudo to the following files on the PVM:
 /bin/sh
 /bin/cat
 /sbin/insmod

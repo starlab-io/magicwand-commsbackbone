@@ -47,9 +47,9 @@ if (not os.path.exists("{0}/logs".format(startdir))):
 print()
 print("Starting PVM driver")
 pvm_kern_log = open( "{0}/logs/pvm_driver.log".format(startdir), "w" )
-pvm_driver_pid = subprocess.Popen( ["ssh", "{0}@{1}".format(os.environ['PVM_USER'], os.environ['PVM_IP']), "cd ~/protvm/kernel/mwcomms && ./load.sh"], stdout=pvm_kern_log, stderr=pvm_kern_log ).pid
+pvm_driver_pid = subprocess.Popen(["ssh", "-i", "{0}".format(os.environ['PVM_USER_KEY']),"{0}@{1}".format(os.environ['PVM_USER'], os.environ['PVM_IP']), "cd ~/protvm/kernel/mwcomms && ./load.sh"], stdout=pvm_kern_log, stderr=pvm_kern_log ).pid
 
-time.sleep(5)
+xtime.sleep(5)
 
 print()
 print("Starting INS")
