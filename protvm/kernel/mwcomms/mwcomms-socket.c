@@ -2239,39 +2239,13 @@ ErrorExit:
 
 
 int
-mwcomms_return_reaped_response( mwsocket_active_request_t *Curr_Ar )
-{
-    mt_response_generic_t response = {0};
-    
-    response.base.sig = MT_SIGNATURE_RESPONSE;
-    response.base.type = MT_RESPONSE( Curr_Ar->rr.request.base.type );
-    response.base.size = sizeof( response.base );
-    response.base.id = Curr_Ar->rr.request.base.id;
-    response.base.sockfd = Curr_Ar->rr.request.base.sockfd;
-    response.base.status = -ENOENT;
-    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
-
-    mwsocket_postproc_no_context( Curr_Ar, &response );
-    mwsocket_postproc_emit_netflow( Curr_Ar, &response );
-
-    memcpy( &Curr_Ar->rr.response, &response, response.base.size );
-    Curr_Ar->response_populated = true;
-    complete( &Curr_Ar->arrived );    
-
-    return 0;
-}
-
-
-int
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 {
     int rc = 0;
 
-    if( Dead_INS_Array[0] == 0 )
+    if( Dead_INS_Array[0] != 0 )
     {
-        goto ErrorExit;
-    }
 
         // Handle active requests associated with dead INSes.
         mwsocket_active_request_t * curr_ar = NULL;
@@ -2279,23 +2253,13 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
         list_for_each_entry_safe( curr_ar, next_ar, &g_mwsocket_state.active_request_list, list_all )
         {
             int i = 0;
-            bool ins_match = false;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
+                i++;
 
-            //See if the INS number of this active request mathces the client number of a dead INS
-            for( i = 0; i < MAX_INS_COUNT; i++ )
-            {
-                if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) == Dead_INS_Array[i] )
-                {
-                    ins_match = true;
-                    break;
-                }
-            }
-
-            //If this active request does not match a dead INS move on to the next
-            if( !ins_match )
-            {
+            if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
                 continue;
-            }
 
             if( curr_ar->deliver_response )
             {
@@ -2304,9 +2268,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 
                 bool copy_response = false;
 
-                //If request is accept and is not a usersock
-                if( curr_ar->rr.request.base.type == MtRequestSocketAccept &&
-                    !(curr_ar->sockinst->mwflags & MWSOCKET_FLAG_USER) )
+                if( curr_ar->rr.request.base.type == MtRequestSocketAccept
+                    && !(curr_ar->sockinst->mwflags & MWSOCKET_FLAG_USER) )
                 {
                     // If sibling listener on accept(), disappear
                     mwsocket_destroy_active_request( curr_ar );
@@ -2320,8 +2283,23 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 }
 
                 if( copy_response )
-                {   
-                    mwcomms_return_reaped_response( curr_ar );
+                {
+                    mt_response_generic_t response = {0};
+
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = curr_ar->rr.request.base.id;
+                    response.base.sockfd = curr_ar->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( curr_ar, &response );
+                    mwsocket_postproc_emit_netflow( curr_ar, &response );
+
+                    memcpy( &curr_ar->rr.response, &response, response.base.size );
+                    curr_ar->response_populated = true;
+                    complete( &curr_ar->arrived );
                 }
 
             }
@@ -2340,23 +2318,13 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
             mwsocket_active_request_t * blockreq = NULL;
 
             int i = 0;
-            bool ins_match = false;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
+                i++;
 
-            //See if the INS number of this active request mathces the client number of a dead INS
-            for( i = 0; i < MAX_INS_COUNT; i++ )
-            {
-                if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) == Dead_INS_Array[i] )
-                {
-                    ins_match = true;
-                    break;
-                }
-            }
-
-            //If this active request does not match a dead INS move on to the next
-            if( !ins_match )
-            {
+            if( MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
                 continue;
-            }
 
             curr_si->ins_alive = false;
             mwsocket_set_pollable( curr_si, false );
@@ -2364,8 +2332,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
             mwsocket_find_active_request_by_id( &blockreq, curr_si->blockid );
 
             // If accepting and a sibling listener, destroy the sockinst
-            if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT&&
-                !(curr_si->mwflags & MWSOCKET_FLAG_USER) )
+            if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT
+                && !(curr_si->mwflags & MWSOCKET_FLAG_USER) )
             {
                 // If a sibling listener is accepting, it should have only had
                 // the accept() actreq, which was destroyed. If the sockinst is
@@ -2397,8 +2365,23 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 // If there is no replacement INS, return failure to user on the accept() actreq
                 if( sockinst == NULL )
                 {
+                    mt_response_generic_t response = {0};
 
-                    mwcomms_return_reaped_response( &blockreq )
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( blockreq->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = blockreq->rr.request.base.id;
+                    response.base.sockfd = blockreq->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( blockreq, &response );
+                    mwsocket_postproc_emit_netflow( blockreq, &response );
+
+                    memcpy( &blockreq->rr.response, &response, response.base.size );
+                    blockreq->response_populated = true;
+                    complete( &blockreq->arrived );
+
                     continue;
                 }
 
@@ -2439,8 +2422,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
         }
 
         //mutex_unlock( &g_mwsocket_state.sockinst_lock );
-        
-ErrorExit:
+    }
+
     // Return something
     return rc;
 
