@@ -17,8 +17,8 @@
 // open to fail with EMFILE errno.
 //
 
-#define MAX_THREAD_COUNT 4000   // for production
-//#define MAX_THREAD_COUNT 500 // for testing
+//#define MAX_THREAD_COUNT 4000   // for production
+#define MAX_THREAD_COUNT 500 // for testing
 
 //
 // Number of buffer items. This is the number of requests (from the
@@ -32,7 +32,7 @@
 //This constant is for defer accept functionality, this will determine
 //how many seconds an idle connection will wait for data before disconnecting
 
-#define DEFER_ACCEPT_MAX_IDLE 1.0
+#define DEFER_ACCEPT_MAX_IDLE 30.0
 
 //
 // Xen event device
