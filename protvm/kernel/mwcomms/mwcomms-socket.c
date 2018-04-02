@@ -2831,7 +2831,7 @@ mwsocket_monitor( void * Arg )
         {
             pr_err( "Error handling poll notifications: %d poll_sock_count: %d\n",
                     rc,
-                    g_mwsocket_state.poll_sock_count );
+                    atomic_read( &g_mwsocket_state.poll_sock_count ) );
             
             continue;
         }

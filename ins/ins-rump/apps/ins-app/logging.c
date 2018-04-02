@@ -22,6 +22,10 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include <sys/types.h>
+#include <unistd.h>
+
+
 //#define SEPARATOR ('/') // hard-coded Linux path separator
 #define SEPARATOR ("/") // hard-coded Linux path separator
 
@@ -192,7 +196,7 @@ log_write(log_level Level, const char* Format, ...)
     if( Level <= loglevel )
     {
         va_list args;
-        fprintf( fp, "[%s] <%d>", get_timestamp( tmp, sizeof(tmp) ), Level );
+        fprintf( fp, "%d  [%s]  <%d>", getpid(), get_timestamp( tmp, sizeof(tmp) ), Level );
         va_start (args, Format);
         vfprintf (fp, Format, args);
         va_end (args);

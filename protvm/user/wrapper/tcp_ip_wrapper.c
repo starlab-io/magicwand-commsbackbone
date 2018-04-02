@@ -215,9 +215,9 @@ mwcomms_is_mwsocket( IN int Fd )
     mwsocket_verify_args_t verify = { .fd = Fd, };
 
     int rc = ioctl( devfd, MW_IOCTL_IS_MWSOCKET, &verify );
-    if ( rc )
+    if ( rc < 0 )
     {
-        wrapper_error( "ioctl" );
+        log_write( LOG_DEBUG, "MW_IOCTL_IS_MWSOCKET returning false" );
         goto ErrorExit;
     }
 
@@ -1355,6 +1355,9 @@ mwcomms_set_sockattr( IN int Level,
         case SO_SNDLOWAT:
             Attribs->name = MtSockAttribSndLoWat;
             break;
+        case SO_ERROR:
+            Attribs->name = MtSockAttribError;
+            break;
         default:
             log_write( LOG_ERROR, "Failing on unsupported SOL_SOCKET option %d\n", OptName );
             rc = EINVAL;
@@ -1435,8 +1438,8 @@ getsockopt( int         Fd,
     }
 
 ErrorExit:
-    log_write( LOG_INFO, "getsockopt( 0x%x, %d, %d, %p, %p ) => %d\n",
-               Fd, Level, OptName, OptVal, OptLen, rc );
+    log_write( LOG_INFO, "getsockopt( 0x%x, %d, %d, %p[%d], %p[%d] ) => %d\n",
+               Fd, Level, OptName, OptVal, *(int*)OptVal, OptLen, *OptLen, rc );
     errno = err;
     return rc;
 }

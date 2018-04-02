@@ -207,6 +207,7 @@ typedef enum
     MtSockAttribRcvTimeo          = 0x010c,
     MtSockAttribSndLoWat          = 0x010d,
     MtSockAttribRcvLoWat          = 0x010e,
+    MtSockAttribError             = 0x010f,
 
     // INS-wide settings
 
