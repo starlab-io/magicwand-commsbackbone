@@ -1735,7 +1735,7 @@ init_wrapper( void )
     snprintf( shim_log, sizeof(shim_log),
               "ins_%d", (int) getpid() );
 
-    rc = log_init( SHIM_LOG_PATH, shim_log, "log", LOG_INFO );
+    rc = log_init( SHIM_LOG_PATH, shim_log, "log", LOG_LEVEL );
     if( rc )
     {
         fprintf( stderr, "Failed to open log file %s: %s\n",
