@@ -48,3 +48,10 @@ if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
+
+docmd scp -rq $MWROOT/test    $PVM_USER@$PVM_IP:
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi

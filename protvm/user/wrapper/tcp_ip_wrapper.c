@@ -468,6 +468,25 @@ socket( int Domain,
         goto ErrorExit;
     }
 
+    if( Type & SOCK_CLOEXEC )
+    {
+        log_write( LOG_INFO,
+                   "Setting SOCK_CLOEXEC flag for new fd: %d\n",
+                   create.outfd );
+
+        rc = fcntl( create.outfd, F_SETFD, FD_CLOEXEC );
+
+        if( rc < 0 )
+        {
+            err = errno;
+            log_write( LOG_ERROR,
+                       "fcntl failed for new socket %d\n",
+                       create.outfd );
+            goto ErrorExit;
+        }
+    }
+                   
+
     log_write( LOG_NOTICE, "mwsocket( %d, 0x%x, %d ) ==> %d\n",
                Domain, Type, Protocol, create.outfd );
 
@@ -605,9 +624,15 @@ accept( int               SockFd,
     }
 
     rc = response.base.sockfd; // new socket
-    populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
-                          &response.socket_accept.sockaddr );
 
+    //Null is a perfectly acceptable value for these inputs
+    if( NULL != SockLen &&
+        NULL != SockAddr )
+    {
+        populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
+                          &response.socket_accept.sockaddr );
+    }
+        
 ErrorExit:
     e = errno;
     log_write( LOG_INFO, "accept(%d, ...) ==> %d\n", SockFd, (int)rc );
@@ -652,9 +677,20 @@ accept4( int               SockFd,
     }
     if( Flags & SOCK_CLOEXEC )
     {
-        log_write( LOG_WARN,
-                   "accept4(%d,...) dropping flag SOCK_CLOEXEC for new socket %d\n",
-                   SockFd, newfd );
+        log_write( LOG_INFO, "Marking %d with SOCK_CLOEXEC via accept4()\n", newfd );
+        rc = fcntl( newfd, F_SETFD, FD_CLOEXEC );
+        if( rc )
+        {
+            err = errno;
+            rc = -1;
+            log_write( LOG_ERROR,
+                       "accept4(): failed to mark new socket %d with FD_CLOEXEC.\n",
+                       newfd );
+            goto ErrorExit;
+        }
+//        log_write( LOG_WARN,
+//                   "accept4(%d,...) dropping flag SOCK_CLOEXEC for new socket %d\n",
+//                   SockFd, newfd );
     }
 
     // Success
@@ -1644,7 +1680,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
 
     // Set the new flags
     rc = libc_fcntl( Fd, F_SETFL, newflags );
-    if ( rc )
+    if ( rc < 0 )
     {
         err = errno;
         MYASSERT( !"fcntl()" );
@@ -1654,6 +1690,9 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     // if the change doesn't involve O_NONBLOCK, we don't care
     if ( (oldflags & O_NONBLOCK) == (newflags & O_NONBLOCK) )
     {
+        log_write( LOG_INFO,
+                   "Ignoring call to fcntl fd %d  because NONBLOCK is not set\n",
+                   Fd );
         goto ErrorExit;
     }
 
@@ -1662,7 +1701,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     attr.val.v32 = (uint32_t) (bool) ( newflags & O_NONBLOCK );
 
     rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
-    if ( rc )
+    if ( rc < 0 )
     {
         log_write( LOG_ERROR, "ioctl() failed: %d\n", rc );
         goto ErrorExit;
@@ -1671,7 +1710,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
 ErrorExit:
     log_write( LOG_INFO, "fcntl( %x, %d, %p ) ==> %x\n",
                Fd, Cmd, arg, rc );
-    if ( rc )
+    if ( rc < 0 )
     {
         errno = err;
     }
