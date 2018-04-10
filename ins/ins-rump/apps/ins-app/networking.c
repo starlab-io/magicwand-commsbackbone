@@ -1291,6 +1291,7 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
+    WorkerThread->defer_accept = false;
     if ( 0 != WorkerThread->bound_port_num )
     {
         WorkerThread->bound_port_num = 0;
