@@ -565,7 +565,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 void
 xe_net_defer_accept_wait( void )
 {
-    struct timespec ts = {0,1000};
+    struct timespec ts = {0,100};
 
     while ( ts.tv_nsec > 0 )
     {
@@ -747,8 +747,7 @@ xe_net_defer_accept_socket( int LocalFd,
     static __thread int last_idx = 0;
     static __thread bool init = false;
     static __thread struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
-
-    struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+    static __thread struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
 
     if( !init )
     {
@@ -778,6 +777,7 @@ xe_net_defer_accept_socket( int LocalFd,
                            LocalFd, err );
                 break;
             }
+
 
             if( listen_poll_fd.revents & POLLNVAL )
             {

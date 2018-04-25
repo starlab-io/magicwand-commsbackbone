@@ -339,7 +339,7 @@ typedef struct _mwsocket_instance
 
      // Is there an accept() outstanding to the user? Used only in
      // mwsocket_{read,write} for the MWSOCKET_FLAG_USER sockinst.
-    bool                  user_outstanding_accept;
+    int                  user_outstanding_accept;
 
     // Every time the process creates an mwsocket, that results in a
     // "primary", or "user" mwsocket. There are secondary ones which
@@ -746,6 +746,46 @@ ErrorExit:
 
 
 /******************************************************************************
+ * functions to aid in debugging of mwcomms driver code
+ ******************************************************************************/
+
+void
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_debug_dump_sockinst( void )
+{
+    mwsocket_instance_t * curr = NULL;
+    list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
+    {
+        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) ) { continue; }
+
+        pr_info( "%p refct %d file %p proc %d[%s]\n",
+                 curr, atomic_read( &curr->refct ), curr->file,
+                 curr->proc->pid, curr->proc->comm );
+    }
+}
+
+
+void
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_debug_dump_actreq( void )
+{
+    mwsocket_active_request_t * curr = NULL;
+
+    mutex_lock( &g_mwsocket_state.active_request_lock );
+    list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
+    {
+        mt_request_generic_t * request = &curr->rr.request;
+
+        pr_info( "%lx: %p sockinst %p fd %d type %x\n",
+                 (unsigned long)curr->id, curr,
+                 curr->sockinst, curr->sockinst->local_fd,
+                 request->base.type );
+    }
+    mutex_unlock( &g_mwsocket_state.active_request_lock );
+}
+
+
+/******************************************************************************
  * Support functions for interactions between file objects and Xen ring buffer.
  ******************************************************************************/
 
@@ -864,20 +904,7 @@ ErrorExit:
 }
 
 
-void
-MWSOCKET_DEBUG_ATTRIB
-mwsocket_debug_dump_sockinst( void )
-{
-    mwsocket_instance_t * curr = NULL;
-    list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
-    {
-        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) ) { continue; }
 
-        pr_info( "%p refct %d file %p proc %d[%s]\n",
-                 curr, atomic_read( &curr->refct ), curr->file,
-                 curr->proc->pid, curr->proc->comm );
-    }
-}
 
 
 // @brief Reference the socket instance
@@ -1391,24 +1418,7 @@ ErrorExit:
 }
 
 
-void
-MWSOCKET_DEBUG_ATTRIB
-mwsocket_debug_dump_actreq( void )
-{
-    mwsocket_active_request_t * curr = NULL;
 
-    mutex_lock( &g_mwsocket_state.active_request_lock );
-    list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
-    {
-        mt_request_generic_t * request = &curr->rr.request;
-
-        pr_info( "%lx: %p sockinst %p fd %d type %x\n",
-                 (unsigned long)curr->id, curr,
-                 curr->sockinst, curr->sockinst->local_fd,
-                 request->base.type );
-    }
-    mutex_unlock( &g_mwsocket_state.active_request_lock );
-}
 
 
 /**
@@ -2109,6 +2119,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->local_fd,
                   ActiveRequest->rr.request.base.type );
     }
+
 
     memcpy( (void *) req,
             &ActiveRequest->rr.request,
@@ -3022,7 +3033,7 @@ mwsocket_read( struct file * File,
         goto ErrorExit;
     }
 
-    if( sockinst->user_outstanding_accept )
+    if( sockinst->user_outstanding_accept > 0 )
     {
         // For accept(), swap out the known active request for the
         // inbound one that arrived first.
@@ -3031,7 +3042,7 @@ mwsocket_read( struct file * File,
         if( rc ) { goto ErrorExit; }
 
         // We're consuming the returning accept() here
-        sockinst->user_outstanding_accept = false;
+        sockinst->user_outstanding_accept--;
 
         // Replace the active request with its inbound surrogate
         actreq = new;
@@ -3110,6 +3121,7 @@ mwsocket_write( struct file * File,
     bool sent = false;
     // Do not expect a read() after this if we return -EAGAIN
 
+
     if( Len < MT_REQUEST_BASE_SIZE )
     {
         rc = -EINVAL;
@@ -3142,7 +3154,7 @@ mwsocket_write( struct file * File,
     {
         // Distribute accept() to all INSs. This is generating a new
         // outstanding accept().
-        sockinst->user_outstanding_accept = true;
+        sockinst->user_outstanding_accept++;
 
         mwsocket_sock_replicate_args_t args =
             { .sockinst = sockinst,
@@ -3625,9 +3637,13 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         }
     }
 
-    // Accept: send request but don't wait for response
-    if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
-    {
+    // Accept: if this is the first accept send request but don't wait for response
+    //The if statement here is commented out because if multiple processes call accept,
+    //an active request still needs to be created and sent to the ins testing is
+    //currently being done to see if this is a viable option the handle multiple processes
+    //calling accept on the same socket as is the behavior of the apache mpm_prefork module
+//    if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
+//    {
         mt_request_socket_accept_t accept =
             { .base.type    = MtRequestSocketAccept,
               .base.size    = MT_REQUEST_SOCKET_ACCEPT_SIZE,
@@ -3660,9 +3676,9 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
             MYASSERT( !"mwsocket_send_message() / accept" );
             goto ErrorExit;
         }
-    }
 
-
+//    }
+    
 ErrorExit:
     if( rc )
     {

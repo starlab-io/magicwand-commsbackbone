@@ -27,7 +27,9 @@
 //
 #define BUFFER_ITEM_COUNT ( MAX_THREAD_COUNT + 50 )
 
-#define WORK_QUEUE_ITEM_COUNT 4
+//This is the buffer within the worker thread should be set
+//to number of simultaneous accepts you expect to be blocking on
+#define WORK_QUEUE_ITEM_COUNT 500
 
 //This constant is for defer accept functionality, this will determine
 //how many seconds an idle connection will wait for data before disconnecting
