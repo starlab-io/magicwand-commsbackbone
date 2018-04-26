@@ -30,7 +30,7 @@ CFLAGS += -I$(MWROOT)/exports/imports
 CFLAGS += -I../platform/xen/xen/include 
 CFLAGS += -I../../rump-common
 
-CFLAGS += -DLOG_LEVEL=LOG_INFO
+CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
 
