@@ -477,7 +477,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     if ( rc < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
-        log_write( LOG_ERROR,
+        log_write( LOG_WARN,
                    "socket %lx / %d: connect() to %s:%d failed: %d\n",
                    WorkerThread->public_fd, WorkerThread->local_fd,
                    inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port),
@@ -826,7 +826,7 @@ xe_net_defer_accept_socket( int LocalFd,
                 sock_len = sizeof( sockaddr );
                 getpeername( sockfd, (struct sockaddr *)&sockaddr, &sock_len );
 
-                log_write( LOG_ERROR,
+                log_write( LOG_DEBUG,
                            "accepting connection from %s:%d\n",
                            inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
                 //XXX
