@@ -31,6 +31,7 @@ CFLAGS += -I../platform/xen/xen/include
 CFLAGS += -I../../rump-common
 
 CFLAGS += -DLOG_LEVEL=LOG_INFO
+#CFLAGS += -DMYDEBUG #enable debug_print_state
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
 
