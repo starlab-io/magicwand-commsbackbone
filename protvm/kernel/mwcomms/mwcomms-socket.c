@@ -180,6 +180,9 @@ struct thread_info ti; // DEBUG ONLY
 // Response timeout for kernel-initiated poll requests
 #define MONITOR_RESPONSE_TIMEOUT ( HZ * 2 )
 
+// Wait timeout for completion of all in-flight IO before close
+#define CLOSE_WAIT_TIMEOUT ( HZ * 1 )
+
 //
 // How frequently should the poll monitor thread send a request?
 //
@@ -1894,10 +1897,10 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
             atomic64_read( &ActiveRequest->sockinst->close_blockid );
         if( MT_ID_UNSET_VALUE != id )
         {
-            pr_info( "close() against fd %d [pid %d] waiting for in-flight ID %lx\n",
-                     ActiveRequest->sockinst->local_fd,
-                     ActiveRequest->sockinst->proc->pid,
-                     (unsigned long)id );
+            pr_debug( "close() against fd %d [pid %d] waiting for in-flight ID %lx\n",
+                      ActiveRequest->sockinst->local_fd,
+                      ActiveRequest->sockinst->proc->pid,
+                      (unsigned long)id );
             waiting = true;
         }
 
@@ -1913,25 +1916,28 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
             pr_info( "Wait for in-flight ID %lx was killed\n", (unsigned long)id );
         }
 #else
-        int ct = 0;
-        bool acquired = false;
-        while( ct++ < 2 )
+        if( waiting == true )
         {
-            if( down_write_trylock( &ActiveRequest->sockinst->close_lock ) )
+            int ct = 0;
+            bool acquired = false;
+            while( ct++ < 60 )
             {
-                acquired = true;
-                break;
+                if( down_write_trylock( &ActiveRequest->sockinst->close_lock ) )
+                {
+                    acquired = true;
+                    break;
+                }
+                mwsocket_wait( CLOSE_WAIT_TIMEOUT );
             }
-            mwsocket_wait( GENERAL_RESPONSE_TIMEOUT );
-        }
 
-        if( !acquired )
-        {
-            pr_warning( "Closing socket %d [pid %d] despite outstanding IO \
-                         on it (ID %lx).\n",
-                        ActiveRequest->sockinst->local_fd,
-                        ActiveRequest->sockinst->proc->pid,
-                        (unsigned long)id );
+            if( !acquired )
+            {
+                pr_warning( "Closing socket %d [pid %d] despite outstanding IO \
+                            on it (ID %lx).\n",
+                            ActiveRequest->sockinst->local_fd,
+                            ActiveRequest->sockinst->proc->pid,
+                            (unsigned long)id );
+            }
         }
 #endif
         atomic64_set( &ActiveRequest->sockinst->close_blockid,
