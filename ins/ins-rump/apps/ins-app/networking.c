@@ -1000,6 +1000,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     {
         Response->base.status = XE_GET_NEG_ERRNO();
         perror( "accept" );
+
         // N.B. Response->base.sockfd is set by xe_net_set_base_response()
         // This happens frequently in non-blocking IO. Don't assert.
     }

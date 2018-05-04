@@ -340,9 +340,9 @@ typedef struct _mwsocket_instance
     struct mutex          inbound_lock; // to protect inbound_list
     struct semaphore      inbound_sem;  // to notify of pending inbound
 
-     // Is there an accept() outstanding to the user? Used only in
-     // mwsocket_{read,write} for the MWSOCKET_FLAG_USER sockinst.
-    int                  user_outstanding_accept;
+    // Is there an accept() outstanding to the user? Used only in
+    // mwsocket_{read,write} for the MWSOCKET_FLAG_USER sockinst.
+    int                   user_outstanding_accept;
 
     // Every time the process creates an mwsocket, that results in a
     // "primary", or "user" mwsocket. There are secondary ones which
@@ -426,6 +426,12 @@ typedef struct _mwsocket_instance
 
     // Latest ID of request that blocks this socket from closing
     atomic64_t          close_blockid; // holds mt_id_t
+
+    // Single thread requests per socket
+    struct semaphore    request_sem;
+
+    // Is request/response state machine valid
+    bool                state_valid;
 
 } mwsocket_instance_t;
 
@@ -1101,6 +1107,9 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     mutex_init( &sockinst->inbound_lock );
     sema_init( &sockinst->inbound_sem, 0 );
+    sema_init( &sockinst->request_sem, 1 );
+
+    sockinst->state_valid = true;
 
     init_rwsem( &sockinst->close_lock );
 
@@ -2022,6 +2031,7 @@ mwsocket_await_inbound_connection( IN mwsocket_active_request_t   * ActiveReques
     if( down_interruptible( &sockinst->inbound_sem ) )
     {
         rc = -EINTR;
+        sockinst->state_valid = false;
         pr_info( "Received interrupt while awaiting inbound connection\n" );
         goto ErrorExit;
     }
@@ -3014,9 +3024,10 @@ mwsocket_read( struct file * File,
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
     MYASSERT( sockinst->mwflags & MWSOCKET_FLAG_USER );
 
-    if( !sockinst->read_expected )
+    if( sockinst->state_valid && !sockinst->read_expected )
     {
         rc = -EINVAL;
         MYASSERT( !"Calling read() but fire-and-forget was indicated in write()" );
@@ -3041,14 +3052,14 @@ mwsocket_read( struct file * File,
 
     if( sockinst->user_outstanding_accept > 0 )
     {
+        // We're consuming the returning accept() here
+        sockinst->user_outstanding_accept--;
+
         // For accept(), swap out the known active request for the
         // inbound one that arrived first.
         mwsocket_active_request_t * new = NULL;
         rc = mwsocket_await_inbound_connection( actreq, &new );
         if( rc ) { goto ErrorExit; }
-
-        // We're consuming the returning accept() here
-        sockinst->user_outstanding_accept--;
 
         // Replace the active request with its inbound surrogate
         actreq = new;
@@ -3057,7 +3068,7 @@ mwsocket_read( struct file * File,
         // Although there may still be an outstanding accept() on the
         // user socket, it should expect a write next since we're
         // returning against a read. Change its state underneath it.
-        sockinst->usersock->read_expected = false;
+        sockinst->read_expected = false;
     }
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
@@ -3102,10 +3113,16 @@ mwsocket_read( struct file * File,
     rc = response->base.size;
 
 ErrorExit:
-    if( -EINTR != rc ) // XXXX: hacky -- could leak
+
+    if( ( actreq != NULL ) && ( -EINTR != rc ) ) // XXXX: hacky -- could leak
     {
         // The "active" request is now dead.
         mwsocket_destroy_active_request( actreq );
+    }
+
+    if( sockinst != NULL )
+    {
+        up( &sockinst->request_sem );
     }
 
     return rc;
@@ -3125,8 +3142,6 @@ mwsocket_write( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     mt_request_base_t base;
     bool sent = false;
-    // Do not expect a read() after this if we return -EAGAIN
-
 
     if( Len < MT_REQUEST_BASE_SIZE )
     {
@@ -3147,9 +3162,18 @@ mwsocket_write( struct file * File,
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
 
+    // No parallel requests per socket
+    if( down_interruptible( &sockinst->request_sem ) )
+    {
+        rc = -EINTR;
+        sockinst->state_valid = false;
+        pr_info( "Received interrupt while waiting to process write request\n" );
+        goto ErrorExit;
+    }
+
     MYASSERT( MWSOCKET_FLAG_USER & sockinst->mwflags );
 
-    if( sockinst->read_expected )
+    if( sockinst->state_valid && sockinst->read_expected )
     {
         rc = -EIO;
         MYASSERT( !"write() called but read() expected" );
@@ -3216,15 +3240,23 @@ mwsocket_write( struct file * File,
 
 ErrorExit:
 
-    // We're returning an error - don't expect a read
-    if( rc )
+    if (sockinst != NULL )
     {
-        sockinst->read_expected = false;
-    }
+        // We're returning an error - don't expect a read
+        if( rc )
+        {
+            sockinst->read_expected = false;
+        }
 
-    if( rc && !sent )
-    {
-        mwsocket_destroy_active_request( actreq );
+        if( rc && !sent )
+        {
+            mwsocket_destroy_active_request( actreq );
+        }
+
+        if( sockinst->read_expected == false || !sockinst->state_valid)
+        {
+            up( &sockinst->request_sem );
+        }
     }
 
     return rc;
@@ -3648,6 +3680,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
     //an active request still needs to be created and sent to the ins testing is
     //currently being done to see if this is a viable option the handle multiple processes
     //calling accept on the same socket as is the behavior of the apache mpm_prefork module
+    //A better solution is to somehow keep process information associated with a response
+    //so we can send responses to the right processes when they are recieved
 //    if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
 //    {
         mt_request_socket_accept_t accept =

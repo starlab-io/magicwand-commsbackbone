@@ -563,7 +563,6 @@ release_worker_thread( thread_item_t * ThreadItem )
     
     if ( !workqueue_is_empty( ThreadItem->work_queue ) )
     {
-        debug_print_state();
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
