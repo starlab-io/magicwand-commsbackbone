@@ -1,1 +1,1 @@
-../../../ins/ins-rump/apps/ins-app/logging.h
+../../../common/logging.h
