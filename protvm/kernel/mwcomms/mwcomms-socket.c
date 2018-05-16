@@ -2032,7 +2032,7 @@ mwsocket_await_inbound_connection( IN mwsocket_active_request_t   * ActiveReques
     {
         rc = -EINTR;
         sockinst->state_valid = false;
-        pr_info( "Received interrupt while awaiting inbound connection\n" );
+        pr_debug( "Received interrupt while awaiting inbound connection\n" );
         goto ErrorExit;
     }
 
@@ -3167,7 +3167,7 @@ mwsocket_write( struct file * File,
     {
         rc = -EINTR;
         sockinst->state_valid = false;
-        pr_info( "Received interrupt while waiting to process write request\n" );
+        pr_debug( "Received interrupt while waiting to process write request\n" );
         goto ErrorExit;
     }
 
