@@ -998,8 +998,14 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     }
     if ( sockfd < 0 )
     {
+        // Apache2 shutdown process will leave outstanding accept requests
+        // on the queue after a socket is destroyed, since this is not an
+        // error condition do not print an error message by default.
+        log_write( LOG_DEBUG,
+                   "Accept on local_fd = %d failed: %s\n",
+                   WorkerThread->local_fd, strerror( errno ) );
+
         Response->base.status = XE_GET_NEG_ERRNO();
-        perror( "accept" );
 
         // N.B. Response->base.sockfd is set by xe_net_set_base_response()
         // This happens frequently in non-blocking IO. Don't assert.

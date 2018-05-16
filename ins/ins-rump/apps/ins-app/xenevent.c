@@ -303,6 +303,7 @@ xe_yield( void )
 }
 
 
+#ifdef MYDEBUG
 static void
 debug_print_state( void )
 {
@@ -351,6 +352,7 @@ debug_print_state( void )
     pthread_mutex_unlock( &m );
 
 }
+#endif // MYDEBUG
 
 
 static int
