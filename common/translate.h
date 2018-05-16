@@ -20,6 +20,7 @@
 
 #include "message_types.h"
 #include "translate.h"
+#include "logging.h"
 
 
 static inline
@@ -40,7 +41,7 @@ xe_net_get_mt_protocol_family( sa_family_t Fam )
 
     default:
 #ifndef __KERNEL__
-        perror("Invalid protocol family");
+        log_write(LOG_DEBUG, "Invalid protocol family: %d", Fam );
 #endif
         break;
     }
@@ -70,7 +71,7 @@ xe_net_get_native_protocol_family( mt_protocol_family_t Fam )
 
     default:
 #ifndef __KERNEL__
-        perror("Invalid protocol family");
+        log_write( LOG_DEBUG, "Invalid protocol family: %d", Fam);
 #endif
         break;
     }
