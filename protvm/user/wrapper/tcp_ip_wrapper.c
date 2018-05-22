@@ -926,7 +926,9 @@ connect( int                     SockFd,
     rc = response.base.status;
 
 ErrorExit:
-    log_write( LOG_INFO, "connect(%d,...) ==> %d\n", SockFd, rc );
+    log_write( LOG_INFO, "connect(%d,...) ==> %d / %s:%d\n", SockFd, rc,
+               inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
+               ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
     return rc;
 }
 
