@@ -34,6 +34,10 @@
 //#define LISTENER_MONITOR_INTERVAL (HZ * 1) // 1 sec
 #define LISTENER_MONITOR_INTERVAL (HZ >> 1) // 1/2 sec
 
+// State information for netflow channel
+#define NETFLOW_CH_NONE       0x00000000
+#define NETFLOW_CH_NO_MONITOR 0x00000001 // no monitoring data sent to channel
+
 typedef int
 pfn_import_single_range_t(int rw, void __user *buf, size_t len,
                           struct iovec *iov, struct iov_iter *i);
@@ -43,8 +47,8 @@ typedef struct _mwcomms_netflow_channel
     struct list_head list;
     bool             active;
     char             peer[64]; // IP:port of peer, helpful for debugging
-
     int              id;
+    uint32_t         flags; // NETFLOW_CH_*
     struct socket  * conn;
 } mwcomms_netflow_channel_t;
 
@@ -139,7 +143,7 @@ mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
     rc = sock_recvmsg( Channel->conn, &hdr, MSG_DONTWAIT );
 #endif
 
-    pr_debug( "Read %d bytes from socket", rc );
+    pr_debug( "Read %d bytes from socket (size = %zd)", rc, size );
     // Returns number of bytes (>=0) or error (<0)
     if ( 0 == rc )
     {
@@ -246,11 +250,14 @@ mw_netflow_write_all( void * Message, size_t Len )
     mwcomms_netflow_channel_t * curr = NULL;
     list_for_each_entry( curr, &g_mwbc_state.conn_list, list )
     {
-        int rc2 = mw_netflow_write_one( curr, Message, Len );
-        if ( rc2 )
+        if ( !( curr->flags & NETFLOW_CH_NO_MONITOR ) )
         {
-            // continue upon failure
-            rc = rc2;
+            int rc2 = mw_netflow_write_one( curr, Message, Len );
+            if ( rc2 )
+            {
+                // continue upon failure
+                rc = rc2;
+            }
         }
     }
 
@@ -288,6 +295,7 @@ ErrorExit:
  */
 static int
 mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
+                             IN mwcomms_netflow_channel_t * Channel,
                              OUT mw_feature_response_t * Response )
 {
     MYASSERT( Request );
@@ -303,21 +311,6 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
     mt_request_socket_attrib_t  mtreq = {0};
     mt_response_socket_attrib_t mtres = {0};
 
-    // BY_PEER is not supported
-    if ( !(Request->flags & MW_FEATURE_FLAG_BY_SOCK) )
-    {
-        MYASSERT( !"Feature's sockfd must be given" );
-        rc = -EINVAL;
-        goto ErrorExit;
-    }
-
-    if ( !MT_SOCK_ATTR_MITIGATES( Request->name ) )
-    {
-        //MYASSERT( !"Non-mitigating attribute" );
-        rc = -EINVAL;
-        goto ErrorExit;
-    }
-
     // Convert the inbound feature request into an
     // mt_request_socket_attrib_t. To simplify our logic and shorten
     // this function, we set some fields unnecessarily.
@@ -325,6 +318,14 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
     mtreq.name = Request->name;
     switch( Request->name )
     {
+    case MtChannelTrafficMonitorOn:
+        Response->val.v32 = true;
+        Channel->flags &= ~NETFLOW_CH_NO_MONITOR;
+        break;
+    case MtChannelTrafficMonitorOff:
+        Response->val.v32 = true;
+        Channel->flags |= NETFLOW_CH_NO_MONITOR;
+        break;
     case MtSockAttribOwnerRunning:
         MYASSERT( Request->flags & MW_FEATURE_FLAG_BY_SOCK );
         Response->val.v32 = true;
@@ -377,7 +378,6 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
         }
     }
 
-ErrorExit:
     if ( rc && !Response->status ) { Response->status = rc; }
     return rc;
 }
@@ -423,7 +423,7 @@ mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
         }
 
         // Process the feature request. Response must be send!
-        rc = mw_netflow_process_feat_req( &req, &res );
+        rc = mw_netflow_process_feat_req( &req, Channel, &res );
         if ( rc )
         {
             pr_warn( "Feature processing failed (%d). "
@@ -475,6 +475,7 @@ mw_netflow_add_conn( struct socket * AcceptedSock )
 
     channel->active = true;
     channel->id     = atomic_read( &g_mwbc_state.conn_ct );
+    channel->flags  = NETFLOW_CH_NONE;
 
     rc = AcceptedSock->ops->getname( AcceptedSock,
                                      (struct sockaddr *) &addr,
