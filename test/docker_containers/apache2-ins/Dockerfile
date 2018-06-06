@@ -8,12 +8,13 @@ RUN apt install -y apt-utils
 RUN apt install -y gcc make 
 
 #For Debugging
-RUN apt install -y vim less locate netcat strace lsof file
-RUN apt install -y net-tools kmod
-RUN updatedb
+#RUN apt install -y vim less locate netcat strace lsof file
+#RUN apt install -y net-tools kmod
+#RUN updatedb
 
 COPY ./config/httpd.conf /usr/local/apache2/conf/httpd.conf
 COPY ./config/httpd-foreground /usr/local/bin/
+COPY ./config/index.html /usr/local/apache2/htdocs/
 RUN mkdir -p /code/shim/common
 RUN mkdir -p /code/shim/protvm/user/wrapper
 COPY ./shim/ /code/shim
