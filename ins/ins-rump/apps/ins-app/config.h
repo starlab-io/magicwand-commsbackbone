@@ -17,8 +17,15 @@
 // open to fail with EMFILE errno.
 //
 
-//#define MAX_THREAD_COUNT 4000   // for production
+#ifdef MYDEBUG
+
 #define MAX_THREAD_COUNT 500 // for testing
+
+#else
+
+#define MAX_THREAD_COUNT 4000   // for production
+
+#endif //MYDEBUG
 
 //
 // Number of buffer items. This is the number of requests (from the

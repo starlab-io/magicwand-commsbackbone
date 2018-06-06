@@ -1,9 +1,10 @@
+#!/usr/bin/env python
+
 import os
 import socket
 import subprocess
 import resource
 import argparse
-
 
 
 def do_ab( n, c, hostname ):
@@ -22,10 +23,22 @@ def do_ab( n, c, hostname ):
             time = line.split()[3]
         if "Concurrency Level:" in line:
             concurrency = line.split()[2]
+        if "50%" in line:
+            percentile_50 = line.split()[1]
+        if "80%" in line:
+            percentile_80 = line.split()[1]
+        if "100%" in line:
+            longest_request = line.split()[1]
             
     column = concurrency + "\t\t\t\t" + time + "\t\t\t\t" + failed +"\n"; 
 
-    fout.write( column );
+    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
+                ( concurrency,
+                  time,
+                  failed,
+                  percentile_50,
+                  percentile_80,
+                  longest_request ) );
 
     process.kill()
 
@@ -65,18 +78,24 @@ def main():
 
     resource.setrlimit( resource.RLIMIT_NOFILE, [ 8000, prev_rlimit[1] ] )
 
-    fout = open( f_name + "txt", 'w' );
+    fout = open( f_name, 'w' );
 
-    fout.write( "Concurrency level       Average time per request (ms)        Failures\n" )
+    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
+                ("concurrency",
+                 "ms per req",
+                 "Failures",
+                 "50%",
+                 "80%",
+                 "longest" ) )
 
     for i in range( 1, 50, 10 ):
         num = 1000
-        do_ab( num, i, hostname );
-    
+        do_ab( num, i, hostname )
+        
     for i in range( 100, 2000, 100 ):
+        num = 2000
+        do_ab( num, i, hostname )
 
-        num = 2000;
-        do_ab( num, i, hostname );
 
     fout.close();
     print ""
