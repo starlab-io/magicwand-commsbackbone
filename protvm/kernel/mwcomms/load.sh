@@ -26,4 +26,4 @@ do
     sudo cat $modpath/sections/$s # need root access for this...
 done
 
-tail -f /var/log/kern.log
+sudo tail -f /var/log/kern.log
