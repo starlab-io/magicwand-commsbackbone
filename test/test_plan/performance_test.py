@@ -7,10 +7,10 @@ import resource
 import argparse
 
 
-def do_ab( n, c, hostname ):
 
-    global fout
-    
+
+def do_ab( n, c, hostname, fout ):
+
     print "\nRunning: ab -n " + str(n) + " -c " + str(c) + "\n"
     
     process = subprocess.Popen( ["ab", "-n " + str(n), "-c " + str(c), "http://" + hostname + "/" ],
@@ -43,27 +43,72 @@ def do_ab( n, c, hostname ):
 
     process.kill()
 
+    
+def concurrency_loop():
 
+    fout = open( file_name + ".txt", 'w' );
+
+    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
+                ("concurrency",
+                 "ms per req",
+                 "Failures",
+                 "50%",
+                 "80%",
+                 "longest" ) )
+
+    for i in range( 1, 50, 10, fout ):
+        num = 1000
+        do_ab( num, i, hostname )
+        
+    for i in range( 100, 400, 100, fout ):
+        num = 2000
+        do_ab( num, i, hostname )
+
+
+    fout.close();
+
+
+
+def do_ab_gnu( t, c, hostname ):
+
+    if not os.path.exists( "./data" ):
+        os.makedirs( "./data" )
+
+    if not os.path.exists( "./graphs" ):
+        os.makedirs( "./graphs" )
+    
+    call = ["ab", "-t " + str(t), "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
+
+    
+    process = subprocess.call( call );
+
+    call = ["gnuplot", "scatter.gnu"]
+
+    subprocess.call( call )
+
+    os.rename( "./graphs/timeseries.png", "./graphs/" + file_name + "_" + str(c) + ".png" )
+    
+    
 def main():
 
-    global fout
+    global file_name
 
     parser = argparse.ArgumentParser(description="Run ab benchmarks for plot data")
 
-
-    parser.add_argument('-o', "--output", required=True, nargs='?',
-                        help='Name for output file' )
-
-    parser.add_argument('hostname', nargs='?',
-                        help="Hostname to connect to e.g. \"http://<hostname>/\"" )
+    group = parser.add_mutually_exclusive_group( required=True )
+    group.add_argument( '--raw' , action='store_true')
+    group.add_argument( '--rump', action='store_true' )
+    
+    parser.add_argument( 'hostname', nargs='?',
+                         help="Hostname to connect to e.g. \"http://<hostname>/\"" )
 
     args = parser.parse_args()
 
+    if args.rump is True:
+        file_name = "rump"
+    else:
+        file_name = "raw"
     
-    #if args.o is null or args.hostname is null:
-        #parser.print_help()
-    
-    f_name = args.output
     hostname = args.hostname
     
     print "\n", hostname, " resolves to " + socket.gethostbyname( hostname ), "\n";
@@ -83,26 +128,12 @@ def main():
 
     resource.setrlimit( resource.RLIMIT_NOFILE, [ 8000, prev_rlimit[1] ] )
 
-    fout = open( f_name, 'w' );
+    for i in [1, 10, 50, 100]:
 
-    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
-                ("concurrency",
-                 "ms per req",
-                 "Failures",
-                 "50%",
-                 "80%",
-                 "longest" ) )
-
-    for i in range( 1, 50, 10 ):
-        num = 1000
-        do_ab( num, i, hostname )
+        t = 30
         
-    for i in range( 100, 400, 100 ):
-        num = 2000
-        do_ab( num, i, hostname )
+        do_ab_gnu( t, i, hostname )
 
-
-    fout.close();
     print ""
 
 main()
