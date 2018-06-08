@@ -19,7 +19,7 @@ def do_ab( n, c, hostname ):
     for line in process.stdout:
         if "Failed requests:" in line:
             failed = line.split()[2]
-        if "Time per request:" in line and "[ms] (mean)" in line:
+        if "Time per request:" in line and "[ms] (mean, across" in line:
             time = line.split()[3]
         if "Concurrency Level:" in line:
             concurrency = line.split()[2]
@@ -39,6 +39,7 @@ def do_ab( n, c, hostname ):
                   percentile_50,
                   percentile_80,
                   longest_request ) );
+    fout.flush()
 
     process.kill()
 
@@ -50,15 +51,19 @@ def main():
     parser = argparse.ArgumentParser(description="Run ab benchmarks for plot data")
 
 
-    parser.add_argument('-o', nargs='?',
-                        help='Name for output file')
+    parser.add_argument('-o', "--output", required=True, nargs='?',
+                        help='Name for output file' )
 
     parser.add_argument('hostname', nargs='?',
                         help="Hostname to connect to e.g. \"http://<hostname>/\"" )
 
     args = parser.parse_args()
+
     
-    f_name = args.o
+    #if args.o is null or args.hostname is null:
+        #parser.print_help()
+    
+    f_name = args.output
     hostname = args.hostname
     
     print "\n", hostname, " resolves to " + socket.gethostbyname( hostname ), "\n";
@@ -92,7 +97,7 @@ def main():
         num = 1000
         do_ab( num, i, hostname )
         
-    for i in range( 100, 2000, 100 ):
+    for i in range( 100, 400, 100 ):
         num = 2000
         do_ab( num, i, hostname )
 
