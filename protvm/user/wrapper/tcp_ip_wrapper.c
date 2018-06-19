@@ -58,7 +58,6 @@
 //
 #define USE_MWCOMMS 1
 
-
 //
 // Which send() implementation should we use? This choice has big
 // implications for performance.
@@ -93,6 +92,9 @@ static int
 
 static int
 (*libc_accept)(int fd, struct sockaddr * sockaddr, socklen_t * socklen) = NULL;
+
+static int
+(*libc_accept4)(int fd, struct sockaddr * sockaddr, socklen_t * socklen, int flags) = NULL;
 
 static int
 (*libc_connect)(int fd, const struct sockaddr * addr, socklen_t addrlen ) = NULL;
@@ -206,7 +208,6 @@ mwcomms_is_mwsocket( IN int Fd )
 #if (!USE_MWCOMMS)
     goto ErrorExit;
 #else
-
     if ( Fd < 0 )
     {
         goto ErrorExit;
@@ -452,7 +453,6 @@ socket( int Domain,
         goto ErrorExit;
     }
 
-#if USE_MWCOMMS
     mwsocket_create_args_t create;
 
     create.domain   = xe_net_get_mt_protocol_family( Domain );
@@ -491,7 +491,6 @@ socket( int Domain,
                Domain, Type, Protocol, create.outfd );
 
     rc = create.outfd;
-#endif
 
 ErrorExit:
     errno = err;
@@ -502,8 +501,13 @@ ErrorExit:
 int
 close( int Fd )
 {
-    log_write( LOG_NOTICE, "close(%d)\n", Fd );
-    return libc_close( Fd );
+    int rc = 0;
+    int err = 0;
+    rc = libc_close( Fd );
+    err = errno;
+    log_write( LOG_NOTICE, "libc_close(%d) ==> %d\n", Fd, rc );
+    errno = err;
+    return rc;
 }
 
 
@@ -651,6 +655,14 @@ accept4( int               SockFd,
     int newfd = 0;
     int err = 0;
 
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        rc = libc_accept4( SockFd, SockAddr, SockLen, Flags );
+        err = errno;
+        log_write( LOG_INFO, "libc_accept4(%d, ..., 0x%x) ==> %d\n", SockFd, Flags, rc );
+        goto ErrorExit;
+    }
+
     log_write( LOG_WARN, "accept4(%d, ..., 0x%x)\n", SockFd, Flags );
 
     newfd = accept( SockFd, SockAddr, SockLen );
@@ -688,9 +700,6 @@ accept4( int               SockFd,
                        newfd );
             goto ErrorExit;
         }
-//        log_write( LOG_WARN,
-//                   "accept4(%d,...) dropping flag SOCK_CLOEXEC for new socket %d\n",
-//                   SockFd, newfd );
     }
 
     // Success
@@ -722,17 +731,17 @@ recvfrom( int               SockFd,
     int err = 0;
     ssize_t rc = 0;
 
-    // We write an mt_request_socket_recv_t, but could get back either
-    // a mt_response_socket_recv_t or mt_response_socket_recvfrom_t.
-    
-    bzero( &response, sizeof(response) );
-
     if ( !mwcomms_is_mwsocket(SockFd) )
     {
         rc = libc_recvfrom( SockFd, Buf, Len, Flags, SrcAddr, AddrLen );
         err = errno;
         goto ErrorExit;
     }
+
+    // We write an mt_request_socket_recv_t, but could get back either
+    // a mt_response_socket_recv_t or mt_response_socket_recvfrom_t.
+    
+    bzero( &response, sizeof(response) );
 
     log_write( LOG_DEBUG, "recvfrom(%d, buf, %d, %d, ... )\n", SockFd, (int)Len, Flags );
     mwcomms_init_request( &request,
@@ -878,7 +887,6 @@ readv( int Fd, const struct iovec * Iov, int IovCt )
 
 ErrorExit:
     log_write( LOG_INFO, "readv(%d, ...)) ==> %d / %d\n", Fd, (int)tot, err );
-
     errno = err;
     return tot;
 }
@@ -926,7 +934,9 @@ connect( int                     SockFd,
     rc = response.base.status;
 
 ErrorExit:
-    log_write( LOG_INFO, "connect(%d,...) ==> %d\n", SockFd, rc );
+    log_write( LOG_INFO, "connect(%d,...) ==> %d / %s:%d\n", SockFd, rc,
+               inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
+               ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
     return rc;
 }
 
@@ -1580,7 +1590,6 @@ getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
     populate_sockaddr_in( (struct sockaddr_in *) Addr,
                           &response.socket_getname.sockaddr );
 
-
 ErrorExit:
     log_write( LOG_INFO, "getsockname(%d,...) ==> %d / %s:%d\n",
                SockFd, rc,
@@ -1825,6 +1834,7 @@ init_wrapper( void )
     get_libc_symbol( (void **) &libc_bind,     "bind"     );
     get_libc_symbol( (void **) &libc_listen,   "listen"   );
     get_libc_symbol( (void **) &libc_accept,   "accept"   );
+    get_libc_symbol( (void **) &libc_accept4,  "accept4"  );
     get_libc_symbol( (void **) &libc_connect,  "connect"  );
 
     get_libc_symbol( (void **) &libc_send,     "send"     );

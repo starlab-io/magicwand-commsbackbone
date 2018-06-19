@@ -1276,8 +1276,8 @@ ErrorExit:
     {
         // MYASSERT( ins->locked ); // Valid in single-threaded usage
         ins->curr_req = NULL;
-        mutex_unlock( &ins->request_lock );
         ins->locked = false;
+        mutex_unlock( &ins->request_lock );
     }
     return rc;
 }
