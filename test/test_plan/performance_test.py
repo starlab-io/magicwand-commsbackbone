@@ -11,15 +11,17 @@ import argparse
 
 def do_ab( n, c, hostname, fout ):
 
-    print "\nRunning: ab -n " + str(n) + " -c " + str(c) + "\n"
+    call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "http://" + hostname + "/" ]
     
-    process = subprocess.Popen( ["ab", "-n " + str(n), "-c " + str(c), "http://" + hostname + "/" ],
+    print "\nRunning: " + str( call )
+    
+    process = subprocess.Popen( call,
                                 stdout=subprocess.PIPE );
 
     for line in process.stdout:
         if "Failed requests:" in line:
             failed = line.split()[2]
-        if "Time per request:" in line and "[ms] (mean, across" in line:
+        if "Time per request:" in line and "[ms] (mean)" in line:
             time = line.split()[3]
         if "Concurrency Level:" in line:
             concurrency = line.split()[2]
@@ -44,10 +46,16 @@ def do_ab( n, c, hostname, fout ):
     process.kill()
 
     
-def concurrency_loop():
+def plot_line_graph():
 
-    fout = open( file_name + ".txt", 'w' );
+    if not os.path.exists( "./data" ):
+        os.makedirs( "./data" )
 
+    if not os.path.exists( "./graphs" ):
+        os.makedirs( "./graphs" )
+
+    fout = open( "data/line.dat", 'w' );
+    
     fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
                 ("concurrency",
                  "ms per req",
@@ -56,27 +64,33 @@ def concurrency_loop():
                  "80%",
                  "longest" ) )
 
-    for i in range( 1, 50, 10, fout ):
+    for i in range( 10, 50, 1 ):
         num = 1000
-        do_ab( num, i, hostname )
+        do_ab( num, i, hostname, fout )
         
-    for i in range( 100, 400, 100, fout ):
-        num = 2000
-        do_ab( num, i, hostname )
+    for i in range( 100, 2000, 50 ):
+        num = i*5
+        do_ab( num, i, hostname, fout )
 
+    call = [ "gnuplot", "line.gnu" ]
+
+    subprocess.call( call )
+    
+    os.rename( "./graphs/line.png", "./graphs/" + file_name + ".png" )
+    os.rename( "./data/line.dat", "./data/" + file_name + ".dat" )
 
     fout.close();
 
 
 
-def do_ab_gnu( t, c, hostname ):
+def do_ab_gnuplot( t, c, hostname ):
 
     if not os.path.exists( "./data" ):
         os.makedirs( "./data" )
 
     if not os.path.exists( "./graphs" ):
         os.makedirs( "./graphs" )
-    
+        
     call = ["ab", "-t " + str(t), "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
 
     
@@ -102,13 +116,17 @@ def main():
     parser.add_argument( 'hostname', nargs='?',
                          help="Hostname to connect to e.g. \"http://<hostname>/\"" )
 
+    parser.add_argument( '--line', action='store_true', default=False )
+
     args = parser.parse_args()
 
+    
     if args.rump is True:
         file_name = "rump"
     else:
         file_name = "raw"
-    
+        
+    global hostname
     hostname = args.hostname
     
     print "\n", hostname, " resolves to " + socket.gethostbyname( hostname ), "\n";
@@ -124,15 +142,17 @@ def main():
         exit(1);
 
     prev_rlimit = resource.getrlimit( resource.RLIMIT_NOFILE );
-    print "current rlimit: ", prev_rlimit, " setting to 8000"
+    print "current rlimit: ", prev_rlimit, " setting to " + str( prev_rlimit[1] )
 
-    resource.setrlimit( resource.RLIMIT_NOFILE, [ 8000, prev_rlimit[1] ] )
+    resource.setrlimit( resource.RLIMIT_NOFILE, [ prev_rlimit[1], prev_rlimit[1] ] )
 
-    for i in [1, 10, 50, 100]:
 
-        t = 30
-        
-        do_ab_gnu( t, i, hostname )
+    if args.line is True:
+        plot_line_graph();
+    else:
+        for i in [1, 10, 50, 100]:
+            t = 30
+            do_ab_gnuplot( t, i, hostname )
 
     print ""
 
