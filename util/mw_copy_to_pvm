@@ -20,14 +20,24 @@ docmd() {
    $*
 }
 
-docmd scp -rq $MWROOT/protvm     $PVM_USER@$PVM_IP:$MWROOT/protvm
+COPY_CMD='rsync -avzr'
+
+docmd ssh $PVM_USER@$PVM_IP mkdir -p $MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-docmd scp -rq $MWROOT/common     $PVM_USER@$PVM_IP:$MWROOT/common
+
+docmd $COPY_CMD  $MWROOT/protvm     $PVM_USER@$PVM_IP:$MWROOT
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi
+
+docmd $COPY_CMD $MWROOT/common     $PVM_USER@$PVM_IP:$MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
@@ -35,21 +45,21 @@ if [ $RC -ne 0 ]; then
 fi
 
 
-docmd scp -rq $MWROOT/util       $PVM_USER@$PVM_IP:$MWROOT/util
+docmd $COPY_CMD $MWROOT/util       $PVM_USER@$PVM_IP:$MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-docmd scp -rq $MWROOT/exports    $PVM_USER@$PVM_IP:$MWROOT/exports
+docmd $COPY_CMD $MWROOT/exports    $PVM_USER@$PVM_IP:$MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-docmd scp -rq $MWROOT/test    $PVM_USER@$PVM_IP:$MWROOT/test
+docmd $COPY_CMD $MWROOT/test $PVM_USER@$PVM_IP:$MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC

@@ -14,10 +14,12 @@ RUN apt install -y gcc make
 
 COPY ./config/httpd.conf /usr/local/apache2/conf/httpd.conf
 COPY ./config/httpd-foreground /usr/local/bin/
-COPY ./config/index.html /usr/local/apache2/htdocs/
 RUN mkdir -p /code/shim/common
 RUN mkdir -p /code/shim/protvm/user/wrapper
 COPY ./shim/ /code/shim
 WORKDIR /code/shim/protvm/user/wrapper/
 RUN make clean all
 RUN mkdir -p /var/log/output
+
+#Use this command to add custom index.html
+#COPY ./config/index.html /usr/local/apache2/htdocs/
