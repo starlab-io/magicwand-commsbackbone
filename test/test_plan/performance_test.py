@@ -83,7 +83,7 @@ def plot_line_graph():
 
 
 
-def do_ab_gnuplot( t, c, hostname ):
+def do_ab_gnuplot_scatter( t, c, hostname ):
 
     if not os.path.exists( "./data" ):
         os.makedirs( "./data" )
@@ -101,6 +101,7 @@ def do_ab_gnuplot( t, c, hostname ):
     subprocess.call( call )
 
     os.rename( "./graphs/timeseries.png", "./graphs/" + file_name + "_" + str(c) + ".png" )
+    os.rename( "./data/testing.tsv", "./data/" + file_name + "_" + str(c) + ".tsv" )
     
     
 def main():
@@ -152,7 +153,7 @@ def main():
     else:
         for i in [1, 10, 50, 100]:
             t = 30
-            do_ab_gnuplot( t, i, hostname )
+            do_ab_gnuplot_scatter( t, i, hostname )
 
     print ""
 
