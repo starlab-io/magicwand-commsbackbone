@@ -83,7 +83,7 @@ def plot_line_graph():
 
 
 
-def do_ab_gnuplot_scatter( t, c, hostname ):
+def plot_scatter_plot( t, c, hostname ):
 
     if not os.path.exists( "./data" ):
         os.makedirs( "./data" )
@@ -103,6 +103,8 @@ def do_ab_gnuplot_scatter( t, c, hostname ):
     os.rename( "./graphs/timeseries.png", "./graphs/" + file_name + "_" + str(c) + ".png" )
     os.rename( "./data/testing.tsv", "./data/" + file_name + "_" + str(c) + ".tsv" )
     
+
+
     
 def main():
 
@@ -117,7 +119,7 @@ def main():
     parser.add_argument( 'hostname', nargs='?',
                          help="Hostname to connect to e.g. \"http://<hostname>/\"" )
 
-    parser.add_argument( '--line', action='store_true', default=False )
+#    parser.add_argument( '--line', action='store_true', default=False )
 
     args = parser.parse_args()
 
@@ -148,12 +150,11 @@ def main():
     resource.setrlimit( resource.RLIMIT_NOFILE, [ prev_rlimit[1], prev_rlimit[1] ] )
 
 
-    if args.line is True:
-        plot_line_graph();
-    else:
-        for i in [1, 10, 50, 100]:
-            t = 30
-            do_ab_gnuplot_scatter( t, i, hostname )
+    plot_line_graph();
+
+    for i in [1, 10, 50, 100]:
+        t = 30
+        plot_scatter_plot( t, i, hostname )
 
     print ""
 
