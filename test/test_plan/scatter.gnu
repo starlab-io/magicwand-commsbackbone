@@ -1,30 +1,39 @@
-# Let's output to a jpeg file
 set terminal png size 1280,720
-# This sets the aspect ratio of the graph
-set size 1, 1
-# The file we'll write to
+#set size 1, 1
 set output "graphs/timeseries.png"
-# The graph title
 set title "Benchmark testing"
-# Where to place the legend/key
 set key left top
 
-set logscale y
-
-# Draw gridlines oriented on the y axis
-set grid y
-# Specify that the x-series data is time data
-set xdata time
-# Specify the *input* format of the time data
-set timefmt "%s"
-# Specify the *output* format for the x-axis tick labels
-set format x "%S"
-# Label the x-axis
-set xlabel 'seconds'
-# Label the y-axis
-set ylabel "response time (ms)"
-# Tell gnuplot to use tabs as the delimiter instead of spaces (default)
 set datafile separator '\t'
-# Plot the data
+
+stats 'data/testing.tsv' using 2:5 prefix "STATS"
+
+#set label "TEST" at graph 0 , 0
+
+#set label gprintf("MAX = %1.2f msec", (STATS_max/1000000.0)) at graph 0, 1
+#set label gprintf("MIN = %1.2f msec", (STATS_min/1000000.0)) at graph 0.5,0
+#set label gprintf("AV = %1.2f msec", (STATS_mean/1000000.0)) at graph 5,300
+#set label gprintf("STD DEV = %1.2f msec", (STATS_stddev/1000000.0)) at graph 5,275
+
+set yrange [0:300]
+set xrange [STATS_min_x:STATS_max_x]
+
+set grid y
+
+set xdata time
+
+set timefmt "%s"
+
+#set format x "%S"
+
+set xlabel 'seconds'
+
+set ylabel "response time (ms)"
+
+
+
+
+
 plot "data/testing.tsv" every ::2 using 2:5 title 'response time' with points
+
 exit
