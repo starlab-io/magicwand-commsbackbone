@@ -11,7 +11,7 @@ import argparse
 
 def do_ab( n, c, hostname, fout ):
 
-    call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "http://" + hostname + "/" ]
+    call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "-s 100", "http://" + hostname + "/" ]
     
     print "\nRunning: " + str( call )
     
@@ -68,7 +68,7 @@ def plot_line_graph():
         num = 1000
         do_ab( num, i, hostname, fout )
         
-    for i in range( 100, 2000, 50 ):
+    for i in range( 100, 900, 50 ):
         num = i*5
         do_ab( num, i, hostname, fout )
 
@@ -91,8 +91,9 @@ def plot_scatter_plot( t, c, hostname ):
     if not os.path.exists( "./graphs" ):
         os.makedirs( "./graphs" )
         
-    call = ["ab", "-t " + str(t), "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
+    call = ["ab", "-t " + str(t), "-s 100", "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
 
+    print "Running: " + str( call )
     
     process = subprocess.call( call );
 
