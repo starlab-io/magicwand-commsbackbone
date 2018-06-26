@@ -8,7 +8,6 @@ import argparse
 
 
 
-
 def do_ab( n, c, hostname, fout ):
 
     call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "-s 100", "http://" + hostname + "/" ]
@@ -64,12 +63,10 @@ def plot_line_graph():
                  "80%",
                  "longest" ) )
 
-    for i in range( 10, 50, 1 ):
-        num = 1000
-        do_ab( num, i, hostname, fout )
-        
-    for i in range( 100, 900, 50 ):
-        num = i*5
+    num = 50000
+    do_ab( num, 1, hostname, fout )
+    
+    for i in range( 10, 910, 10 ):
         do_ab( num, i, hostname, fout )
 
     call = [ "gnuplot", "line.gnu" ]
