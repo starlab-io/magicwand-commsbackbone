@@ -63,7 +63,7 @@ def plot_line_graph():
                  "80%",
                  "longest" ) )
 
-    num = 50000
+    num = 20000
     do_ab( num, 1, hostname, fout )
     
     for i in range( 10, 910, 10 ):
