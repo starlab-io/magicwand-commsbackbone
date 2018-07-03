@@ -10,6 +10,9 @@ import argparse
 
 def do_ab( n, c, hostname, fout ):
 
+    if sanity is True:
+        n = c + 2
+
     call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "-s 100", "http://" + hostname + "/" ]
     
     print "\nRunning: " + str( call )
@@ -107,6 +110,8 @@ def plot_scatter_plot( t, c, hostname ):
 def main():
 
     global file_name
+    global sanity
+    global hostname
 
     parser = argparse.ArgumentParser(description="Run ab benchmarks for plot data")
 
@@ -117,7 +122,7 @@ def main():
     parser.add_argument( 'hostname', nargs='?',
                          help="Hostname to connect to e.g. \"http://<hostname>/\"" )
 
-#    parser.add_argument( '--line', action='store_true', default=False )
+    parser.add_argument( '--sanity', action='store_true', default=False )
 
     args = parser.parse_args()
 
@@ -127,9 +132,10 @@ def main():
     else:
         file_name = "raw"
         
-    global hostname
     hostname = args.hostname
     
+    sanity = args.sanity
+
     print "\n", hostname, " resolves to " + socket.gethostbyname( hostname ), "\n";
 
     FNULL = open('/dev/null', 'r')
