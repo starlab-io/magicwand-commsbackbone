@@ -52,6 +52,10 @@
 
 #define DEV_FILE "/dev/mwcomms"
 
+
+//REMOVE FOR PRODUCTION
+#include"trace-marker.h"
+
 //
 // 0 - wrap operations and use native sockets only
 // 1 - wrap operations and use mwcomms driver for TCP traffic
@@ -205,6 +209,8 @@ mwcomms_is_mwsocket( IN int Fd )
 {
     bool answer = false;
 
+    trace_printk( "entering mwcomms_is_socket()" );
+    
 #if (!USE_MWCOMMS)
     goto ErrorExit;
 #else
@@ -226,6 +232,9 @@ mwcomms_is_mwsocket( IN int Fd )
 #endif
 
 ErrorExit:
+
+    trace_printk( "leaving mwcomms_is_socket()" );
+    
     return answer;
 }
 
@@ -240,6 +249,8 @@ mwcomms_write_request( IN  int                     MwFd,
     ssize_t ct = 0;
     struct timespec remain_time = { .tv_sec = 0, .tv_nsec = 1 };
     int err = 0;
+
+    trace_printk( "entering mwcomms_write_request()" );
 
 #if (!USE_MWCOMMS)
     // no processing at all
@@ -353,6 +364,9 @@ mwcomms_write_request( IN  int                     MwFd,
 
 ErrorExit:
     errno = err;
+
+    trace_printk( "leaving mwcomms_write_request()" );
+    
     return rc;
 }
 
@@ -441,6 +455,8 @@ socket( int Domain,
     int rc = 0;
     int err = 0;
 
+    trace_printk( "entering socket()" );
+    
     // See socket(2); N.B. Type can be OR-ed with specific flags
     if ( AF_INET != Domain
          || ( 0 == (SOCK_STREAM & Type ) )
@@ -493,6 +509,7 @@ socket( int Domain,
     rc = create.outfd;
 
 ErrorExit:
+    trace_printk( "leaving socket()" );
     errno = err;
     return rc;
 }
@@ -520,6 +537,8 @@ bind( int                     SockFd,
     mt_response_generic_t  response = {0};
     ssize_t rc = 0;
 
+    trace_printk( "entering bind()" );
+    
     if ( !mwcomms_is_mwsocket(SockFd) )
     {
         rc = libc_bind( SockFd, SockAddr, AddrLen );
@@ -550,6 +569,9 @@ bind( int                     SockFd,
     }
 
 ErrorExit:
+
+    trace_printk( "leaving bind()" );
+    
     log_write( LOG_DEBUG, "bind(%d, ...) ==> %d\n", SockFd, (int)rc );
     return rc;
 }
@@ -561,6 +583,8 @@ listen( int SockFd, int BackLog )
     mt_request_generic_t   request;
     mt_response_generic_t  response = {0};
     ssize_t rc = 0;
+
+    trace_printk( "entering listen()" );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -590,6 +614,7 @@ listen( int SockFd, int BackLog )
     }
     
 ErrorExit:
+    trace_printk( "leaving listen()" );
     log_write( LOG_DEBUG, "listen(%d, ...) ==> %d\n", SockFd, (int)rc );
     return rc;
 }
@@ -605,6 +630,8 @@ accept( int               SockFd,
     ssize_t rc = 0;
     int e = 0;
 
+    trace_printk( "entering accept()" );
+    
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         rc = libc_accept( SockFd, SockAddr, SockLen );
@@ -641,6 +668,7 @@ ErrorExit:
     e = errno;
     log_write( LOG_INFO, "accept(%d, ...) ==> %d\n", SockFd, (int)rc );
     errno = e;
+    trace_printk( "leaving accept()" );
     return rc;
 }
 
@@ -655,6 +683,8 @@ accept4( int               SockFd,
     int newfd = 0;
     int err = 0;
 
+    trace_printk( "entering accept4()" );
+    
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         rc = libc_accept4( SockFd, SockAddr, SockLen, Flags );
@@ -713,6 +743,9 @@ ErrorExit:
         (void) close( newfd );
     }
     errno = err;
+
+    trace_printk( "leaving accept4()" );
+    
     return rc;
 }
 
@@ -731,6 +764,8 @@ recvfrom( int               SockFd,
     int err = 0;
     ssize_t rc = 0;
 
+    trace_printk( "entering recvfrom()" );
+    
     if ( !mwcomms_is_mwsocket(SockFd) )
     {
         rc = libc_recvfrom( SockFd, Buf, Len, Flags, SrcAddr, AddrLen );
@@ -819,6 +854,9 @@ ErrorExit:
                SockFd, (int)Len, Flags, (int)rc, err );
     //hex_dump( "Received data", response.socket_recv.bytes, *received );
     errno = err;
+
+    trace_printk( "leaving recvfrom()" );
+    
     return rc;
 }
 
@@ -838,6 +876,8 @@ read( int Fd, void *Buf, size_t Count )
     int rc = 0;
     int err = 0;
 
+    trace_printk( "entering read()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         if ( ( rc = libc_read( Fd, Buf, Count ) ) < 0 )
@@ -855,6 +895,9 @@ read( int Fd, void *Buf, size_t Count )
 ErrorExit:
     log_write( LOG_INFO, "read(%d, buf, %d ) ==> %d / %d\n", Fd, (int)Count, rc, err );
     errno = err;
+
+    trace_printk( "leaving read()" );
+    
     return rc;
 }
 
@@ -866,6 +909,8 @@ readv( int Fd, const struct iovec * Iov, int IovCt )
     ssize_t tot = 0;
     int err = 0;
 
+    trace_printk( "entering readv()" );
+    
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_readv( Fd, Iov, IovCt );
@@ -888,6 +933,9 @@ readv( int Fd, const struct iovec * Iov, int IovCt )
 ErrorExit:
     log_write( LOG_INFO, "readv(%d, ...)) ==> %d / %d\n", Fd, (int)tot, err );
     errno = err;
+
+    trace_printk( "leaving readv()" );
+    
     return tot;
 }
 
@@ -900,6 +948,8 @@ connect( int                     SockFd,
    mt_request_generic_t request;
    mt_response_generic_t response = {0};
    int rc = 0;
+
+   trace_printk( "entering connect()" );
    
    if ( !mwcomms_is_mwsocket( SockFd ) )
    {
@@ -937,6 +987,9 @@ ErrorExit:
     log_write( LOG_INFO, "connect(%d,...) ==> %d / %s:%d\n", SockFd, rc,
                inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
                ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
+
+    trace_printk( "leaving connect()" );
+    
     return rc;
 }
 
@@ -956,6 +1009,8 @@ send( int          SockFd,
     uint8_t * pbuf = (uint8_t *)Buf;
     int err = 0;
     bool final = false;
+
+    trace_printk( "entering batch send()" );
     
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -1049,6 +1104,9 @@ ErrorExit:
     log_write( LOG_INFO, "send( %d, buf, %d, %x ) ==> %d / %d\n",
                SockFd, (int)Len, Flags, (int)rc, err );
     errno = err;
+
+    trace_printk( "leaving batch send()" );
+    
     return rc;
 }
 #endif // SEND_BATCH
@@ -1266,6 +1324,8 @@ write( int Fd, const void *Buf, size_t Count )
 {
     ssize_t rc = 0;
 
+    trace_printk( "entering write()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_write( Fd, Buf, Count );
@@ -1276,6 +1336,9 @@ write( int Fd, const void *Buf, size_t Count )
 
 ErrorExit:
     log_write( LOG_INFO, "write(%d, buf, %d ) ==> %d\n", Fd, (int)Count, (int)rc );
+
+    trace_printk( "leaving write()" );
+    
     return rc;
 }
 
@@ -1286,6 +1349,8 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
     ssize_t rc = 0;
     ssize_t tot = 0;
     int err = 0;
+
+    trace_printk( "entering writev()" );
     
     for ( int i = 0; i < IovCt; ++i )
     {
@@ -1316,6 +1381,9 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
 ErrorExit:
     log_write( LOG_INFO, "writev(%d, ...)) ==> %d / %d\n", Fd, (int)tot, err );
     errno = err;
+
+    trace_printk( "leaving writev()" );
+    
     return tot;
 }
 
@@ -1327,6 +1395,8 @@ shutdown( int SockFd, int How )
     mt_response_generic_t response = {0};
     ssize_t rc = 0;
     int err = 0;
+
+    trace_printk( "entering shutdown()" );
 
     errno = 0;
 
@@ -1364,6 +1434,9 @@ shutdown( int SockFd, int How )
 ErrorExit:
     log_write( LOG_INFO, "shutdown( %d, %d ) ==> %d / %d\n", SockFd, How, (int)rc, err );
     errno = err;
+
+    trace_printk( "leaving shutdown()" );
+    
     return rc;
 }
 
@@ -1445,6 +1518,8 @@ getsockopt( int         Fd,
     int err = 0;
     mwsocket_attrib_t attr = {0};
 
+    trace_printk( "entering getsockopt()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_getsockopt( Fd, Level, OptName, OptVal, OptLen );
@@ -1487,6 +1562,9 @@ ErrorExit:
     log_write( LOG_INFO, "getsockopt( 0x%x, %d, %d, %p[%d], %p[%d] ) => %d\n",
                Fd, Level, OptName, OptVal, *(int*)OptVal, OptLen, *OptLen, rc );
     errno = err;
+
+    trace_printk( "leaving getsockopt()" );
+    
     return rc;
 }
 
@@ -1501,6 +1579,8 @@ setsockopt( int          Fd,
     int rc = 0;
     mwsocket_attrib_t attr = {0};
     int err = 0;
+
+    trace_printk( "entering setsockopt()" );
 
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
@@ -1546,6 +1626,9 @@ ErrorExit:
     log_write( LOG_INFO, "setsockopt( 0x%x, %d, %d, %p=%x, %d ) => %d\n",
                Fd, Level, OptName, OptVal, *(uint32_t *)OptVal, OptLen, rc );
     errno = err;
+
+    trace_printk( "leaving setsockopt()" );
+    
     return rc;
 }
 
@@ -1557,6 +1640,8 @@ getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
     mt_request_generic_t request = {0};
     mt_response_generic_t response = {0};
     int err = 0;
+
+    trace_printk( "entering getsockname()" );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -1596,6 +1681,9 @@ ErrorExit:
                inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
                ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
     errno = err;
+
+    trace_printk( "leaving getsockname()" );
+    
     return rc;
 }
 
@@ -1608,6 +1696,8 @@ getpeername(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
     mt_response_generic_t response = {0};
     int err = 0;
 
+    trace_printk( "entering getpeername()" );
+    
     log_write( LOG_DEBUG, "getpeername( %x, ... )\n", SockFd );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
@@ -1649,6 +1739,9 @@ ErrorExit:
               ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
 
    errno = err;
+
+   trace_printk( "leaving getpeername()" );
+   
    return rc;
 }
 
@@ -1663,6 +1756,8 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     mwsocket_attrib_t attr = {0};
     int oldflags = 0;
     int newflags = 0;
+
+    trace_printk( "entering fcntl()" );
 
     va_start( ap, Cmd );
     arg = va_arg( ap, void * );
@@ -1723,6 +1818,9 @@ ErrorExit:
     {
         errno = err;
     }
+
+    trace_printk( "leaving fcntl()" );
+    
     return rc;
 }
 
@@ -1792,6 +1890,17 @@ init_wrapper( void )
     }
 
     log_write( LOG_INFO, "Intercept module loaded\n" );
+
+
+#ifdef ENABLE_TRACING
+    
+    log_write( LOG_DEBUG, "Loading trace_maker\n" );
+    rc = trace_marker_init();
+    if ( rc != 0 )
+    {
+        log_write( LOG_DEBUG, "Failed to load trace maker file\n" );
+    }
+#endif //ENABLE_TRACING
 
     //
     // Open the kernel module's device (mwcomms)
