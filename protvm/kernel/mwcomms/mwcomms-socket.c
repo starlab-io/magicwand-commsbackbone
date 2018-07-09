@@ -3016,9 +3016,10 @@ mwsocket_read( struct file * File,
                loff_t      * Offset )
 {
     ssize_t rc = 0;
-    mwsocket_active_request_t   * actreq = NULL;
+    mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t     * response = NULL;
     mwsocket_instance_t       * sockinst = NULL;
+    mwsocket_instance_t       * sockinst_old = NULL;
 
     pr_debug( "Processing read()\n" );
 
@@ -3061,14 +3062,23 @@ mwsocket_read( struct file * File,
         rc = mwsocket_await_inbound_connection( actreq, &new );
         if( rc ) { goto ErrorExit; }
 
+        sockinst_old = sockinst;
+
         // Replace the active request with its inbound surrogate
         actreq = new;
         sockinst = actreq->sockinst;
 
-        // Although there may still be an outstanding accept() on the
-        // user socket, it should expect a write next since we're
-        // returning against a read. Change its state underneath it.
-        sockinst->read_expected = false;
+        // Switch semaphores if sockinst changed
+        if( sockinst_old != sockinst )
+        {
+            up( &sockinst_old->request_sem );
+            down_interruptible( &sockinst->request_sem );
+
+            // Although there may still be an outstanding accept() on the
+            // user socket, it should expect a write next since we're
+            // returning against a read. Change its state underneath it.
+            sockinst->read_expected = false;
+        }
     }
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
@@ -3676,14 +3686,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
     }
 
     // Accept: if this is the first accept send request but don't wait for response
-    //The if statement here is commented out because if multiple processes call accept,
-    //an active request still needs to be created and sent to the ins testing is
-    //currently being done to see if this is a viable option the handle multiple processes
-    //calling accept on the same socket as is the behavior of the apache mpm_prefork module
-    //A better solution is to somehow keep process information associated with a response
-    //so we can send responses to the right processes when they are recieved
-//    if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
-//    {
+    if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
+    {
         mt_request_socket_accept_t accept =
             { .base.type    = MtRequestSocketAccept,
               .base.size    = MT_REQUEST_SOCKET_ACCEPT_SIZE,
@@ -3716,9 +3720,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
             MYASSERT( !"mwsocket_send_message() / accept" );
             goto ErrorExit;
         }
+    }
 
-//    }
-    
 ErrorExit:
     if( rc )
     {
