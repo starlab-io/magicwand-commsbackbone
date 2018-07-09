@@ -1,4 +1,4 @@
-#/bin/bash!
+#!/bin/bash
 
 IMAGE_NAME=apache2-performance-image-ins
 CONTAINER_NAME=apache2-performance-container-ins
