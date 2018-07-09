@@ -20,6 +20,10 @@ CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYTRAP
 #CFLAGS +=  -DDEVLOG
 
+#enable ftrace trace_markers for shim shared object
+#CFLAGS += -DENABLE_TRACING
+
+
 # Some programs use "check" versions of certain libc functions, which
 # we may have to wrap for proper exection (since they may contain
 # inline syscalls). For instance, nc.openbsd uses __read_chk, which
@@ -36,11 +40,11 @@ PRE_LOAD_LIB_NAME=tcp_ip_wrapper
 
 all: $(PRE_LOAD_LIB_NAME).so
 
-$(PRE_LOAD_LIB_NAME).so: tcp_ip_wrapper.o logging.o
+$(PRE_LOAD_LIB_NAME).so: tcp_ip_wrapper.o logging.o trace-marker.o
 	$(LD) $(LDFLAGS) $^ -o $@ -ldl
 
 %.o : %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
 clean:
-	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so logging.o
+	rm -f $(TCP_IP_APP_NAME) $(PRE_LOAD_LIB_NAME).o $(PRE_LOAD_LIB_NAME).so logging.o trace-marker.o

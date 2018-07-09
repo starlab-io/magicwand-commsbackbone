@@ -1,0 +1,5 @@
+#!/bin/bash
+
+./performance_test.py --rump 10.30.30.138
+
+./performance_test.py --raw 10.30.30.66
