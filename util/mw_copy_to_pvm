@@ -1,48 +1,72 @@
-#!/bin/bash 
+#!/bin/bash
 
 if [ -z $PVM_IP ]; then
-   echo "Failure: PVM_IP must be defined in env"
-   exit 1
+    echo "Failure: PVM_IP must be defined in env"
+    exit 1
 fi
 
 if [ -z $PVM_USER ]; then
-   echo "Failure: PVM_USER must be defined in env"
-   exit 1
+    echo "Failure: PVM_USER must be defined in env"
+    exit 1
 fi
 
 if [ -z $MWROOT ]; then
-   echo "Failure: MWROOT must be defined in env"
-   exit 1
+    echo "Failure: MWROOT must be defined in env"
+    exit 1
+fi
+
+ssh $PVM_USER@$PVM_IP rsync --version >/dev/null 2>&1
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo "Failure: rsync must be installed on system $PVM_IP"
+    exit 1
 fi
 
 docmd() {
-   echo "Command: $*"
-   $*
+    echo "Command: $*"
+    $*
 }
 
-docmd scp -rq $MWROOT/protvm     $PVM_USER@$PVM_IP:
+COPY_CMD='rsync -avzr'
+
+PVM_MWROOT="/home/${PVM_USER}/ins-production/magicwand-commsbackbone"
+
+docmd ssh $PVM_USER@$PVM_IP mkdir -p $PVM_MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-docmd scp -rq $MWROOT/common     $PVM_USER@$PVM_IP:
+docmd $COPY_CMD $MWROOT/protvm $PVM_USER@$PVM_IP:$PVM_MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-
-docmd scp -rq $MWROOT/util       $PVM_USER@$PVM_IP:
+docmd $COPY_CMD $MWROOT/common $PVM_USER@$PVM_IP:$PVM_MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC
     exit $RC
 fi
 
-docmd scp -rq $MWROOT/exports    $PVM_USER@$PVM_IP:
+docmd $COPY_CMD $MWROOT/util $PVM_USER@$PVM_IP:$PVM_MWROOT
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi
+
+docmd $COPY_CMD $MWROOT/exports $PVM_USER@$PVM_IP:$PVM_MWROOT
+RC=$?
+if [ $RC -ne 0 ]; then
+    echo Error: $RC
+    exit $RC
+fi
+
+docmd $COPY_CMD $MWROOT/test $PVM_USER@$PVM_IP:$PVM_MWROOT
 RC=$?
 if [ $RC -ne 0 ]; then
     echo Error: $RC

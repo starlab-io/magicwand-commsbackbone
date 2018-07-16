@@ -180,6 +180,9 @@ struct thread_info ti; // DEBUG ONLY
 // Response timeout for kernel-initiated poll requests
 #define MONITOR_RESPONSE_TIMEOUT ( HZ * 2 )
 
+// Wait timeout for completion of all in-flight IO before close
+#define CLOSE_WAIT_TIMEOUT ( HZ * 1 )
+
 //
 // How frequently should the poll monitor thread send a request?
 //
@@ -337,9 +340,9 @@ typedef struct _mwsocket_instance
     struct mutex          inbound_lock; // to protect inbound_list
     struct semaphore      inbound_sem;  // to notify of pending inbound
 
-     // Is there an accept() outstanding to the user? Used only in
-     // mwsocket_{read,write} for the MWSOCKET_FLAG_USER sockinst.
-    bool                  user_outstanding_accept;
+    // Is there an accept() outstanding to the user? Used only in
+    // mwsocket_{read,write} for the MWSOCKET_FLAG_USER sockinst.
+    int                   user_outstanding_accept;
 
     // Every time the process creates an mwsocket, that results in a
     // "primary", or "user" mwsocket. There are secondary ones which
@@ -423,6 +426,12 @@ typedef struct _mwsocket_instance
 
     // Latest ID of request that blocks this socket from closing
     atomic64_t          close_blockid; // holds mt_id_t
+
+    // Single thread requests per socket
+    struct semaphore    request_sem;
+
+    // Is request/response state machine valid
+    bool                state_valid;
 
 } mwsocket_instance_t;
 
@@ -746,6 +755,46 @@ ErrorExit:
 
 
 /******************************************************************************
+ * functions to aid in debugging of mwcomms driver code
+ ******************************************************************************/
+
+void
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_debug_dump_sockinst( void )
+{
+    mwsocket_instance_t * curr = NULL;
+    list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
+    {
+        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) ) { continue; }
+
+        pr_info( "%p refct %d file %p proc %d[%s]\n",
+                 curr, atomic_read( &curr->refct ), curr->file,
+                 curr->proc->pid, curr->proc->comm );
+    }
+}
+
+
+void
+MWSOCKET_DEBUG_ATTRIB
+mwsocket_debug_dump_actreq( void )
+{
+    mwsocket_active_request_t * curr = NULL;
+
+    mutex_lock( &g_mwsocket_state.active_request_lock );
+    list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
+    {
+        mt_request_generic_t * request = &curr->rr.request;
+
+        pr_info( "%lx: %p sockinst %p fd %d type %x\n",
+                 (unsigned long)curr->id, curr,
+                 curr->sockinst, curr->sockinst->local_fd,
+                 request->base.type );
+    }
+    mutex_unlock( &g_mwsocket_state.active_request_lock );
+}
+
+
+/******************************************************************************
  * Support functions for interactions between file objects and Xen ring buffer.
  ******************************************************************************/
 
@@ -864,20 +913,7 @@ ErrorExit:
 }
 
 
-void
-MWSOCKET_DEBUG_ATTRIB
-mwsocket_debug_dump_sockinst( void )
-{
-    mwsocket_instance_t * curr = NULL;
-    list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
-    {
-        if( !strcmp( MWSOCKET_MONITOR_THREAD, curr->proc->comm ) ) { continue; }
 
-        pr_info( "%p refct %d file %p proc %d[%s]\n",
-                 curr, atomic_read( &curr->refct ), curr->file,
-                 curr->proc->pid, curr->proc->comm );
-    }
-}
 
 
 // @brief Reference the socket instance
@@ -1071,6 +1107,9 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
 
     mutex_init( &sockinst->inbound_lock );
     sema_init( &sockinst->inbound_sem, 0 );
+    sema_init( &sockinst->request_sem, 1 );
+
+    sockinst->state_valid = true;
 
     init_rwsem( &sockinst->close_lock );
 
@@ -1391,24 +1430,7 @@ ErrorExit:
 }
 
 
-void
-MWSOCKET_DEBUG_ATTRIB
-mwsocket_debug_dump_actreq( void )
-{
-    mwsocket_active_request_t * curr = NULL;
 
-    mutex_lock( &g_mwsocket_state.active_request_lock );
-    list_for_each_entry( curr, &g_mwsocket_state.active_request_list, list_all )
-    {
-        mt_request_generic_t * request = &curr->rr.request;
-
-        pr_info( "%lx: %p sockinst %p fd %d type %x\n",
-                 (unsigned long)curr->id, curr,
-                 curr->sockinst, curr->sockinst->local_fd,
-                 request->base.type );
-    }
-    mutex_unlock( &g_mwsocket_state.active_request_lock );
-}
 
 
 /**
@@ -1884,10 +1906,10 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
             atomic64_read( &ActiveRequest->sockinst->close_blockid );
         if( MT_ID_UNSET_VALUE != id )
         {
-            pr_info( "close() against fd %d [pid %d] waiting for in-flight ID %lx\n",
-                     ActiveRequest->sockinst->local_fd,
-                     ActiveRequest->sockinst->proc->pid,
-                     (unsigned long)id );
+            pr_debug( "close() against fd %d [pid %d] waiting for in-flight ID %lx\n",
+                      ActiveRequest->sockinst->local_fd,
+                      ActiveRequest->sockinst->proc->pid,
+                      (unsigned long)id );
             waiting = true;
         }
 
@@ -1903,25 +1925,28 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
             pr_info( "Wait for in-flight ID %lx was killed\n", (unsigned long)id );
         }
 #else
-        int ct = 0;
-        bool acquired = false;
-        while( ct++ < 2 )
+        if( waiting == true )
         {
-            if( down_write_trylock( &ActiveRequest->sockinst->close_lock ) )
+            int ct = 0;
+            bool acquired = false;
+            while( ct++ < 60 )
             {
-                acquired = true;
-                break;
+                if( down_write_trylock( &ActiveRequest->sockinst->close_lock ) )
+                {
+                    acquired = true;
+                    break;
+                }
+                mwsocket_wait( CLOSE_WAIT_TIMEOUT );
             }
-            mwsocket_wait( GENERAL_RESPONSE_TIMEOUT );
-        }
 
-        if( !acquired )
-        {
-            pr_warning( "Closing socket %d [pid %d] despite outstanding IO \
-                         on it (ID %lx).\n",
-                        ActiveRequest->sockinst->local_fd,
-                        ActiveRequest->sockinst->proc->pid,
-                        (unsigned long)id );
+            if( !acquired )
+            {
+                pr_warning( "Closing socket %d [pid %d] despite outstanding IO \
+                            on it (ID %lx).\n",
+                            ActiveRequest->sockinst->local_fd,
+                            ActiveRequest->sockinst->proc->pid,
+                            (unsigned long)id );
+            }
         }
 #endif
         atomic64_set( &ActiveRequest->sockinst->close_blockid,
@@ -2006,7 +2031,8 @@ mwsocket_await_inbound_connection( IN mwsocket_active_request_t   * ActiveReques
     if( down_interruptible( &sockinst->inbound_sem ) )
     {
         rc = -EINTR;
-        pr_info( "Received interrupt while awaiting inbound connection\n" );
+        sockinst->state_valid = false;
+        pr_debug( "Received interrupt while awaiting inbound connection\n" );
         goto ErrorExit;
     }
 
@@ -2109,6 +2135,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->sockinst->local_fd,
                   ActiveRequest->rr.request.base.type );
     }
+
 
     memcpy( (void *) req,
             &ActiveRequest->rr.request,
@@ -2239,39 +2266,13 @@ ErrorExit:
 
 
 int
-mwcomms_return_reaped_response( mwsocket_active_request_t *Curr_Ar )
-{
-    mt_response_generic_t response = {0};
-    
-    response.base.sig = MT_SIGNATURE_RESPONSE;
-    response.base.type = MT_RESPONSE( Curr_Ar->rr.request.base.type );
-    response.base.size = sizeof( response.base );
-    response.base.id = Curr_Ar->rr.request.base.id;
-    response.base.sockfd = Curr_Ar->rr.request.base.sockfd;
-    response.base.status = -ENOENT;
-    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
-
-    mwsocket_postproc_no_context( Curr_Ar, &response );
-    mwsocket_postproc_emit_netflow( Curr_Ar, &response );
-
-    memcpy( &Curr_Ar->rr.response, &response, response.base.size );
-    Curr_Ar->response_populated = true;
-    complete( &Curr_Ar->arrived );    
-
-    return 0;
-}
-
-
-int
 MWSOCKET_DEBUG_ATTRIB
 mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 {
     int rc = 0;
 
-    if( Dead_INS_Array[0] == 0 )
+    if( Dead_INS_Array[0] != 0 )
     {
-        goto ErrorExit;
-    }
 
         // Handle active requests associated with dead INSes.
         mwsocket_active_request_t * curr_ar = NULL;
@@ -2279,23 +2280,13 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
         list_for_each_entry_safe( curr_ar, next_ar, &g_mwsocket_state.active_request_list, list_all )
         {
             int i = 0;
-            bool ins_match = false;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
+                i++;
 
-            //See if the INS number of this active request mathces the client number of a dead INS
-            for( i = 0; i < MAX_INS_COUNT; i++ )
-            {
-                if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) == Dead_INS_Array[i] )
-                {
-                    ins_match = true;
-                    break;
-                }
-            }
-
-            //If this active request does not match a dead INS move on to the next
-            if( !ins_match )
-            {
+            if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) != Dead_INS_Array[i] )
                 continue;
-            }
 
             if( curr_ar->deliver_response )
             {
@@ -2304,9 +2295,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 
                 bool copy_response = false;
 
-                //If request is accept and is not a usersock
-                if( curr_ar->rr.request.base.type == MtRequestSocketAccept &&
-                    !(curr_ar->sockinst->mwflags & MWSOCKET_FLAG_USER) )
+                if( curr_ar->rr.request.base.type == MtRequestSocketAccept
+                    && !(curr_ar->sockinst->mwflags & MWSOCKET_FLAG_USER) )
                 {
                     // If sibling listener on accept(), disappear
                     mwsocket_destroy_active_request( curr_ar );
@@ -2320,8 +2310,23 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 }
 
                 if( copy_response )
-                {   
-                    mwcomms_return_reaped_response( curr_ar );
+                {
+                    mt_response_generic_t response = {0};
+
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = curr_ar->rr.request.base.id;
+                    response.base.sockfd = curr_ar->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( curr_ar, &response );
+                    mwsocket_postproc_emit_netflow( curr_ar, &response );
+
+                    memcpy( &curr_ar->rr.response, &response, response.base.size );
+                    curr_ar->response_populated = true;
+                    complete( &curr_ar->arrived );
                 }
 
             }
@@ -2340,23 +2345,13 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
             mwsocket_active_request_t * blockreq = NULL;
 
             int i = 0;
-            bool ins_match = false;
+            while( i < MAX_INS_COUNT
+                   && Dead_INS_Array[i] != 0
+                   && MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
+                i++;
 
-            //See if the INS number of this active request mathces the client number of a dead INS
-            for( i = 0; i < MAX_INS_COUNT; i++ )
-            {
-                if( MW_SOCKET_CLIENT_ID( curr_ar->sockinst->remote_fd ) == Dead_INS_Array[i] )
-                {
-                    ins_match = true;
-                    break;
-                }
-            }
-
-            //If this active request does not match a dead INS move on to the next
-            if( !ins_match )
-            {
+            if( MW_SOCKET_CLIENT_ID( curr_si->remote_fd ) != Dead_INS_Array[i] )
                 continue;
-            }
 
             curr_si->ins_alive = false;
             mwsocket_set_pollable( curr_si, false );
@@ -2364,8 +2359,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
             mwsocket_find_active_request_by_id( &blockreq, curr_si->blockid );
 
             // If accepting and a sibling listener, destroy the sockinst
-            if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT&&
-                !(curr_si->mwflags & MWSOCKET_FLAG_USER) )
+            if( curr_si->mwflags & MWSOCKET_FLAG_ACCEPT
+                && !(curr_si->mwflags & MWSOCKET_FLAG_USER) )
             {
                 // If a sibling listener is accepting, it should have only had
                 // the accept() actreq, which was destroyed. If the sockinst is
@@ -2397,8 +2392,23 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 // If there is no replacement INS, return failure to user on the accept() actreq
                 if( sockinst == NULL )
                 {
+                    mt_response_generic_t response = {0};
 
-                    mwcomms_return_reaped_response( blockreq );
+                    response.base.sig = MT_SIGNATURE_RESPONSE;
+                    response.base.type = MT_RESPONSE( blockreq->rr.request.base.type );
+                    response.base.size = sizeof( response.base );
+                    response.base.id = blockreq->rr.request.base.id;
+                    response.base.sockfd = blockreq->rr.request.base.sockfd;
+                    response.base.status = -ENOENT;
+                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+
+                    mwsocket_postproc_no_context( blockreq, &response );
+                    mwsocket_postproc_emit_netflow( blockreq, &response );
+
+                    memcpy( &blockreq->rr.response, &response, response.base.size );
+                    blockreq->response_populated = true;
+                    complete( &blockreq->arrived );
+
                     continue;
                 }
 
@@ -2439,8 +2449,8 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
         }
 
         //mutex_unlock( &g_mwsocket_state.sockinst_lock );
-        
-ErrorExit:
+    }
+
     // Return something
     return rc;
 
@@ -2846,7 +2856,10 @@ mwsocket_monitor( void * Arg )
         rc = mwsocket_poll_handle_notifications( sockinst );
         if( rc )
         {
-            pr_err( "Error handling poll notifications: %d\n", rc );
+            pr_err( "Error handling poll notifications: %d poll_sock_count: %d\n",
+                    rc,
+                    atomic_read( &g_mwsocket_state.poll_sock_count ) );
+            
             continue;
         }
 
@@ -3003,17 +3016,19 @@ mwsocket_read( struct file * File,
                loff_t      * Offset )
 {
     ssize_t rc = 0;
-    mwsocket_active_request_t   * actreq = NULL;
+    mwsocket_active_request_t * actreq = NULL;
     mt_response_generic_t     * response = NULL;
     mwsocket_instance_t       * sockinst = NULL;
+    mwsocket_instance_t       * sockinst_old = NULL;
 
     pr_debug( "Processing read()\n" );
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
     MYASSERT( sockinst->mwflags & MWSOCKET_FLAG_USER );
 
-    if( !sockinst->read_expected )
+    if( sockinst->state_valid && !sockinst->read_expected )
     {
         rc = -EINVAL;
         MYASSERT( !"Calling read() but fire-and-forget was indicated in write()" );
@@ -3036,25 +3051,34 @@ mwsocket_read( struct file * File,
         goto ErrorExit;
     }
 
-    if( sockinst->user_outstanding_accept )
+    if( sockinst->user_outstanding_accept > 0 )
     {
+        // We're consuming the returning accept() here
+        sockinst->user_outstanding_accept--;
+
         // For accept(), swap out the known active request for the
         // inbound one that arrived first.
         mwsocket_active_request_t * new = NULL;
         rc = mwsocket_await_inbound_connection( actreq, &new );
         if( rc ) { goto ErrorExit; }
 
-        // We're consuming the returning accept() here
-        sockinst->user_outstanding_accept = false;
+        sockinst_old = sockinst;
 
         // Replace the active request with its inbound surrogate
         actreq = new;
         sockinst = actreq->sockinst;
 
-        // Although there may still be an outstanding accept() on the
-        // user socket, it should expect a write next since we're
-        // returning against a read. Change its state underneath it.
-        sockinst->usersock->read_expected = false;
+        // Switch semaphores if sockinst changed
+        if( sockinst_old != sockinst )
+        {
+            up( &sockinst_old->request_sem );
+            down_interruptible( &sockinst->request_sem );
+
+            // Although there may still be an outstanding accept() on the
+            // user socket, it should expect a write next since we're
+            // returning against a read. Change its state underneath it.
+            sockinst->read_expected = false;
+        }
     }
     else if( wait_for_completion_interruptible( &actreq->arrived ) )
     {
@@ -3099,10 +3123,16 @@ mwsocket_read( struct file * File,
     rc = response->base.size;
 
 ErrorExit:
-    if( -EINTR != rc ) // XXXX: hacky -- could leak
+
+    if( ( actreq != NULL ) && ( -EINTR != rc ) ) // XXXX: hacky -- could leak
     {
         // The "active" request is now dead.
         mwsocket_destroy_active_request( actreq );
+    }
+
+    if( sockinst != NULL )
+    {
+        up( &sockinst->request_sem );
     }
 
     return rc;
@@ -3122,7 +3152,6 @@ mwsocket_write( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     mt_request_base_t base;
     bool sent = false;
-    // Do not expect a read() after this if we return -EAGAIN
 
     if( Len < MT_REQUEST_BASE_SIZE )
     {
@@ -3143,9 +3172,18 @@ mwsocket_write( struct file * File,
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
 
+    // No parallel requests per socket
+    if( down_interruptible( &sockinst->request_sem ) )
+    {
+        rc = -EINTR;
+        sockinst->state_valid = false;
+        pr_debug( "Received interrupt while waiting to process write request\n" );
+        goto ErrorExit;
+    }
+
     MYASSERT( MWSOCKET_FLAG_USER & sockinst->mwflags );
 
-    if( sockinst->read_expected )
+    if( sockinst->state_valid && sockinst->read_expected )
     {
         rc = -EIO;
         MYASSERT( !"write() called but read() expected" );
@@ -3156,7 +3194,7 @@ mwsocket_write( struct file * File,
     {
         // Distribute accept() to all INSs. This is generating a new
         // outstanding accept().
-        sockinst->user_outstanding_accept = true;
+        sockinst->user_outstanding_accept++;
 
         mwsocket_sock_replicate_args_t args =
             { .sockinst = sockinst,
@@ -3212,15 +3250,23 @@ mwsocket_write( struct file * File,
 
 ErrorExit:
 
-    // We're returning an error - don't expect a read
-    if( rc )
+    if (sockinst != NULL )
     {
-        sockinst->read_expected = false;
-    }
+        // We're returning an error - don't expect a read
+        if( rc )
+        {
+            sockinst->read_expected = false;
+        }
 
-    if( rc && !sent )
-    {
-        mwsocket_destroy_active_request( actreq );
+        if( rc && !sent )
+        {
+            mwsocket_destroy_active_request( actreq );
+        }
+
+        if( sockinst->read_expected == false || !sockinst->state_valid)
+        {
+            up( &sockinst->request_sem );
+        }
     }
 
     return rc;
@@ -3639,7 +3685,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         }
     }
 
-    // Accept: send request but don't wait for response
+    // Accept: if this is the first accept send request but don't wait for response
     if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
     {
         mt_request_socket_accept_t accept =
@@ -3675,7 +3721,6 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
             goto ErrorExit;
         }
     }
-
 
 ErrorExit:
     if( rc )

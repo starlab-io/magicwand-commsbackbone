@@ -303,10 +303,11 @@ xe_yield( void )
 }
 
 
+#ifdef MYDEBUG
 static void
 debug_print_state( void )
 {
-#ifdef MYDEBUG
+
     static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     
     pthread_mutex_lock( &m );
@@ -349,8 +350,9 @@ debug_print_state( void )
     printf("\n");
 
     pthread_mutex_unlock( &m );
-#endif
+
 }
+#endif // MYDEBUG
 
 
 static int
@@ -563,7 +565,6 @@ release_worker_thread( thread_item_t * ThreadItem )
     
     if ( !workqueue_is_empty( ThreadItem->work_queue ) )
     {
-        debug_print_state();
         MYASSERT( !"Releasing thread with non-empty queue!" );
     }
 
@@ -889,7 +890,6 @@ process_buffer_item( buffer_item_t * BufferItem )
     }
 
     log_write( LOG_VERBOSE, "Done with response %lx\n", response.base.id );
-    //debug_print_state();
 
     return rc;
 }

@@ -390,6 +390,9 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         WorkerThread->defer_accept = true;
         rc = 0;
         goto ErrorExit;
+    case MtSockAttribError:
+        name = SO_ERROR;
+        break;
     default:
         MYASSERT( !"Unrecognized attribute given" );
         rc = -EINVAL;
@@ -474,7 +477,7 @@ xe_net_connect_socket( IN  mt_request_socket_connect_t  * Request,
     if ( rc < 0 )
     {
         Response->base.status = XE_GET_NEG_ERRNO();
-        log_write( LOG_ERROR,
+        log_write( LOG_WARN,
                    "socket %lx / %d: connect() to %s:%d failed: %d\n",
                    WorkerThread->public_fd, WorkerThread->local_fd,
                    inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port),
@@ -562,7 +565,7 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 void
 xe_net_defer_accept_wait( void )
 {
-    struct timespec ts = {0,1000};
+    struct timespec ts = {0,100};
 
     while ( ts.tv_nsec > 0 )
     {
@@ -570,7 +573,7 @@ xe_net_defer_accept_wait( void )
     }
 }
 
-
+//return one if timeout has been exceeded
 int
 xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
 {
@@ -637,10 +640,24 @@ xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
             goto ErrorExit;
         }
 
+        //Because sometimes there will be a slight delay between the
+        //client initiating a connection and them actually sending data
+        //e.g. The way apache wakes up idle processes to kill them is
+        //by connecting to 0.0.0.0:80 asynchronously, then waiting for
+        //poll to return POLLOUT before sending data across the connection
+        //to wake up the thread and kill it
         if( bytes_read == 0 )
         {
-            rc = 0;
-            goto ErrorExit;
+            if( xe_net_idle_socket_timeout ( MwPollFd ) )
+            {
+                rc = 0;
+                goto ErrorExit;
+            }
+            else
+            {
+                rc = 1;
+                goto ErrorExit;
+            }
         }
         
         // For some reason read sometimes returns -1 and errno:0 when
@@ -730,8 +747,7 @@ xe_net_defer_accept_socket( int LocalFd,
     static __thread int last_idx = 0;
     static __thread bool init = false;
     static __thread struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
-
-    struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
+    static __thread struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
 
     if( !init )
     {
@@ -761,6 +777,7 @@ xe_net_defer_accept_socket( int LocalFd,
                            LocalFd, err );
                 break;
             }
+
 
             if( listen_poll_fd.revents & POLLNVAL )
             {
@@ -799,9 +816,20 @@ xe_net_defer_accept_socket( int LocalFd,
                     break;
                 }
 
-                log_write( LOG_NOTICE,
+                log_write( LOG_INFO,
                            "deferring accept of new socket %d from listener %d\n",
                            sockfd, LocalFd );
+
+                //XXX for Debugging
+                struct sockaddr_in sockaddr = {0};
+                socklen_t sock_len = 0;
+                sock_len = sizeof( sockaddr );
+                getpeername( sockfd, (struct sockaddr *)&sockaddr, &sock_len );
+
+                log_write( LOG_DEBUG,
+                           "accepting connection from %s:%d\n",
+                           inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
+                //XXX
 
                 rc = xe_net_set_sock_nonblock( sockfd, true );
                 if( rc )
@@ -895,6 +923,8 @@ xe_net_defer_accept_socket( int LocalFd,
                 continue;
             }
 
+            //if rc == -1 do nothing
+
             if( mw_peer_poll_fds[last_idx].poll_fd.revents &
                 ( POLLNVAL | POLLERR | POLLHUP ) )
             {
@@ -938,7 +968,7 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
 
     bzero( &sockaddr, addrlen );
 
-    log_write( LOG_DEBUG,
+    log_write( LOG_NOTICE,
                "Worker thread %d (socket %lx/%d) is accepting.\n",
                WorkerThread->idx,
                WorkerThread->public_fd, WorkerThread->local_fd );
@@ -968,8 +998,15 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
     }
     if ( sockfd < 0 )
     {
+        // Apache2 shutdown process will leave outstanding accept requests
+        // on the queue after a socket is destroyed, since this is not an
+        // error condition do not print an error message by default.
+        log_write( LOG_DEBUG,
+                   "Accept on local_fd = %d failed: %s\n",
+                   WorkerThread->local_fd, strerror( errno ) );
+
         Response->base.status = XE_GET_NEG_ERRNO();
-        perror( "accept" );
+
         // N.B. Response->base.sockfd is set by xe_net_set_base_response()
         // This happens frequently in non-blocking IO. Don't assert.
     }
@@ -1261,6 +1298,7 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
+    WorkerThread->defer_accept = false;
     if ( 0 != WorkerThread->bound_port_num )
     {
         WorkerThread->bound_port_num = 0;
@@ -1319,6 +1357,8 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 
 
 
+
+
     // base.size is the total size of the request; account for the
     // header.
     while ( Response->count < maxExpected )
@@ -1372,10 +1412,7 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
 
             Response->base.status = XE_GET_NEG_ERRNO_VAL( err );
 
-            log_write( LOG_ERROR,
-                       "Failure: socket %lx / %d, send %ld, errno = %d\n",
-                       WorkerThread->public_fd, WorkerThread->local_fd,
-                       maxExpected, Response->base.status );
+
 
             // The remote side of this connection has closed
             if ( -MW_EPIPE == Response->base.status )
@@ -1385,6 +1422,12 @@ xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
             else
             {
                 WorkerThread->state_flags = 0;
+
+                log_write( LOG_ERROR,
+                           "Failure: socket %lx / %d, send %ld, errno = %d final = %s\n",
+                           WorkerThread->public_fd, WorkerThread->local_fd,
+                           maxExpected, Response->base.status,
+                           ( ( Request->base.flags & _MT_FLAGS_BATCH_SEND_FINI ) ? "true" : "false" ) );
             }
             break;
         }

@@ -52,12 +52,15 @@
 
 #define DEV_FILE "/dev/mwcomms"
 
+
+//REMOVE FOR PRODUCTION
+#include"trace-marker.h"
+
 //
 // 0 - wrap operations and use native sockets only
 // 1 - wrap operations and use mwcomms driver for TCP traffic
 //
 #define USE_MWCOMMS 1
-
 
 //
 // Which send() implementation should we use? This choice has big
@@ -93,6 +96,9 @@ static int
 
 static int
 (*libc_accept)(int fd, struct sockaddr * sockaddr, socklen_t * socklen) = NULL;
+
+static int
+(*libc_accept4)(int fd, struct sockaddr * sockaddr, socklen_t * socklen, int flags) = NULL;
 
 static int
 (*libc_connect)(int fd, const struct sockaddr * addr, socklen_t addrlen ) = NULL;
@@ -203,10 +209,11 @@ mwcomms_is_mwsocket( IN int Fd )
 {
     bool answer = false;
 
+    trace_printk( "entering mwcomms_is_socket()" );
+    
 #if (!USE_MWCOMMS)
     goto ErrorExit;
 #else
-
     if ( Fd < 0 )
     {
         goto ErrorExit;
@@ -215,9 +222,9 @@ mwcomms_is_mwsocket( IN int Fd )
     mwsocket_verify_args_t verify = { .fd = Fd, };
 
     int rc = ioctl( devfd, MW_IOCTL_IS_MWSOCKET, &verify );
-    if ( rc )
+    if ( rc < 0 )
     {
-        wrapper_error( "ioctl" );
+        log_write( LOG_DEBUG, "MW_IOCTL_IS_MWSOCKET returning false" );
         goto ErrorExit;
     }
 
@@ -225,6 +232,9 @@ mwcomms_is_mwsocket( IN int Fd )
 #endif
 
 ErrorExit:
+
+    trace_printk( "leaving mwcomms_is_socket()" );
+    
     return answer;
 }
 
@@ -239,6 +249,8 @@ mwcomms_write_request( IN  int                     MwFd,
     ssize_t ct = 0;
     struct timespec remain_time = { .tv_sec = 0, .tv_nsec = 1 };
     int err = 0;
+
+    trace_printk( "entering mwcomms_write_request()" );
 
 #if (!USE_MWCOMMS)
     // no processing at all
@@ -352,6 +364,9 @@ mwcomms_write_request( IN  int                     MwFd,
 
 ErrorExit:
     errno = err;
+
+    trace_printk( "leaving mwcomms_write_request()" );
+    
     return rc;
 }
 
@@ -440,6 +455,8 @@ socket( int Domain,
     int rc = 0;
     int err = 0;
 
+    trace_printk( "entering socket()" );
+    
     // See socket(2); N.B. Type can be OR-ed with specific flags
     if ( AF_INET != Domain
          || ( 0 == (SOCK_STREAM & Type ) )
@@ -452,7 +469,6 @@ socket( int Domain,
         goto ErrorExit;
     }
 
-#if USE_MWCOMMS
     mwsocket_create_args_t create;
 
     create.domain   = xe_net_get_mt_protocol_family( Domain );
@@ -468,13 +484,32 @@ socket( int Domain,
         goto ErrorExit;
     }
 
+    if( Type & SOCK_CLOEXEC )
+    {
+        log_write( LOG_INFO,
+                   "Setting SOCK_CLOEXEC flag for new fd: %d\n",
+                   create.outfd );
+
+        rc = fcntl( create.outfd, F_SETFD, FD_CLOEXEC );
+
+        if( rc < 0 )
+        {
+            err = errno;
+            log_write( LOG_ERROR,
+                       "fcntl failed for new socket %d\n",
+                       create.outfd );
+            goto ErrorExit;
+        }
+    }
+                   
+
     log_write( LOG_NOTICE, "mwsocket( %d, 0x%x, %d ) ==> %d\n",
                Domain, Type, Protocol, create.outfd );
 
     rc = create.outfd;
-#endif
 
 ErrorExit:
+    trace_printk( "leaving socket()" );
     errno = err;
     return rc;
 }
@@ -483,8 +518,13 @@ ErrorExit:
 int
 close( int Fd )
 {
-    log_write( LOG_NOTICE, "close(%d)\n", Fd );
-    return libc_close( Fd );
+    int rc = 0;
+    int err = 0;
+    rc = libc_close( Fd );
+    err = errno;
+    log_write( LOG_NOTICE, "libc_close(%d) ==> %d\n", Fd, rc );
+    errno = err;
+    return rc;
 }
 
 
@@ -497,6 +537,8 @@ bind( int                     SockFd,
     mt_response_generic_t  response = {0};
     ssize_t rc = 0;
 
+    trace_printk( "entering bind()" );
+    
     if ( !mwcomms_is_mwsocket(SockFd) )
     {
         rc = libc_bind( SockFd, SockAddr, AddrLen );
@@ -527,6 +569,9 @@ bind( int                     SockFd,
     }
 
 ErrorExit:
+
+    trace_printk( "leaving bind()" );
+    
     log_write( LOG_DEBUG, "bind(%d, ...) ==> %d\n", SockFd, (int)rc );
     return rc;
 }
@@ -538,6 +583,8 @@ listen( int SockFd, int BackLog )
     mt_request_generic_t   request;
     mt_response_generic_t  response = {0};
     ssize_t rc = 0;
+
+    trace_printk( "entering listen()" );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -567,6 +614,7 @@ listen( int SockFd, int BackLog )
     }
     
 ErrorExit:
+    trace_printk( "leaving listen()" );
     log_write( LOG_DEBUG, "listen(%d, ...) ==> %d\n", SockFd, (int)rc );
     return rc;
 }
@@ -582,6 +630,8 @@ accept( int               SockFd,
     ssize_t rc = 0;
     int e = 0;
 
+    trace_printk( "entering accept()" );
+    
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
         rc = libc_accept( SockFd, SockAddr, SockLen );
@@ -605,13 +655,20 @@ accept( int               SockFd,
     }
 
     rc = response.base.sockfd; // new socket
-    populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
-                          &response.socket_accept.sockaddr );
 
+    //Null is a perfectly acceptable value for these inputs
+    if( NULL != SockLen &&
+        NULL != SockAddr )
+    {
+        populate_sockaddr_in( (struct sockaddr_in *)SockAddr,
+                          &response.socket_accept.sockaddr );
+    }
+        
 ErrorExit:
     e = errno;
     log_write( LOG_INFO, "accept(%d, ...) ==> %d\n", SockFd, (int)rc );
     errno = e;
+    trace_printk( "leaving accept()" );
     return rc;
 }
 
@@ -625,6 +682,16 @@ accept4( int               SockFd,
     int rc = 0;
     int newfd = 0;
     int err = 0;
+
+    trace_printk( "entering accept4()" );
+    
+    if ( !mwcomms_is_mwsocket( SockFd ) )
+    {
+        rc = libc_accept4( SockFd, SockAddr, SockLen, Flags );
+        err = errno;
+        log_write( LOG_INFO, "libc_accept4(%d, ..., 0x%x) ==> %d\n", SockFd, Flags, rc );
+        goto ErrorExit;
+    }
 
     log_write( LOG_WARN, "accept4(%d, ..., 0x%x)\n", SockFd, Flags );
 
@@ -652,9 +719,17 @@ accept4( int               SockFd,
     }
     if( Flags & SOCK_CLOEXEC )
     {
-        log_write( LOG_WARN,
-                   "accept4(%d,...) dropping flag SOCK_CLOEXEC for new socket %d\n",
-                   SockFd, newfd );
+        log_write( LOG_INFO, "Marking %d with SOCK_CLOEXEC via accept4()\n", newfd );
+        rc = fcntl( newfd, F_SETFD, FD_CLOEXEC );
+        if( rc )
+        {
+            err = errno;
+            rc = -1;
+            log_write( LOG_ERROR,
+                       "accept4(): failed to mark new socket %d with FD_CLOEXEC.\n",
+                       newfd );
+            goto ErrorExit;
+        }
     }
 
     // Success
@@ -668,6 +743,9 @@ ErrorExit:
         (void) close( newfd );
     }
     errno = err;
+
+    trace_printk( "leaving accept4()" );
+    
     return rc;
 }
 
@@ -686,17 +764,19 @@ recvfrom( int               SockFd,
     int err = 0;
     ssize_t rc = 0;
 
-    // We write an mt_request_socket_recv_t, but could get back either
-    // a mt_response_socket_recv_t or mt_response_socket_recvfrom_t.
+    trace_printk( "entering recvfrom()" );
     
-    bzero( &response, sizeof(response) );
-
     if ( !mwcomms_is_mwsocket(SockFd) )
     {
         rc = libc_recvfrom( SockFd, Buf, Len, Flags, SrcAddr, AddrLen );
         err = errno;
         goto ErrorExit;
     }
+
+    // We write an mt_request_socket_recv_t, but could get back either
+    // a mt_response_socket_recv_t or mt_response_socket_recvfrom_t.
+    
+    bzero( &response, sizeof(response) );
 
     log_write( LOG_DEBUG, "recvfrom(%d, buf, %d, %d, ... )\n", SockFd, (int)Len, Flags );
     mwcomms_init_request( &request,
@@ -774,6 +854,9 @@ ErrorExit:
                SockFd, (int)Len, Flags, (int)rc, err );
     //hex_dump( "Received data", response.socket_recv.bytes, *received );
     errno = err;
+
+    trace_printk( "leaving recvfrom()" );
+    
     return rc;
 }
 
@@ -793,6 +876,8 @@ read( int Fd, void *Buf, size_t Count )
     int rc = 0;
     int err = 0;
 
+    trace_printk( "entering read()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         if ( ( rc = libc_read( Fd, Buf, Count ) ) < 0 )
@@ -810,6 +895,9 @@ read( int Fd, void *Buf, size_t Count )
 ErrorExit:
     log_write( LOG_INFO, "read(%d, buf, %d ) ==> %d / %d\n", Fd, (int)Count, rc, err );
     errno = err;
+
+    trace_printk( "leaving read()" );
+    
     return rc;
 }
 
@@ -821,6 +909,8 @@ readv( int Fd, const struct iovec * Iov, int IovCt )
     ssize_t tot = 0;
     int err = 0;
 
+    trace_printk( "entering readv()" );
+    
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_readv( Fd, Iov, IovCt );
@@ -842,8 +932,10 @@ readv( int Fd, const struct iovec * Iov, int IovCt )
 
 ErrorExit:
     log_write( LOG_INFO, "readv(%d, ...)) ==> %d / %d\n", Fd, (int)tot, err );
-
     errno = err;
+
+    trace_printk( "leaving readv()" );
+    
     return tot;
 }
 
@@ -856,6 +948,8 @@ connect( int                     SockFd,
    mt_request_generic_t request;
    mt_response_generic_t response = {0};
    int rc = 0;
+
+   trace_printk( "entering connect()" );
    
    if ( !mwcomms_is_mwsocket( SockFd ) )
    {
@@ -890,7 +984,12 @@ connect( int                     SockFd,
     rc = response.base.status;
 
 ErrorExit:
-    log_write( LOG_INFO, "connect(%d,...) ==> %d\n", SockFd, rc );
+    log_write( LOG_INFO, "connect(%d,...) ==> %d / %s:%d\n", SockFd, rc,
+               inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
+               ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
+
+    trace_printk( "leaving connect()" );
+    
     return rc;
 }
 
@@ -910,6 +1009,8 @@ send( int          SockFd,
     uint8_t * pbuf = (uint8_t *)Buf;
     int err = 0;
     bool final = false;
+
+    trace_printk( "entering batch send()" );
     
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -1003,6 +1104,9 @@ ErrorExit:
     log_write( LOG_INFO, "send( %d, buf, %d, %x ) ==> %d / %d\n",
                SockFd, (int)Len, Flags, (int)rc, err );
     errno = err;
+
+    trace_printk( "leaving batch send()" );
+    
     return rc;
 }
 #endif // SEND_BATCH
@@ -1220,6 +1324,8 @@ write( int Fd, const void *Buf, size_t Count )
 {
     ssize_t rc = 0;
 
+    trace_printk( "entering write()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_write( Fd, Buf, Count );
@@ -1230,6 +1336,9 @@ write( int Fd, const void *Buf, size_t Count )
 
 ErrorExit:
     log_write( LOG_INFO, "write(%d, buf, %d ) ==> %d\n", Fd, (int)Count, (int)rc );
+
+    trace_printk( "leaving write()" );
+    
     return rc;
 }
 
@@ -1240,6 +1349,8 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
     ssize_t rc = 0;
     ssize_t tot = 0;
     int err = 0;
+
+    trace_printk( "entering writev()" );
     
     for ( int i = 0; i < IovCt; ++i )
     {
@@ -1270,6 +1381,9 @@ writev( int Fd, const struct iovec * Iov, int IovCt )
 ErrorExit:
     log_write( LOG_INFO, "writev(%d, ...)) ==> %d / %d\n", Fd, (int)tot, err );
     errno = err;
+
+    trace_printk( "leaving writev()" );
+    
     return tot;
 }
 
@@ -1281,6 +1395,8 @@ shutdown( int SockFd, int How )
     mt_response_generic_t response = {0};
     ssize_t rc = 0;
     int err = 0;
+
+    trace_printk( "entering shutdown()" );
 
     errno = 0;
 
@@ -1318,6 +1434,9 @@ shutdown( int SockFd, int How )
 ErrorExit:
     log_write( LOG_INFO, "shutdown( %d, %d ) ==> %d / %d\n", SockFd, How, (int)rc, err );
     errno = err;
+
+    trace_printk( "leaving shutdown()" );
+    
     return rc;
 }
 
@@ -1354,6 +1473,9 @@ mwcomms_set_sockattr( IN int Level,
             break;
         case SO_SNDLOWAT:
             Attribs->name = MtSockAttribSndLoWat;
+            break;
+        case SO_ERROR:
+            Attribs->name = MtSockAttribError;
             break;
         default:
             log_write( LOG_ERROR, "Failing on unsupported SOL_SOCKET option %d\n", OptName );
@@ -1396,6 +1518,8 @@ getsockopt( int         Fd,
     int err = 0;
     mwsocket_attrib_t attr = {0};
 
+    trace_printk( "entering getsockopt()" );
+
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
         rc = libc_getsockopt( Fd, Level, OptName, OptVal, OptLen );
@@ -1435,9 +1559,12 @@ getsockopt( int         Fd,
     }
 
 ErrorExit:
-    log_write( LOG_INFO, "getsockopt( 0x%x, %d, %d, %p, %p ) => %d\n",
-               Fd, Level, OptName, OptVal, OptLen, rc );
+    log_write( LOG_INFO, "getsockopt( 0x%x, %d, %d, %p[%d], %p[%d] ) => %d\n",
+               Fd, Level, OptName, OptVal, *(int*)OptVal, OptLen, *OptLen, rc );
     errno = err;
+
+    trace_printk( "leaving getsockopt()" );
+    
     return rc;
 }
 
@@ -1452,6 +1579,8 @@ setsockopt( int          Fd,
     int rc = 0;
     mwsocket_attrib_t attr = {0};
     int err = 0;
+
+    trace_printk( "entering setsockopt()" );
 
     if ( !mwcomms_is_mwsocket( Fd ) )
     {
@@ -1497,6 +1626,9 @@ ErrorExit:
     log_write( LOG_INFO, "setsockopt( 0x%x, %d, %d, %p=%x, %d ) => %d\n",
                Fd, Level, OptName, OptVal, *(uint32_t *)OptVal, OptLen, rc );
     errno = err;
+
+    trace_printk( "leaving setsockopt()" );
+    
     return rc;
 }
 
@@ -1508,6 +1640,8 @@ getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
     mt_request_generic_t request = {0};
     mt_response_generic_t response = {0};
     int err = 0;
+
+    trace_printk( "entering getsockname()" );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
     {
@@ -1541,13 +1675,15 @@ getsockname( int SockFd, struct sockaddr * Addr, socklen_t * AddrLen )
     populate_sockaddr_in( (struct sockaddr_in *) Addr,
                           &response.socket_getname.sockaddr );
 
-
 ErrorExit:
     log_write( LOG_INFO, "getsockname(%d,...) ==> %d / %s:%d\n",
                SockFd, rc,
                inet_ntoa( ((struct sockaddr_in *) Addr)->sin_addr ),
                ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
     errno = err;
+
+    trace_printk( "leaving getsockname()" );
+    
     return rc;
 }
 
@@ -1560,6 +1696,8 @@ getpeername(int SockFd, struct sockaddr * Addr, socklen_t * AddrLen)
     mt_response_generic_t response = {0};
     int err = 0;
 
+    trace_printk( "entering getpeername()" );
+    
     log_write( LOG_DEBUG, "getpeername( %x, ... )\n", SockFd );
 
     if ( !mwcomms_is_mwsocket( SockFd ) )
@@ -1601,6 +1739,9 @@ ErrorExit:
               ntohs( ((struct sockaddr_in *) Addr)->sin_port ) );
 
    errno = err;
+
+   trace_printk( "leaving getpeername()" );
+   
    return rc;
 }
 
@@ -1615,6 +1756,8 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     mwsocket_attrib_t attr = {0};
     int oldflags = 0;
     int newflags = 0;
+
+    trace_printk( "entering fcntl()" );
 
     va_start( ap, Cmd );
     arg = va_arg( ap, void * );
@@ -1641,7 +1784,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
 
     // Set the new flags
     rc = libc_fcntl( Fd, F_SETFL, newflags );
-    if ( rc )
+    if ( rc < 0 )
     {
         err = errno;
         MYASSERT( !"fcntl()" );
@@ -1651,6 +1794,9 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     // if the change doesn't involve O_NONBLOCK, we don't care
     if ( (oldflags & O_NONBLOCK) == (newflags & O_NONBLOCK) )
     {
+        log_write( LOG_INFO,
+                   "Ignoring call to fcntl fd %d  because NONBLOCK is not set\n",
+                   Fd );
         goto ErrorExit;
     }
 
@@ -1659,7 +1805,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     attr.val.v32 = (uint32_t) (bool) ( newflags & O_NONBLOCK );
 
     rc = ioctl( Fd, MW_IOCTL_SOCKET_ATTRIBUTES, &attr );
-    if ( rc )
+    if ( rc < 0 )
     {
         log_write( LOG_ERROR, "ioctl() failed: %d\n", rc );
         goto ErrorExit;
@@ -1668,10 +1814,13 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
 ErrorExit:
     log_write( LOG_INFO, "fcntl( %x, %d, %p ) ==> %x\n",
                Fd, Cmd, arg, rc );
-    if ( rc )
+    if ( rc < 0 )
     {
         errno = err;
     }
+
+    trace_printk( "leaving fcntl()" );
+    
     return rc;
 }
 
@@ -1732,7 +1881,7 @@ init_wrapper( void )
     snprintf( shim_log, sizeof(shim_log),
               "ins_%d", (int) getpid() );
 
-    rc = log_init( SHIM_LOG_PATH, shim_log, "log", LOG_INFO );
+    rc = log_init( SHIM_LOG_PATH, shim_log, "log", LOG_LEVEL );
     if( rc )
     {
         fprintf( stderr, "Failed to open log file %s: %s\n",
@@ -1741,6 +1890,17 @@ init_wrapper( void )
     }
 
     log_write( LOG_INFO, "Intercept module loaded\n" );
+
+
+#ifdef ENABLE_TRACING
+    
+    log_write( LOG_DEBUG, "Loading trace_maker\n" );
+    rc = trace_marker_init();
+    if ( rc != 0 )
+    {
+        log_write( LOG_DEBUG, "Failed to load trace maker file\n" );
+    }
+#endif //ENABLE_TRACING
 
     //
     // Open the kernel module's device (mwcomms)
@@ -1783,6 +1943,7 @@ init_wrapper( void )
     get_libc_symbol( (void **) &libc_bind,     "bind"     );
     get_libc_symbol( (void **) &libc_listen,   "listen"   );
     get_libc_symbol( (void **) &libc_accept,   "accept"   );
+    get_libc_symbol( (void **) &libc_accept4,  "accept4"  );
     get_libc_symbol( (void **) &libc_connect,  "connect"  );
 
     get_libc_symbol( (void **) &libc_send,     "send"     );

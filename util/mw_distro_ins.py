@@ -1,5 +1,21 @@
 #!/usr/bin/env python2
 
+#
+# Assumptions:
+#   - No INS instances currently running
+#   - TCP/IP Forwarding has been enabled
+#   - Xen keys cleared
+#   - mwcomms driver loaded
+#
+# start script then start apache
+#
+#
+# Debug
+#     $ sudo iptables -v -t nat -n -L PREROUTING  # show NAT PREROUTINE chain
+#     $ sudo iptables -v -t filter -n -L FORWARD  # show FILTER FORWARD chain
+#
+#
+
 ##
 ## Front-end glue for MagicWand that spawns Rump INSs and routes
 ## incoming connections to a specific instance based on runtime
@@ -9,7 +25,7 @@
 ##   python-iptables: pip install --upgrade python-iptables
 ##   pysx           : pip install --upgrade pyxs
 ##
-## Environmental requirements:
+# Environmental requirements:
 ##
 ##   This script is run as root in an environment that is configured
 ##   for Rump, i.e. rumprun is in the PATH; one way to achieve this is
@@ -32,25 +48,13 @@
 ##   https://bugs.python.org/issue8844 and the pyxs source (client.py)
 ##   for details.
 ##
-##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We 
+##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We
 ##   interface with Xen by calling out to xl.
 ##
 ##   The INS memory requirement is based on the number of sockets it
 ##   supports. Take this into account here (manually or
 ##   programmatically).
 ##
-
-MW_XENSTORE_ROOT = b"/mw"
-
-# ToDo: INS will launch "successfully" with 256MB, but will not publish heartbeat/network_stats to xenstore, leading the PVM to think it's dead. Giving it 3GB allows the INS to function fully. Why is that?
-INS_MEMORY_MB = 1024
-POLL_INTERVAL = 0.05
-DEFAULT_TIMEOUT = 5
-
-# ToDo: Create a dependency on common/common_config.h to supply these values
-HEARTBEAT_INTERVAL_SEC = 15
-HEARTBEAT_MAX_MISSES = 2
-MAX_INS_COUNT = 2
 
 import logging
 import sys
@@ -67,6 +71,7 @@ import thread
 import threading
 import iptc # iptables bindings
 import pyxs
+import argparse
 
 # Broken on Ubuntu 14.04
 # import xen.xm.XenAPI as XenAPI
@@ -77,7 +82,7 @@ import pyxs
 
 ##
 ## Constants for RUMP/NetBSD socket and TCP options that we may need.
-## 
+##
 
 
 # Per-socket options: use these for mitigation
@@ -89,22 +94,22 @@ include/sys/socket.h
 /*
  * Additional options, not kept in so_options.
  */
-#define SO_SNDBUF	0x1001		/* send buffer size */
-#define SO_RCVBUF	0x1002		/* receive buffer size */
-#define SO_SNDLOWAT	0x1003		/* send low-water mark */
-#define SO_RCVLOWAT	0x1004		/* receive low-water mark */
-/* SO_OSNDTIMEO		0x1005 */
-/* SO_ORCVTIMEO		0x1006 */
-#define	SO_ERROR	0x1007		/* get error status and clear */
-#define	SO_TYPE		0x1008		/* get socket type */
-#define	SO_OVERFLOWED	0x1009		/* datagrams: return packets dropped */
+#define SO_SNDBUF       0x1001          /* send buffer size */
+#define SO_RCVBUF       0x1002          /* receive buffer size */
+#define SO_SNDLOWAT     0x1003          /* send low-water mark */
+#define SO_RCVLOWAT     0x1004          /* receive low-water mark */
+/* SO_OSNDTIMEO         0x1005 */
+/* SO_ORCVTIMEO         0x1006 */
+#define SO_ERROR        0x1007          /* get error status and clear */
+#define SO_TYPE         0x1008          /* get socket type */
+#define SO_OVERFLOWED   0x1009          /* datagrams: return packets dropped */
 
-#define	SO_NOHEADER	0x100a		/* user supplies no header to kernel;
-					 * kernel removes header and supplies
-					 * payload
-					 */
-#define SO_SNDTIMEO	0x100b		/* send timeout */
-#define SO_RCVTIMEO	0x100c		/* receive timeout */
+#define SO_NOHEADER     0x100a          /* user supplies no header to kernel;
+                                         * kernel removes header and supplies
+                                         * payload
+                                         */
+#define SO_SNDTIMEO     0x100b          /* send timeout */
+#define SO_RCVTIMEO     0x100c          /* receive timeout */
 
 
 TCP system-wide options: use these for diversification
@@ -126,8 +131,43 @@ net.inet.tcp.congctl.available: reno newreno cubic
 
 """
 
+#
+# Globals
+#
 
+MW_XENSTORE_ROOT = b"/mw"
 
+mwroot_current = ''
+
+# Shared values from common C header file
+path_common_config_h ='/common/common_config.h'
+max_ins_count_v = 0
+heartbeat_interval_sec_v = 0
+heartbeat_max_misses_v = 0
+
+# Load percent at which INS is considered overloaded
+max_ins_load_percent = 0.0
+
+# Monitoring message interval (0 is disabled)
+monitor_interval = 0
+
+INS_MEMORY_MB = 3048
+POLL_INTERVAL = 0.05
+DEFAULT_TIMEOUT = 5
+
+log_levels = dict(
+    critical = 50,
+    error    = 40,
+    warning  = 30,
+    info     = 20,
+    debug    = 10
+)
+
+# Maximum INS load (triggers load balancing)
+MAX_INS_LOAD_DEFAULT = 50
+
+# Monitor message interval in seconds
+MONITOR_PERIOD_DEFAULT = 5
 
 # Map: domid => INS instance
 ins_map = dict()
@@ -171,11 +211,10 @@ macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
 
 inst_num = 0
 
-
 exit_requested = False
 def handler(signum, frame):
     global exit_requested
-    logging.warn( "Caught signal {0}".format( signum ) )
+    logging.warn("Caught signal {0}".format(signum))
     exit_requested = True
 
 
@@ -185,83 +224,82 @@ def generate_sys_net_opts():
 
     # Calc send, recv settings
     for prefix in ("send", "recv"):
-        bufauto = random.randint( 0, 1)
-        params.append( "{0}buf_auto:{1}".format( prefix, bufauto ) )
+        bufauto = random.randint(0, 1)
+        params.append("{0}buf_auto:{1}".format(prefix, bufauto))
 
         #if bufauto:
         #    continue
 
         # initial buffer size
-        #bufspace = random.randrange( 0x1000, 0x40001, 0x1000 )
-        bufspace = random.choice( xrange( 0x1000, 0x40001, 0x1000 ) )
-        params.append( "{0}space:{1:x}".format( prefix, bufspace ) )
+        #bufspace = random.randrange(0x1000, 0x40001, 0x1000)
+        bufspace = random.choice(xrange(0x1000, 0x40001, 0x1000))
+        params.append("{0}space:{1:x}".format(prefix, bufspace))
 
         # buffer increment size
-        #bufinc = random.randrange( bufspace / 4, bufspace / 2, 0x800 )
-        bufinc = random.choice( xrange( bufspace/4, bufspace/2, 0x800 ) )
-        params.append( "{0}buf_inc:{1:x}".format( prefix, bufinc ) )
+        #bufinc = random.randrange bufspace / 4, bufspace / 2, 0x800)
+        bufinc = random.choice(xrange(bufspace/4, bufspace/2, 0x800))
+        params.append("{0}buf_inc:{1:x}".format(prefix, bufinc))
 
         # max buffer size
-        #bufmax = random.randrange( bufspace, bufspace * 4, 0x1000 )
-        bufmax = random.choice( xrange( bufspace, bufspace * 4, 0x1000 ) )
-        params.append( "{0}buf_max:{1:x}".format( prefix, bufmax ) )
+        #bufmax = random.randrange(bufspace, bufspace * 4, 0x1000)
+        bufmax = random.choice(xrange(bufspace, bufspace * 4, 0x1000))
+        params.append("{0}buf_max:{1:x}".format(prefix, bufmax))
 
         assert bufmax >= bufspace, "nonsensical space vs max values"
 
     # Calc other settings
-    params.append( "init_win:{0:x}".format( random.randint( 2, 6 ) ) )
-    params.append( "init_win_local:{0:x}".format( random.randint( 2, 6) ) )
-    params.append( "delack_ticks:{0:x}".format( random.randint( 10, 40) ) )
-    params.append( "congctl:{0}".format( random.choice( ["reno", "newreno", "cubic"] ) ) )
+    params.append("init_win:{0:x}".format(random.randint(2, 6)))
+    params.append("init_win_local:{0:x}".format(random.randint(2, 6)))
+    params.append("delack_ticks:{0:x}".format(random.randint(10, 40)))
+    params.append("congctl:{0}".format(random.choice(["reno", "newreno", "cubic"])))
 
-    logging.debug( "TCP/IP parameters:\n\t{0}".format( "\n\t".join( params ) ) )
-    opts = " ".join( params )
-    logging.debug( "TCP/IP parameter value: {0}".format( opts ) )
+    logging.debug("TCP/IP parameters:\n\t{0}".format("\n\t".join(params)))
+    opts = " ".join(params)
     return opts
 
 
 # Generic storage for INS
 class INS:
-    def __init__( self, domid=None ):
-        self.domid             = domid
-        self.ip                = None
-        self.stats             = dict()
+    def __init__(self, domid=None):
+        self.domid              = domid
+        self.ip                 = None
+        self.stats              = dict()
         self._last_contact      = time.time()
         self._missed_heartbeats = 0
-        self._lock             = threading.Lock()
-        self._forwarders       = list()
-        self._active           = False
+        self._lock              = threading.Lock()
+        self._ins_forwarders    = list()
+        self._active            = False
 
         if domid == None:
             self._create()
 
-    def __del__( self ):
+    def __del__(self):
         """ Destroy the INS associated with this object. """
 
-        p = subprocess.Popen( ["xl", "destroy", "{0:d}".format(self.domid) ],
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-        (stdout, stderr ) = p.communicate()
+        p = subprocess.Popen(["xl", "destroy", "{0:d}".format(self.domid)],
+                              stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        (stdout, stderr) = p.communicate()
         rc = p.wait()
         if rc:
-            raise RuntimeError( "Call to xl failed: {}\n".format( stderr ) )
+            raise RuntimeError("Call to xl failed: {}\n".format(stderr))
 
-        macs[ self._mac ][ 'in_use' ] = False
+        macs[self._mac]['in_use'] = False
 
-        logging.info( "Destroyed INS {}".format( self ) )
+        logging.info("Destroyed INS {}".format(self))
 
-    def __str__( self ):
+    def __str__(self):
         rules = ""
-        if self._forwarders:
-            rules = "\n\t" + "\n\t".join( [str(f) for f in self._forwarders ] )
+        if self._ins_forwarders:
+            rules = "\n\t" + "\n\t".join([str(f) for f in self._ins_forwarders])
 
         return ("id {} IP {} {}active{}".
-                format( self.domid, self.ip,
-                        { False : "in", True : "" }[self._active ], rules ) )
+                format(self.domid, self.ip,
+                        { False : "in", True : "" }[self._active], rules))
 
-    def __repr__( self ):
-        return str( self )
+    def __repr__(self):
+        return str(self)
 
-    def _create( self ):
+    def _create(self):
         """
         Spawn the Rump INS domU. Normally this is done via rumprun, which
         runs 'xl create xr.conf', where xr.conf looks like this:
@@ -273,11 +311,11 @@ class INS:
         on_poweroff="destroy"
         on_crash="destroy"
         vif=['xenif']
-        
+
         --------------------
-        
+
         Spawn the Rump INS domU. Normally this is done via rumprun like this:
-        
+
         rumprun -T /tmp/rump.tmp -S xen -di -M 256 -N mw-ins-rump \
         -I xen0,xenif \
         -W xen0,inet,static,$RUMP_IP/8,$_GW \
@@ -286,31 +324,31 @@ class INS:
 
         global inst_num
 
-        ins_run_file = os.environ[ 'XD3_INS_RUN_FILE' ]
-
-        logging.debug( "PATH: {0}".format( os.environ['PATH'] ) )
-
         # Find available MAC
-        mac = random.sample( [ k for k,v in macs.items() if not v['in_use'] ], 1 )
+        mac = random.sample([k for k,v in macs.items() if not v['in_use']], 1)
         if not mac:
-            raise RuntimeError( "No more MACs are available" )
+            raise RuntimeError("No more MACs are available")
         mac = mac[0]
-        macs[ mac ]['in_use'] = True
+        macs[mac]['in_use'] = True
         self._mac = mac
 
+        # TODO: make other part of path a define?
+        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-develop/bin/rumprun'.format(mwroot_current)
+        RUMP_RUN_FILE = '{0}/ins/ins-rump/apps/ins-app/ins-rump.run'.format(mwroot_current)
+
         # We will not connect to the console (no "-i") so we won't wait for exit below.
-        cmd  = 'rumprun -S xen -d -M {0} '.format( INS_MEMORY_MB )
-        #cmd += '-p -D 1234 ' # DEBUGGING ONLY **********************
-        cmd += '-N mw-ins-rump-{0:04x} '.format( inst_num )
-        cmd += '-I xen0,xenif,mac={0} -W xen0,inet,dhcp {1}'.format( mac, ins_run_file )
+        cmd  = '{} -S xen -d '.format(RUMP_RUN_CMD)
+        cmd += '-M {} '.format(INS_MEMORY_MB)
+        cmd += '-N mw-ins-rump-{:04x} '.format(inst_num)
+        cmd += '-I xen0,xenif,mac={} '.format(mac)
+        cmd += '-W xen0,inet,dhcp {}'.format(RUMP_RUN_FILE)
 
         inst_num += 1
 
-        logging.info( "Running command {0}".format(cmd) )
+        logging.debug("Running command {0}".format(cmd))
 
-        p = subprocess.Popen( cmd.split(),
-                              stdout = subprocess.PIPE, stderr = subprocess.PIPE )
-        #(stdout, stderr ) = p.communicate()
+        p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        #(stdout, stderr) = p.communicate()
 
         #rc = p.wait()
         t = 0
@@ -321,44 +359,47 @@ class INS:
             if rc is not None:
                 break
             if t >= DEFAULT_TIMEOUT:
-                raise RuntimeError( "Call to xl took too long: {0}\n".format( p.stderr.read() ) )
+                raise RuntimeError("Call to xl took too long: {0}\n".format(p.stderr.read()))
             else:
-                time.sleep( POLL_INTERVAL )
+                time.sleep(POLL_INTERVAL)
                 t += POLL_INTERVAL
 
         if p.returncode:
-            raise RuntimeError( "Call to xl failed: {0}\n".format( p.stderr.read() ) )
+            raise RuntimeError("Call to xl failed: {0}\n".format(p.stderr.read()))
 
-        # self.domid = int( p.stdout.read().split(':')[1] )
+        # self.domid = int(p.stdout.read().split(':')[1])
         ins_queue.append(self)
 
-    def set_listening_ports( self, port_list ):
+    def set_listening_ports(self, port_list):
         self.lock()
         try:
             for p in port_list:
-                if p in [ x.get_port() for x in self._forwarders ]:
+                if p in [x.get_port() for x in self._ins_forwarders]:
                     continue
-                fwd = PortForwarder( p, self.ip )
-                self._forwarders.append( fwd )
-            logging.debug( self )
+                fwd = PortForwarder(p, self.ip)
+                self._ins_forwarders.append(fwd)
+                fwd.set_pf_active(True) # greg activate this port, is this the right place????
         finally:
             self.unlock()
-    
-    def set_active( self, activated ):
+
+    def set_ins_active(self, activated):
+        logging.info("set_ins_active(self._ins_forwarders = {})".format(self._ins_forwarders)) #greg
         self.lock()
         try:
-            for f in self._forwarders:
-                f.set_active( activated )
+            for f in self._ins_forwarders:
+                logging.info("set_ins_active f = {}".format(f)) # greg
+                f.set_pf_active(activated)
         finally:
             self.unlock()
         self._active = activated
+        logging.info("set_ins_active(self._active = {}".format(self._active)) #greg
         if activated:
-            logging.info( "Active: {}".format( self.domid ) )
-        
-    def is_active( self ):
+            logging.info("Active: {}".format(self.domid))
+
+    def is_active(self):
         return self._active
 
-    def register_heartbeat( self ):
+    def register_heartbeat(self):
         self.lock()
         try:
             self._last_contact = time.time()
@@ -366,69 +407,81 @@ class INS:
         finally:
             self.unlock()
 
-    def check_heartbeat( self ):
+    def check_heartbeat(self):
         """ False ==> this INS is dead """
+        global heartbeat_interval_sec_v
+        global heartbeat_max_misses_v
         alive = True
         self.lock()
         try:
-            if( time.time() - self._last_contact >
-                HEARTBEAT_INTERVAL_SEC * (self._missed_heartbeats + 1) + 1 ):
+            if(time.time() - self._last_contact >
+                heartbeat_interval_sec_v * (self._missed_heartbeats + 1) + 1):
                 self._missed_heartbeats += 1
-                logging.warn( "INS {} has missed {} heartbeat(s)\n".
-                              format(self.domid, self._missed_heartbeats) )
+                logging.warn("INS {} has missed {} heartbeat(s)\n".
+                              format(self.domid, self._missed_heartbeats))
 
-                if self._missed_heartbeats >= HEARTBEAT_MAX_MISSES:
-                    logging.warn( "INS {} is now considered dead\n".format(self.domid) )
+                if self._missed_heartbeats >= heartbeat_max_misses_v:
+                    logging.warn("INS {} is now considered dead\n".format(self.domid))
                     alive = False
         finally:
             self.unlock()
 
         return alive
-            
-    def lock( self ):
+
+    def lock(self):
         self._lock.acquire()
 
-    def unlock( self ):
+    def unlock(self):
         self._lock.release()
 
-    def update_stats( self, stats_str ):
+    def update_stats(self, stats_str):
         self.lock()
         try:
-            # See hearbeat_thread_func in xenevent.c for this format
-            stats = [ int(x,16) for x in stats_str.split(':') ]
-            self.stats[ 'max_sockets' ]  = stats[0]
-            self.stats[ 'used_sockets' ] = stats[1]
-            self.stats[ 'recv_bytes' ]   = stats[2]
-            self.stats[ 'sent_bytes' ]   = stats[3]
+            # See heartbeat_thread_func in xenevent.c for this format
+            stats = [int(x,16) for x in stats_str.split(':')]
+            self.stats['max_sockets']  = stats[0]
+            self.stats['used_sockets'] = stats[1]
+            self.stats['recv_bytes']   = stats[2]
+            self.stats['sent_bytes']   = stats[3]
         finally:
             self.unlock()
+            logging.debug("Stats updated for domid = {}".format(self.domid))
+            logging.debug("  max_sockets = {0} used_sockets = {1}".format(
+                self.stats['max_sockets'], self.stats['used_sockets']))
+            logging.debug("  recv_bytes = {0}, sent_bytes = {1}".format(
+                self.stats['recv_bytes'], self.stats['sent_bytes']))
 
-    def get_load( self ):
-        used = 1.0 * self.stats.get( 'used_sockets', 0 )
-        capacity = 1.0 * self.stats.get( 'max_sockets', 1 )
+    def get_load(self, print_msg=False):
+        global max_ins_load_percent
+        used = 1.0 * self.stats.get('used_sockets', 0)
+        capacity = 1.0 * self.stats.get('max_sockets', 1)
+        if print_msg:
+            logging.info("{0:>3}/{1:15}: load = {2:>7.3f}/{3:.3f} | {4:.3f}/{5:.3f} - {6}".format(
+                self.domid, self.ip, used, capacity, used/capacity, max_ins_load_percent,
+                'Active' if self._active else 'Not Active'))
         return used / capacity
 
-    def overloaded( self ):
-        """ At 80%+ of max load """
-        return self.get_load() >= 0.80
+    def overloaded(self):
+        global max_ins_load_percent
+        return self.get_load() >= max_ins_load_percent
 
-    def wait( self ):
+    def wait(self):
         """ Waits until the INS is ready to use """
 
         t = 0.0
         # The watcher must have populated the INS's IP
         while True:
-            if ( self.domid != None and
+            if (self.domid != None and
                  self.domid in ins_map and
-                 self.ip != None ):
-                logging.info( "Ready: INS {}".format(self) )
-                logging.info( "All: {}".format(ins_map) )
+                 self.ip != None):
+                logging.info("Ready: INS {}".format(self))
+                logging.info("All: {}".format(ins_map))
                 break
 
-            time.sleep( POLL_INTERVAL )
+            time.sleep(POLL_INTERVAL)
             t += POLL_INTERVAL
             if t > DEFAULT_TIMEOUT:
-                raise RuntimeError( "wait() is taking too long" )
+                raise RuntimeError("wait() is taking too long")
 
 
 class PortForwarder:
@@ -439,11 +492,11 @@ class PortForwarder:
     INS.
 
     NOTE:
-    These rules necessitate that incoming connections originate from 
+    These rules necessitate that incoming connections originate from
     somewhere other than the Dom0 (or associated DomU's ???).
 
     These rules are needed to forward port 2200 to IP (INS) 1.2.3.4:
-    1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT 
+    1. iptables -A FORWARD -p tcp --dport 2200 -j ACCEPT
 
     2. iptables -t nat -I PREROUTING -m tcp -p tcp --dport 2200 \
         -j DNAT --to-destination 1.2.3.4
@@ -452,7 +505,7 @@ class PortForwarder:
         ESTABLISHED,RELATED -j ACCEPT
     """
 
-    def __init__( self, in_port, dest_ip ):
+    def __init__(self, in_port, dest_ip):
         # List of tuples: (chain, rule). The first is always baseline
         # rule to accept established traffic
         self._rules = list()
@@ -460,83 +513,86 @@ class PortForwarder:
         self._dest = dest_ip
         self._active = False
 
-    def set_active( self, activate ):
+    def set_pf_active(self, activate):
         if self._active == activate:
-            print( "Not activating already-active rule: {}".format(self) )
             return
-
         if activate:
             self._redirect_conn_to_addr()
         else:
             self._deactivate()
-
         self._active = activate
 
-    def active( self ):
+    def active(self):
         return self._active
-    
-    def _deactivate( self ):
-        logging.info( "Deactivated: {}".format( self ) )
 
-        for (c,r) in self._rules:
-            c.delete_rule( r )
-
+    def _deactivate(self):
+        ''' Delete iptable rules from currently inactivated INS '''
+        logging.info("Deactivated NOT REALLY: {}".format(self)) # greg ?
+#        logging.info("Deactivated: {}".format(self)) # greg ?
+#        for (c,r) in self._rules:
+#            logging.info("calling delete_rule: {}".format(r)) # greg ?
+#            c.delete_rule(r)
         self._rules = list() # drop old refs
 
-    def __del__( self ):
+    def __del__(self):
         self._deactivate()
 
-    def __str__( self ):
-        return "*:{0} ==> {1}:{0}".format( self._port, self._dest )
+    def __str__(self):
+        return "*:{0} ==> {1}:{0}".format(self._port, self._dest)
 
-    def get_port( self ):
+    def get_port(self):
         return self._port
 
-    def _enable_rule( self, chain, rule ):
-        chain.insert_rule( rule )
-        self._rules.append( (chain, rule) )
+    def _enable_rule(self, chain, rule):
+        chain.insert_rule(rule, position=0) # insert as first enty in chain
+        self._rules.append((chain, rule))
 
-    def _redirect_conn_to_addr( self ):
+    def _redirect_conn_to_addr(self):
         """
         Configure an external IP address on the "outside" interface and add iptables rule:
         """
 
-        #print "Start redirect: 0.0.0.0:{0} ==> {1}:{0}".format( self._port, self._dest )
+        print("Dump Before -----") # greg
+        self.dump()
 
         # Forward port 8080 to Y.Y.Y.Y:8080
         # iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to Y.Y.Y.Y:8080
+# greg - append or insert last/first spot
 
-        chain = iptc.Chain( iptc.Table( iptc.Table.NAT ), "PREROUTING" )
+        chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "PREROUTING")
 
-        rule  = iptc.Rule()
+        rule = iptc.Rule()
         rule.protocol = "tcp"
 
-        match = iptc.Match( rule, "tcp" )
-        match.dport  = "{0:d}".format( self._port )
+        match = iptc.Match(rule, "tcp")
+        match.dport = "{0:d}".format(self._port)
 
-        rule.target = iptc.Target( rule, "DNAT" )
-        rule.target.set_parameter( "to_destination",  "{0}:{1}".format( self._dest, self._port ) )
-        rule.add_match( match )
-        self._enable_rule( chain, rule )
+        rule.target = iptc.Target(rule, "DNAT")
+        rule.target.set_parameter("to_destination", "{0}:{1}".format(self._dest, self._port))
+        rule.add_match(match)
+        self._enable_rule(chain, rule)
 
         # Accept traffic directed at the prerouting chain:
         # iptables -A FORWARD -p tcp --dport 8080 -j ACCEPT
 
-        chain = iptc.Chain( iptc.Table( iptc.Table.FILTER ), "FORWARD" )
+# greg - append or insert last/first spot
 
-        rule  = iptc.Rule()
+        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
+
+        rule = iptc.Rule()
         rule.protocol = "tcp"
 
-        match = iptc.Match( rule, "tcp" )
-        match.dport  = "{0:d}".format( self._port )
+        match = iptc.Match(rule, "tcp")
+        match.dport = "{0:d}".format(self._port)
 
-        rule.target = iptc.Target( rule, "ACCEPT" )
-        rule.add_match( match )
+        rule.target = iptc.Target(rule, "ACCEPT")
+        rule.add_match(match)
 
-        self._enable_rule( chain, rule )
+        self._enable_rule(chain, rule)
 
         # Prerequisite iptables rule
         # iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# greg - append or insert last/first spot
 
         chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
 
@@ -550,95 +606,113 @@ class PortForwarder:
 
         self._enable_rule(chain, rule)
 
-        logging.info( "Activated: {}".format( self ) )
-        
-    def dump( self ):
-        table = iptc.Table(iptc.Table.FILTER)
-        for table in ( iptc.Table.FILTER, iptc.Table.NAT, 
-                       iptc.Table.MANGLE, iptc.Table.RAW ):
-            iptc_tbl = iptc.Table( table )
+        logging.info("Setup new iptable forwarding rule: {0}".format(self))
 
-            print( "Table {0}".format( iptc_tbl.name ) )
-            for chain in iptc_tbl.chains:
-                if not chain.rules:
-                    continue
-                print( "=======================" )
-                print( "Chain {0}".format( chain.name ) )
-                for rule in chain.rules:
-                    print( "Rule: proto: {0} src {1} dst {2} iface {3} out {4}".
-                           format( rule.protocol, rule.src, rule.dst, 
-                                   rule.in_interface,rule.out_interface ) )
-                    print( "Matches:" )
-                    for match in rule.matches:
-                        print( "{0} target {1}".format( match.name, rule.target.name ) )
-                print( "=======================" )
+        print("Dump After -----") # greg
+        self.dump()
+
+    def dump(self):
+
+        table = iptc.Table(iptc.Table.FILTER)
+        chain = iptc.Chain(table, "FORWARD")
+
+        print("Table {0} / Chain {1}".format(table.name, chain.name))
+        for rule in chain.rules:
+            print("Rule: proto: {0} src {1} dst {2} iface {3} out {4}".
+                format(rule.protocol, rule.src, rule.dst,
+                rule.in_interface,rule.out_interface))
+            print("Matches:")
+            for match in rule.matches:
+                print("{0} target {1}".format(match.name, rule.target.name))
+
+
+#        table = iptc.Table(iptc.Table.FILTER)
+#        for table in (iptc.Table.FILTER, iptc.Table.NAT,
+#                       iptc.Table.MANGLE, iptc.Table.RAW):
+#            iptc_tbl = iptc.Table(table)
+#
+#            print("Table {0}".format(iptc_tbl.name))
+#            for chain in iptc_tbl.chains:
+#                if not chain.rules:
+#                    continue
+#                print("=======================")
+#                print("Chain {0}".format(chain.name))
+#                for rule in chain.rules:
+#                    print("Rule: proto: {0} src {1} dst {2} iface {3} out {4}".
+#                           format(rule.protocol, rule.src, rule.dst,
+#                                   rule.in_interface,rule.out_interface))
+#                    print("Matches:")
+#                    for match in rule.matches:
+#                        print("{0} target {1}".format(match.name, rule.target.name))
+#                print("=======================")
+
 
 
 class XenStoreEventHandler:
-    def __init__( self, xiface):
+    def __init__(self, xiface):
         self._xiface = xiface
-        self._forwarders = list()
+        #self._xe_forwarders = list() # greg remove ?
 
-    def event( self, client, path, newval ):
+    def event(self, client, path, newval):
         # example path:
         # s.split('/')
         # ['', 'mw', '77', 'network_stats']
-        #print( "Observing {0} => {1}".format( path, s_newval ) )
 
         # We should only see the MW root
-        assert path.startswith( MW_XENSTORE_ROOT ), "Unexpected path {0}".format(path)
+        assert path.startswith(MW_XENSTORE_ROOT), "Unexpected path {0}".format(path)
 
         try:
-            domid = int( path.split('/')[2] )
+            domid = int(path.split('/')[2])
         except:
             # We can't do anything without the domid
             return
 
-        logging.debug( "Event on path: {}".format( path ) )
+        logging.debug("New event on path: {0} ==> {1}".format(path, newval))
+
         if 'ins_dom_id' in path:
             assert domid == int(newval)
             if len(ins_queue) == 0:
-                ins_map[ domid ] = INS( domid )
+                ins_map[domid] = INS(domid)
             else:
                 ins_queue[0].lock()
-                ins_map[ domid ] = ins_queue.pop(0)
-                ins_map[ domid ].domid = domid
-                ins_map[ domid ].unlock()
+                ins_map[domid] = ins_queue.pop(0)
+                ins_map[domid].domid = domid
+                ins_map[domid].unlock()
         elif 'ip_addrs' in path:
-            ips = filter( lambda s: '127.0.0.1' not in s, newval.split() )
+            ips = filter(lambda s: '127.0.0.1' not in s, newval.split())
             assert len(ips) == 1, "too many public IP addresses"
-            ins_map[ domid ].lock()
-            ins_map[ domid ].ip = ips[0]
-            ins_map[ domid ].unlock()
-            #client[ b"/mw/{0}/sockopts".format(domid) ] = generate_sys_net_opts()
+            ins_map[domid].lock()
+            ins_map[domid].ip = ips[0]
+            ins_map[domid].unlock()
+            client[b"/mw/{0}/sockopts".format(domid)] = generate_sys_net_opts()
         elif 'network_stats' in path:
-            ins_map[ domid ].update_stats( newval )
+            ins_map[domid].update_stats(newval)
         elif 'heartbeat' in path:
-            ins_map[ domid ].register_heartbeat()
+            ins_map[domid].register_heartbeat()
         elif 'listening_ports' in path:
-            ports = [ int(p, 16) for p in newval.split() ]
-            ins_map[ domid ].set_listening_ports( ports )
+            ports = [int(p, 16) for p in newval.split()]
+            ins_map[domid].set_listening_ports(ports)
         else:
-            #print( "Ignoring {0} => {1}".format( path, newval ) )
+            logging.debug("Ignoring event {0} => {1}".format(path, newval))
             pass
 
 
-class XenStoreWatch( threading.Thread ):
-    def __init__( self, event_handler ):
-        threading.Thread.__init__( self )
+class XenStoreWatch(threading.Thread):
+    def __init__(self, event_handler):
+        threading.Thread.__init__(self)
         self._handler = event_handler
 
-    def handle_xs_change( self, path, newval ):
+    def handle_xs_change(self, path, newval):
         pass
 
-    def run( self ):
+    def run(self):
         """
         Run the thread. Can block forever and ignore signals in some cases.
         See Other notes at top of file.
         """
         with pyxs.Client() as c:
             m = c.monitor()
-            m.watch( MW_XENSTORE_ROOT, b"MW INS watcher" )
+            m.watch(MW_XENSTORE_ROOT, b"MW INS watcher")
 
             events = m.wait()
             if exit_requested:
@@ -650,10 +724,10 @@ class XenStoreWatch( threading.Thread ):
 
                 path = e[0]
                 value = None
-                if c.exists( path ):
+                if c.exists(path):
                     value = c[path]
 
-                self._handler.event( c, path, value )
+                self._handler.event(c, path, value)
 
 class UDSHTTPConnection(httplib.HTTPConnection):
     """HTTPConnection subclass to allow HTTP over Unix domain sockets. """
@@ -671,7 +745,7 @@ class UDSTransport(xmlrpclib.Transport):
          self._extra_headers=[]
          self._connection = (None, None)
     def add_extra_header(self, key, value):
-         self._extra_headers += [ (key,value) ]
+         self._extra_headers += [(key,value)]
     def make_connection(self, host):
          # Python 2.4 compatibility
          if sys.version_info[0] <= 2 and sys.version_info[1] < 7:
@@ -684,13 +758,13 @@ class UDSTransport(xmlrpclib.Transport):
              connection.putheader(key, value)
 
 class XenIface:
-     def __init__( self ):
+     def __init__(self):
          """
          The Xen python bindings are very broken on Ubuntu 14.04, so we
          just call out to the xl program.
          """
 
-     def get_vif( self, domid ):
+     def get_vif(self, domid):
          """ Returns VIF info on the given domain. """
 
          # These XenAPI methods are present but do not work on Ubuntu
@@ -709,16 +783,16 @@ class XenIface:
          #
          # p = b"/local/domain/0"
          # with pyxs.Client() as c:
-         #    print( "Path: {0} => {1}".format(p, c[p]) )
+         #    print("Path: {0} => {1}".format(p, c[p]))
 
-         p = subprocess.Popen( [ 'xl', 'network-list', "{0:d}".format( domid ) ],
-                               stdout = subprocess.PIPE, stderr = subprocess.PIPE )
+         p = subprocess.Popen(['xl', 'network-list', "{0:d}".format(domid)],
+                               stdout = subprocess.PIPE, stderr = subprocess.PIPE)
 
-         (stdout, stderr ) = p.communicate()
+         (stdout, stderr) = p.communicate()
 
          rc = p.wait()
          if rc:
-             raise RuntimeError( "Call to xl failed: {0}".format( stderr ) )
+             raise RuntimeError("Call to xl failed: {0}".format(stderr))
 
          # Example stdout
          # Idx BE Mac Addr.         handle state evt-ch   tx-/rx-ring-ref BE-path
@@ -730,29 +804,29 @@ class XenIface:
 
          info = lines[1].split()
          bepath = info[7]   # /local/domain/0/backend/vif/3/0
-         iface = '.'.join( bepath.split('/')[-3:] ) # vif.3.0
+         iface = '.'.join(bepath.split('/')[-3:]) # vif.3.0
 
-         return dict( idx    = info[0],
+         return dict(idx    = info[0],
                       mac    = info[2],
                       state  = info[4],
                       bepath = bepath,
-                      iface  = iface )
+                      iface  = iface)
 
 def print_dict(desc, mydict):
-     print( desc )
+     print(desc)
      for (k,v) in mydict.iteritems():
-         print( k )
-         print( v )
-     print( '----------' )
+         print(k)
+         print(v)
+     print('----------')
 
 def test_redir():
-     r = PortForwarder( 4567, '10.30.30.50' )
+     r = PortForwarder(4567, '10.30.30.50')
      #r.dump()
 
      while True:
          if exit_requested:
              return
-         time.sleep( POLL_INTERVAL )
+         time.sleep(POLL_INTERVAL)
 
 
 def balance_load():
@@ -764,12 +838,12 @@ def balance_load():
 
     assert len(ins_map), "No INS is running at all"
 
-    all_active = [ v for (k,v) in ins_map.iteritems() if v.is_active() ]
+    all_active = [v for (k,v) in ins_map.iteritems() if v.is_active()]
 
     if not all_active:
         # There is no active INS; this can happen on initialization. Pick the first one.
         curr = ins_map.values()[0]
-        curr.set_active( True )
+        curr.set_ins_active(True)
     else:
         assert len(all_active) == 1, "Only one INS should be active here"
         curr = all_active[0]
@@ -778,60 +852,82 @@ def balance_load():
         # Nothing to do here
         return False
 
-    # curr is overloaded: shift burden to the INS with the lowest load    
-    logging.debug( "Stats: {}, load: {}, overloaded: {}".
-                   format( curr.stats, curr.get_load(), curr.overloaded() ) )
-    logging.info( "INS {} is overloaded, looking for another one".format(curr) )
+    # curr is overloaded: shift burden to the INS with the lowest load
+    logging.debug("Stats: {}, load: {}, overloaded: {}".
+                   format(curr.stats, curr.get_load(), curr.overloaded()))
+    logging.info("INS {} is overloaded, looking for another one".format(curr)) # greg remove ?
 
-    available = [ v for (k,v) in ins_map.iteritems() if not v.overloaded() ]
+    available = [v for (k,v) in ins_map.iteritems() if not v.overloaded()]
     if not available:
+        logging.info("All INS instances are overloaded".format(curr))
         # Nothing is available - the caller needs to create a new INS
         return True
 
-    new = min( available, key=lambda x: x.get_load() )
+    # Remove INS instances that have an empty forwarders list (listen even has no happened yet)
+    logging.info("--> Can we switch INS instances???")
+    logging.info("--> available before: {}".format(available))
+    for ins in available:
+        logging.info("--> ins._ins_forwarders: {}".format(ins._ins_forwarders))
+        if not ins._ins_forwarders:
+            logging.info("--> ins._ins_forwarders is empty - remove from consideration")
+            available.remove(ins)
 
-    logging.info( "{} is over-loaded. Directing traffic to {}"
-                  .format( curr, new ) )
+    logging.info("--> available before: {}".format(available))
 
-    new.set_active( True )   # 2 INSs are active
-    curr.set_active( False ) # 1 INS is active
+    if not available:
+        logging.info("--> available list is empty, return and try again later, ins was not ready")
+        return False
+
+    new = min(available, key=lambda x: x.get_load())
+
+    logging.info("{} is over-loaded, directing traffic to {}"
+                  .format(curr, new))
+
+    new.set_ins_active(True)   # 2 INSs are active
+    curr.set_ins_active(False) # 1 INS is active
     return False
 
 
 def single_ins():
     x = XenIface()
-    e = XenStoreEventHandler( x )
-    w = XenStoreWatch( e )
+    e = XenStoreEventHandler(x)
+    w = XenStoreWatch(e)
     w.start()
 
     s = INS()
     s.wait() # Wait for INS IP address to appear
 
     while w.is_alive():
-        w.join( POLL_INTERVAL )
+        w.join(POLL_INTERVAL)
 
 
 def ins_runner():
     """ Spawns INSs as needed, destroys as permissible. """
 
+    global max_ins_count_v
+    global monitor_interval
     spawn_new = True
+    monitor_cnt = 0.0
 
     x = XenIface()
-    e = XenStoreEventHandler( x )
-    w = XenStoreWatch( e )
+    e = XenStoreEventHandler(x)
+    w = XenStoreWatch(e)
     w.start()
 
     # Create more INSs and monitor the workload here.
     # INS activation is handled by balance_load()
-    while ( not exit_requested ):
-        if spawn_new and len(ins_map) < MAX_INS_COUNT:
+    while (not exit_requested):
+
+        if spawn_new and len(ins_map) < max_ins_count_v:
             spawn_new = False
             i = INS()
             i.wait()
+            logging.debug("Spawned new INS instance ({0} of {1})".format(
+                len(ins_map), max_ins_count_v))
 
-        # Fresh query of INSs in each iteration; the set may have
-        # changed. N.B. INSs are inserted into ins_map by the XS
-        # monitor.
+        # Fresh query of INSs in each iteration; the set may have changed.
+        # N.B. INSs are inserted into ins_map by the XS monitor.
+
         for domid in ins_map.keys():
             # Check for death
             if not ins_map[domid].check_heartbeat():
@@ -839,24 +935,145 @@ def ins_runner():
 
         spawn_new = balance_load()
 
-        time.sleep( POLL_INTERVAL )
+        time.sleep(POLL_INTERVAL) # greg
+
+        if monitor_interval > 0:
+            monitor_cnt += POLL_INTERVAL  # greg
+            if monitor_cnt > monitor_interval:
+                monitor_cnt = 0.0
+                for domid in ins_map.keys():
+                    ins_map[domid].get_load(print_msg=True)
+
 
 if __name__ == '__main__':
-    #global ins_map
 
-    logging.basicConfig( format='%(levelname)s: %(message)s',
-                         level=logging.DEBUG )
+    # Assume MWROOT is parent of CWD
+    mwroot_default = '/'.join(os.getcwd().split('/')[:-1])
 
-    logging.debug( "Running in PID {0}".format( os.getpid() ) )
+    #
+    # Command line arguments
+    #
 
-    signal.signal( signal.SIGINT,  handler )
-    signal.signal( signal.SIGTERM, handler )
-    signal.signal( signal.SIGABRT, handler )
-    signal.signal( signal.SIGQUIT, handler )
+    parser = argparse.ArgumentParser()
 
+    parser.add_argument(
+        '-p',
+        action='store',
+        dest='mwroot_path',
+        type=str,
+        default=mwroot_default,
+        help='Full path to magicwand-commsbackbone files (default: %(default)s)')
+
+    parser.add_argument(
+        '-l',
+        action='store',
+        dest='max_ins_load',
+        type=int,
+        default=MAX_INS_LOAD_DEFAULT,
+        help='INS load (1-100)%% to trigger load balancing (default: %(default)d)')
+
+    parser.add_argument(
+        '-m',
+        action='store',
+        dest='monitor_period',
+        type=int,
+        default=MONITOR_PERIOD_DEFAULT,
+        help='INS load monitor frequency in seconds 0 = disabled (default: %(default)d)')
+
+    parser.add_argument(
+        '-g',
+        action='store',
+        dest='log_level',
+        type=str,
+        choices=['critical', 'error', 'warning', 'info', 'debug'],
+        default='debug',
+        help='Logging level (default: %(default)s)')
+
+    args = parser.parse_args()
+
+    # Sanity check command line arguments
+
+    if args.max_ins_load < 1 or args.max_ins_load > 100:
+        parser.error("MAX_INS_LOAD value must be 1 - 100 inclusive")
+
+    if not os.path.isdir(args.mwroot_path):
+        parser.error("MWROOT_PATH is not a directory")
+
+    if args.monitor_period < 0 or args.monitor_period > 3600:
+        parser.error("MONITOR_PERIOD value must be 0 - 3600 inclusive")
+
+    mwroot_current = args.mwroot_path
+    max_ins_load_percent = args.max_ins_load / 100.0
+    monitor_interval = args.monitor_period
+
+    # Obtain shared mwcomms/ins values (common/common_config.h)
+
+    common_config_h = '{0}/{1}'.format(mwroot_current, path_common_config_h)
+
+    with open(common_config_h, "r") as f:
+        searchlines = f.readlines()
+    for i, line in enumerate(searchlines):
+        if "MAX_INS_COUNT" in line:
+            max_ins_count_v = int(line.split()[2])
+        if "HEARTBEAT_INTERVAL_SEC" in line:
+            heartbeat_interval_sec_v = int(line.split()[2])
+        if "HEARTBEAT_MAX_MISSES" in line:
+            heartbeat_max_misses_v = int(line.split()[2])
+
+    if max_ins_count_v == 0:
+        print("Shared common define max_ins_count_v == 0")
+        sys.exit(1)
+    if heartbeat_interval_sec_v == 0:
+        print("Shared common define heartbeat_interval_sec == 0")
+        sys.exit(1)
+    if heartbeat_max_misses_v == 0:
+        print("Shared common define heartbeat_max_misses == 0")
+        sys.exit(1)
+
+    #
+    # Check prerequisites
+    #
+
+    # IPv4 port forwarding
+    # /proc/sys/net/ipv4/ip_forward
+    # /proc/sys/net/ipv4/conf/xenbr0/forwarding (default interface: route | grep '^default' | grep -o '[^]*$')
+
+    # RUMP files present
+
+    # mw_setkeys run
+
+    logging.basicConfig(format='%(levelname)s: %(message)s',
+        level=log_levels[args.log_level])
+
+    logging.debug("PID = {0}".format(os.getpid()))
+    logging.debug("mwroot_current = {0}".format(mwroot_current))
+    logging.debug("max_ins_count_v = {0}".format(max_ins_count_v))
+    logging.debug("heartbeat_interval_sec_v = {0}".format(heartbeat_interval_sec_v))
+    logging.debug("heartbeat_max_misses_v = {0}".format(heartbeat_max_misses_v))
+    logging.debug("monitor_interval = {0}".format(monitor_interval))
+    logging.debug("max_ins_load_percent = {0}".format(max_ins_load_percent))
+
+    signal.signal(signal.SIGINT,  handler)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGABRT, handler)
+    signal.signal(signal.SIGQUIT, handler)
+
+    # TODO: prereqs - no INS instances running !!! check with xl list or something for INS instances running
+
+    # TODO: prereqs - mwcomms running, but keys need to be cleared first
+
+
+    # TODO: prereqs - start apache on pvm after mwcomms and INS are running
+
+    # TODO: prereqs - port forwarding has to be enabled on xenbr0? on Dom0?
+    #       /proc/sys/net/ipv4/conf/xenbr0/forwarding (should be set to "1" to enable forwarding)
+    #       /proc/sys/net/ipv4/ip_forward (should be set to "1" to enable forwarding) does this one work?
+
+    # TODO: get rid of this or make it an option (max INS count or single INS, just do the iptable and monitor load)
+    # argument for max ins instances, must be =< MAX INS count found in header file.
     #single_ins()
     ins_runner()
 
     ins_map = None # deref all items
-    logging.info( "Exiting main thread" )
+    logging.info("Exiting main thread")
 

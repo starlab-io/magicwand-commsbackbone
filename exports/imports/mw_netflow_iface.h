@@ -44,7 +44,6 @@
 // Make sure they agree on the layout.
 #define MT_STRUCT_ATTRIBS __attribute__ ((__packed__))
 
-
 /**
  * Base info for netflow interface. The signature determines the type
  * of message (described above).
@@ -61,7 +60,6 @@ typedef struct _mw_base
     mw_message_id_t  id;
 } __attribute__((packed)) mw_base_t;
 
-
 #define _MW_SIG_HI 0xd3
 
 #define MW_SIG(_x) ( (_MW_SIG_HI << 8) | (_x) )
@@ -74,7 +72,6 @@ typedef struct _mw_base
 #define MW_MESSAGE_SIG_FEATURE_REQUEST   MW_SIG( 0x20 )
 #define MW_MESSAGE_SIG_FEATURE_RESPONSE  MW_SIG( 0x2f )
 
-
 /**
  * Informational message only that comes from the PVM. Not for
  * mitigation, not related to status request. Does not provide a
@@ -86,7 +83,7 @@ typedef struct _mw_base
 //
 // Per http://elixir.free-electrons.com/linux/latest/source/include/linux/inet.h
 // #define INET_ADDRSTRLEN      (16)
-// #define INET6_ADDRSTRLEN	(48)
+// #define INET6_ADDRSTRLEN     (48)
 //
 // So an IPv6:port pair is '[' + 48 bytes + ']:' + 5 bytes = 56 bytes
 //
@@ -103,7 +100,6 @@ typedef struct _mw_addr
     uint8_t a[ NETFLOW_INFO_ADDR_LEN ];
 } __attribute__((packed)) mw_addr_t; // 4 + 16 = 20 bytes
 
-
 typedef struct _mw_endpoint
 {
     mw_addr_t addr;
@@ -116,7 +112,6 @@ typedef struct _mw_timestamp
     uint64_t sec; // seconds
     uint64_t ns;  // nanoseconds
 } __attribute__((packed)) mw_timestamp_t;
-
 
 typedef enum _mw_observation
 {
@@ -150,7 +145,6 @@ typedef struct _mw_netflow_info
 
     uint64_t         extra;     // extra data: new sockfd on accept msg
 } __attribute__((packed)) mw_netflow_info_t;
-
 
 /**
  * Specific requests for mitigation or status. These originate from
@@ -190,7 +184,16 @@ typedef enum
 {
     MtSockAttribNone              = 0x0000,
 
-    // Per-socket attributes
+    // *** Non-socket related commands
+
+    // Turn on traffic monitoring for channel
+    MtChannelTrafficMonitorOn     = 0x0001,
+
+    // Turn off traffic monitoring for channel
+    MtChannelTrafficMonitorOff    = 0x0002,
+
+    // *** Per-socket attributes
+
     MtSockAttribIsOpen            = 0x0101,
     MtSockAttribOwnerRunning      = 0x0102,
 
@@ -207,17 +210,19 @@ typedef enum
     MtSockAttribRcvTimeo          = 0x010c,
     MtSockAttribSndLoWat          = 0x010d,
     MtSockAttribRcvLoWat          = 0x010e,
+    MtSockAttribError             = 0x010f,
 
-    // INS-wide settings
+    // *** INS-wide settings
 
     // Change congestion control algo, arg: see vals below
     MtSockAttribGlobalCongctl     = 0x1101,
+
     // Change of delay ACK ticks: arg is signed tick differential
     MtSockAttribGlobalDelackTicks = 0x1102,
+
 } mt_sockfeat_name_val_t;
 
 typedef uint16_t mt_sockfeat_name_t; // holds an mt_sockfeat_name_t
-
 
 //
 // For usage on getsockopt/setsockopt with timeouts
@@ -236,22 +241,18 @@ typedef union MT_STRUCT_ATTRIBS _mt_sockfeat_arg
     mt_sockfeat_time_arg_t t;
 } mt_sockfeat_arg_t;
 
-
 //
 // Valid feature flags
 //
 
-//#define MW_FEATURE_FLAG_READ    0x0 // action: read
+#define MW_FEATURE_FLAG_READ    0x0 // action: read
 #define MW_FEATURE_FLAG_WRITE   0x1 // action: write
-
-// Exactly one of the following two bits must be asserted
 #define MW_FEATURE_FLAG_BY_SOCK 0x2 // use sockfd as identifier
-//#define MW_FEATURE_FLAG_BY_PEER 0x4 // use peer IP as identifier XXXX: UNSUPPORTED
+#define MW_FEATURE_FLAG_BY_PEER 0x4 // use peer IP as identifier XXXX: UNSUPPORTED
 
 typedef uint16_t mw_sockfeat_flags_t;
 typedef uint32_t mw_status_t; // status: 0 on success, otherwise positive Linux errno
 //typedef uint64_t mw_feature_arg_t;
-
 
 /**
  * A feature request. Can be used for getting information (status) or
@@ -278,8 +279,7 @@ typedef struct MT_STRUCT_ATTRIBS _mw_feature_request
     {
         mw_socket_fd_t  sockfd;
         mw_addr_t       remote;
-    } ident;
-//}  __attribute__((packed)) mw_feature_request_t;
+    } __attribute__((packed)) ident;
 } mw_feature_request_t;
 
 /**
