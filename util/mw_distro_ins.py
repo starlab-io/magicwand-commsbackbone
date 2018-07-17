@@ -151,6 +151,12 @@ max_ins_load_percent = 0.0
 # Monitoring message interval (0 is disabled)
 monitor_interval = 0
 
+# INS overloaded trigger file
+ins_overloaded_trigger = None
+
+# Startup all INS instances at beginning instead of on demand
+start_all_ins_instances = False
+
 INS_MEMORY_MB = 3048
 POLL_INTERVAL = 0.05
 DEFAULT_TIMEOUT = 5
@@ -177,6 +183,7 @@ ins_queue = list()
 
 # MACs for usage by INSs; this way we don't overflow DHCP's mappings
 macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
+         '00:16:3e:28:2a:51' : { 'in_use' : False },
          '00:16:3e:28:2a:51' : { 'in_use' : False },
          '00:16:3e:28:2a:52' : { 'in_use' : False },
          '00:16:3e:28:2a:53' : { 'in_use' : False },
@@ -212,6 +219,7 @@ macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
 inst_num = 0
 
 exit_requested = False
+
 def handler(signum, frame):
     global exit_requested
     logging.warn("Caught signal {0}".format(signum))
@@ -378,23 +386,25 @@ class INS:
                     continue
                 fwd = PortForwarder(p, self.ip)
                 self._ins_forwarders.append(fwd)
-                fwd.set_pf_active(True) # greg activate this port, is this the right place????
         finally:
             self.unlock()
 
     def set_ins_active(self, activated):
-        logging.info("set_ins_active(self._ins_forwarders = {})".format(self._ins_forwarders)) #greg
+
+        # Do not activate an INS without listeners
+        if activated == True and not self._ins_forwarders:
+            return
+
         self.lock()
         try:
             for f in self._ins_forwarders:
-                logging.info("set_ins_active f = {}".format(f)) # greg
                 f.set_pf_active(activated)
         finally:
             self.unlock()
         self._active = activated
-        logging.info("set_ins_active(self._active = {}".format(self._active)) #greg
-        if activated:
-            logging.info("Active: {}".format(self.domid))
+
+        logging.info("{0} INS {1}".format(
+            'Activated' if activated else 'Deactivated', self.domid))
 
     def is_active(self):
         return self._active
@@ -456,13 +466,20 @@ class INS:
         used = 1.0 * self.stats.get('used_sockets', 0)
         capacity = 1.0 * self.stats.get('max_sockets', 1)
         if print_msg:
-            logging.info("{0:>3}/{1:15}: load = {2:>7.3f}/{3:.3f} | {4:.3f}/{5:.3f} - {6}".format(
+            logging.info("{0:>3}/{1:15}: load = {2:>7.3f}/{3:.3f} | {4:.3f}/{5:.3f} - {6} / {7}".format(
                 self.domid, self.ip, used, capacity, used/capacity, max_ins_load_percent,
-                'Active' if self._active else 'Not Active'))
+                'Active' if self._active else 'Not Active',
+                'Overloaded' if self.overloaded() else 'Not Overloaded'))
         return used / capacity
 
     def overloaded(self):
         global max_ins_load_percent
+        global ins_overloaded_trigger
+
+        if ins_overloaded_trigger and os.path.isfile(ins_overloaded_trigger):
+            os.remove(ins_overloaded_trigger)
+            return True
+
         return self.get_load() >= max_ins_load_percent
 
     def wait(self):
@@ -472,10 +489,10 @@ class INS:
         # The watcher must have populated the INS's IP
         while True:
             if (self.domid != None and
-                 self.domid in ins_map and
-                 self.ip != None):
-                logging.info("Ready: INS {}".format(self))
-                logging.info("All: {}".format(ins_map))
+                self.domid in ins_map and
+                self.ip != None):
+                logging.info("INS ready {}".format(self))
+                logging.info("All INS instances {}".format(ins_map))
                 break
 
             time.sleep(POLL_INTERVAL)
@@ -513,6 +530,13 @@ class PortForwarder:
         self._dest = dest_ip
         self._active = False
 
+    def refresh_pf_active(self): #greg
+        logging.info("refresh_pf_active: Refreshing iptables entries - INS {}".format(self)) # greg ?
+        for (t,c,r) in self._rules:
+            t.refresh()
+            c.insert_rule(r)
+            t.refresh()
+
     def set_pf_active(self, activate):
         if self._active == activate:
             return
@@ -527,12 +551,12 @@ class PortForwarder:
 
     def _deactivate(self):
         ''' Delete iptable rules from currently inactivated INS '''
-        logging.info("Deactivated NOT REALLY: {}".format(self)) # greg ?
-#        logging.info("Deactivated: {}".format(self)) # greg ?
-#        for (c,r) in self._rules:
-#            logging.info("calling delete_rule: {}".format(r)) # greg ?
-#            c.delete_rule(r)
-        self._rules = list() # drop old refs
+        logging.info("Deactivate iptables entries - INS {}".format(self)) # greg ?
+        for (t,c,r) in self._rules:
+            t.refresh()
+            c.delete_rule(r)
+            t.refresh()
+        del self._rules[:] # drop old refs
 
     def __del__(self):
         self._deactivate()
@@ -543,73 +567,99 @@ class PortForwarder:
     def get_port(self):
         return self._port
 
-    def _enable_rule(self, chain, rule):
-        chain.insert_rule(rule, position=0) # insert as first enty in chain
-        self._rules.append((chain, rule))
+    def _enable_rule(self, t, c, r):
+        t.refresh()
+        c.insert_rule(r)
+        t.refresh()
+        self._rules.append((t, c, r))
 
     def _redirect_conn_to_addr(self):
         """
         Configure an external IP address on the "outside" interface and add iptables rule:
         """
 
-        print("Dump Before -----") # greg
-        self.dump()
+        #print("Dump Before -----") # greg
+        #self.dump()
 
-        # Forward port 8080 to Y.Y.Y.Y:8080
-        # iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to Y.Y.Y.Y:8080
-# greg - append or insert last/first spot
+        # Forward port 80 to Y.Y.Y.Y:80:
+        # iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to Y.Y.Y.Y:80
 
-        chain = iptc.Chain(iptc.Table(iptc.Table.NAT), "PREROUTING")
+
+        table = iptc.Table(iptc.Table.NAT)
+        chain = iptc.Chain(table, "PREROUTING")
 
         rule = iptc.Rule()
         rule.protocol = "tcp"
-
-        match = iptc.Match(rule, "tcp")
-        match.dport = "{0:d}".format(self._port)
-
         rule.target = iptc.Target(rule, "DNAT")
         rule.target.set_parameter("to_destination", "{0}:{1}".format(self._dest, self._port))
+
+        match = iptc.Match(rule, "comment")
+        match.comment = "mw1 {0}".format(self._dest)
         rule.add_match(match)
-        self._enable_rule(chain, rule)
-
-        # Accept traffic directed at the prerouting chain:
-        # iptables -A FORWARD -p tcp --dport 8080 -j ACCEPT
-
-# greg - append or insert last/first spot
-
-        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
-
-        rule = iptc.Rule()
-        rule.protocol = "tcp"
 
         match = iptc.Match(rule, "tcp")
         match.dport = "{0:d}".format(self._port)
-
-        rule.target = iptc.Target(rule, "ACCEPT")
         rule.add_match(match)
 
-        self._enable_rule(chain, rule)
+        self._enable_rule(table, chain, rule)
 
-        # Prerequisite iptables rule
-        # iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-# greg - append or insert last/first spot
+        # Accept traffic directed at the prerouting chain:
+        # iptables -A FORWARD -p tcp --dport 80 -j ACCEPT
 
-        chain = iptc.Chain(iptc.Table(iptc.Table.FILTER), "FORWARD")
+        table = iptc.Table(iptc.Table.FILTER)
+        chain = iptc.Chain(table, "FORWARD")
 
         rule = iptc.Rule()
         rule.protocol = "tcp"
+        rule.target = iptc.Target(rule, "ACCEPT")
+
+        match = iptc.Match(rule, "comment")
+        match.comment = "mw2 {0}".format(self._dest)
+        rule.add_match(match)
+
+        match = iptc.Match(rule, "tcp")
+        match.dport = "{0:d}".format(self._port)
+        rule.add_match(match)
+
+        self._enable_rule(table, chain, rule)
+
+        # Prerequisite iptables rule:
+        # iptables -A FORWARD -m conntrack -p tcp --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+        table = iptc.Table(iptc.Table.FILTER)
+        chain = iptc.Chain(table, "FORWARD")
+
+        rule = iptc.Rule()
+        rule.protocol = "tcp"
+        rule.target = iptc.Target(rule, "ACCEPT")
+
+        match = iptc.Match(rule, "comment")
+        match.comment = "mw3 {0}".format(self._dest)
+        rule.add_match(match)
 
         match = rule.create_match("conntrack")
         match.ctstate = "RELATED,ESTABLISHED"
 
-        rule.target = iptc.Target(rule, "ACCEPT")
+        self._enable_rule(table, chain, rule)
 
-        self._enable_rule(chain, rule)
+    def dump_rule(self, table, chain, rule):
+        print("Table {0} Chain {1}".format(table.name, chain.name))
+        for r in chain.rules:
+            print("Rule 1: proto: {0} src {1} dst {2} iface {3} out {4}".
+                format(r.protocol, r.src, r.dst,
+                r.in_interface,r.out_interface))
+            print("Matches 1:")
+            for match in r.matches:
+                print("{0} target {1} comment [{2}]".format(match.name, r.target.name, match.comment))
 
-        logging.info("Setup new iptable forwarding rule: {0}".format(self))
+        # See if they match - greg
 
-        print("Dump After -----") # greg
-        self.dump()
+        print("Rule 2: proto: {0} src {1} dst {2} iface {3} out {4}".
+            format(rule.protocol, rule.src, rule.dst,
+            rule.in_interface,rule.out_interface))
+        print("Matches 2:")
+        for match in rule.matches:
+            print("{0} target {1} comment [{2}]".format(match.name, rule.target.name, match.comment))
 
     def dump(self):
 
@@ -623,7 +673,7 @@ class PortForwarder:
                 rule.in_interface,rule.out_interface))
             print("Matches:")
             for match in rule.matches:
-                print("{0} target {1}".format(match.name, rule.target.name))
+                print("{0} target {1} comment [{2}]".format(match.name, rule.target.name, match.comment))
 
 
 #        table = iptc.Table(iptc.Table.FILTER)
@@ -855,7 +905,7 @@ def balance_load():
     # curr is overloaded: shift burden to the INS with the lowest load
     logging.debug("Stats: {}, load: {}, overloaded: {}".
                    format(curr.stats, curr.get_load(), curr.overloaded()))
-    logging.info("INS {} is overloaded, looking for another one".format(curr)) # greg remove ?
+    logging.debug("INS {} is overloaded, looking for another one".format(curr)) # greg remove ?
 
     available = [v for (k,v) in ins_map.iteritems() if not v.overloaded()]
     if not available:
@@ -863,28 +913,24 @@ def balance_load():
         # Nothing is available - the caller needs to create a new INS
         return True
 
-    # Remove INS instances that have an empty forwarders list (listen even has no happened yet)
-    logging.info("--> Can we switch INS instances???")
-    logging.info("--> available before: {}".format(available))
+    # Remove INS instances that have an empty forwarders
+    # list (listen event has not happened yet)
     for ins in available:
-        logging.info("--> ins._ins_forwarders: {}".format(ins._ins_forwarders))
         if not ins._ins_forwarders:
-            logging.info("--> ins._ins_forwarders is empty - remove from consideration")
             available.remove(ins)
 
-    logging.info("--> available before: {}".format(available))
-
     if not available:
-        logging.info("--> available list is empty, return and try again later, ins was not ready")
         return False
+
+    # All INS instances on available list have listeners
 
     new = min(available, key=lambda x: x.get_load())
 
-    logging.info("{} is over-loaded, directing traffic to {}"
-                  .format(curr, new))
+    logging.debug("{} overloaded, directing traffic to {}".format(curr, new))
 
     new.set_ins_active(True)   # 2 INSs are active
     curr.set_ins_active(False) # 1 INS is active
+
     return False
 
 
@@ -906,6 +952,7 @@ def ins_runner():
 
     global max_ins_count_v
     global monitor_interval
+    global start_all_ins_instances
     spawn_new = True
     monitor_cnt = 0.0
 
@@ -914,10 +961,18 @@ def ins_runner():
     w = XenStoreWatch(e)
     w.start()
 
+    # Startup all INS instances now instead of on demand
+    if start_all_ins_instances:
+        while len(ins_map) < max_ins_count_v:
+            i = INS()
+            i.wait()
+            logging.debug("Spawned new INS instance ({0} of {1})".format(
+                len(ins_map), max_ins_count_v))
+        spawn_new = False
+
     # Create more INSs and monitor the workload here.
     # INS activation is handled by balance_load()
     while (not exit_requested):
-
         if spawn_new and len(ins_map) < max_ins_count_v:
             spawn_new = False
             i = INS()
@@ -986,8 +1041,23 @@ if __name__ == '__main__':
         dest='log_level',
         type=str,
         choices=['critical', 'error', 'warning', 'info', 'debug'],
-        default='debug',
+        default='info',
         help='Logging level (default: %(default)s)')
+
+    parser.add_argument(
+        '-o',
+        action='store',
+        dest='overloaded_trigger',
+        type=str,
+        default=None,
+        help='Full path to INS overloaded trigger file (default: %(default)s)')
+
+    parser.add_argument(
+        '-s',
+        action='store_true',
+        dest='start_all_ins_instances',
+        default=False,
+        help='Start all INS instances immediately instead of on demand (default: %(default)s)')
 
     args = parser.parse_args()
 
@@ -1002,9 +1072,14 @@ if __name__ == '__main__':
     if args.monitor_period < 0 or args.monitor_period > 3600:
         parser.error("MONITOR_PERIOD value must be 0 - 3600 inclusive")
 
+    if args.overloaded_trigger and os.path.isfile(args.overloaded_trigger):
+        parser.error("OVERLOADED_TRIGGER file should not exist")
+
     mwroot_current = args.mwroot_path
     max_ins_load_percent = args.max_ins_load / 100.0
     monitor_interval = args.monitor_period
+    ins_overloaded_trigger = args.overloaded_trigger
+    start_all_ins_instances = args.start_all_ins_instances
 
     # Obtain shared mwcomms/ins values (common/common_config.h)
 
@@ -1035,12 +1110,35 @@ if __name__ == '__main__':
     #
 
     # IPv4 port forwarding
-    # /proc/sys/net/ipv4/ip_forward
-    # /proc/sys/net/ipv4/conf/xenbr0/forwarding (default interface: route | grep '^default' | grep -o '[^]*$')
+    route_str = subprocess.check_output(['/sbin/route'])
+    match = re.search(r'\ndefault.*\n', route_str)
+    iface = match.group().strip('\n').split()[7]
 
-    # RUMP files present
+    forward_enabled = False
 
-    # mw_setkeys run
+    forward_file_1 = '/proc/sys/net/ipv4/ip_forward'
+    forward_file_2 = '/proc/sys/net/ipv4/conf/' + iface + '/forwarding'
+
+    try:
+        with open(forward_file_1, 'r') as f1:
+            if '1' in f1.read():
+                forward_enabled = True
+
+        with open(forward_file_2, 'r') as f2:
+            if '1' in f2.read():
+                forward_enabled = True
+    except:
+       pass
+
+    if not forward_enabled:
+        print("ipv4 forwarding not enabled, configuration files checked:")
+        print(forward_file_1)
+        print(forward_file_2)
+        sys.exit(1)
+
+    # RUMP files present - TODO
+
+    # mw_setkeys run - TODO
 
     logging.basicConfig(format='%(levelname)s: %(message)s',
         level=log_levels[args.log_level])
@@ -1052,6 +1150,8 @@ if __name__ == '__main__':
     logging.debug("heartbeat_max_misses_v = {0}".format(heartbeat_max_misses_v))
     logging.debug("monitor_interval = {0}".format(monitor_interval))
     logging.debug("max_ins_load_percent = {0}".format(max_ins_load_percent))
+    logging.debug("ins_overloaded_trigger = {0}".format(ins_overloaded_trigger))
+    logging.debug("start_all_ins_instances = {0}".format(start_all_ins_instances))
 
     signal.signal(signal.SIGINT,  handler)
     signal.signal(signal.SIGTERM, handler)
@@ -1062,18 +1162,14 @@ if __name__ == '__main__':
 
     # TODO: prereqs - mwcomms running, but keys need to be cleared first
 
-
     # TODO: prereqs - start apache on pvm after mwcomms and INS are running
-
-    # TODO: prereqs - port forwarding has to be enabled on xenbr0? on Dom0?
-    #       /proc/sys/net/ipv4/conf/xenbr0/forwarding (should be set to "1" to enable forwarding)
-    #       /proc/sys/net/ipv4/ip_forward (should be set to "1" to enable forwarding) does this one work?
 
     # TODO: get rid of this or make it an option (max INS count or single INS, just do the iptable and monitor load)
     # argument for max ins instances, must be =< MAX INS count found in header file.
     #single_ins()
     ins_runner()
 
-    ins_map = None # deref all items
+    ins_map = None # dereference all items (destroys INS instances and deletes associated iptables entries)
+
     logging.info("Exiting main thread")
 
