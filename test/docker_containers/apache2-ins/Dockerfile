@@ -22,4 +22,4 @@ RUN make clean all
 RUN mkdir -p /var/log/output
 
 #Use this command to add custom index.html
-#COPY ./config/index.html /usr/local/apache2/htdocs/
+COPY ./config/index.html /usr/local/apache2/htdocs/

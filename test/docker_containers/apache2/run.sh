@@ -10,6 +10,5 @@ sudo docker run						\
 	--security-opt seccomp=unconfined               \
 	--privileged					\
 	--network=host					\
-	--device=/dev/mwcomms				\
 	--name $CONTAINER_NAME				\
 	$IMAGE_NAME
