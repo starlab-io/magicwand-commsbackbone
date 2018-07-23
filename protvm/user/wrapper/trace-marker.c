@@ -11,6 +11,8 @@
 
 #include "trace-marker.h"
 
+#define USE_DIRECT_WRITE
+
 #ifdef ENABLE_TRACING
 
 static int tracefd = -1;
