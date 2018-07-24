@@ -209,7 +209,7 @@ mwcomms_is_mwsocket( IN int Fd )
 {
     bool answer = false;
 
-    trace_printk( "entering mwcomms_is_socket()" );
+    //trace_printk( "entering mwcomms_is_socket()" );
     
 #if (!USE_MWCOMMS)
     goto ErrorExit;
@@ -233,7 +233,7 @@ mwcomms_is_mwsocket( IN int Fd )
 
 ErrorExit:
 
-    trace_printk( "leaving mwcomms_is_socket()" );
+    //trace_printk( "leaving mwcomms_is_socket()" );
     
     return answer;
 }
@@ -250,7 +250,7 @@ mwcomms_write_request( IN  int                     MwFd,
     struct timespec remain_time = { .tv_sec = 0, .tv_nsec = 1 };
     int err = 0;
 
-    trace_printk( "entering mwcomms_write_request()" );
+    //trace_printk( "entering mwcomms_write_request()" );
 
 #if (!USE_MWCOMMS)
     // no processing at all
@@ -365,7 +365,7 @@ mwcomms_write_request( IN  int                     MwFd,
 ErrorExit:
     errno = err;
 
-    trace_printk( "leaving mwcomms_write_request()" );
+    //trace_printk( "leaving mwcomms_write_request()" );
     
     return rc;
 }
@@ -1757,7 +1757,7 @@ fcntl(int Fd, int Cmd, ... /* arg */ )
     int oldflags = 0;
     int newflags = 0;
 
-    trace_printk( "entering fcntl()" );
+    //trace_printk( "entering fcntl()" );
 
     va_start( ap, Cmd );
     arg = va_arg( ap, void * );
@@ -1819,7 +1819,7 @@ ErrorExit:
         errno = err;
     }
 
-    trace_printk( "leaving fcntl()" );
+    //trace_printk( "leaving fcntl()" );
     
     return rc;
 }
