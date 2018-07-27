@@ -47,6 +47,7 @@
 #include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/kthread.h>
+#include <linux/delay.h>
 
 #include <asm/uaccess.h>
 #include <linux/time.h>
@@ -61,12 +62,10 @@
 #include <xen/interface/callback.h>
 #include <xen/interface/io/ring.h>
 
-
 #include "mwcomms-xen-iface.h"
 
 // How long to wait if we want to write a request but the ring is full?
 #define RING_FULL_TIMEOUT (HZ >> 6)
-
 
 // Defines:
 // union mwevent_sring_entry
@@ -111,7 +110,7 @@ typedef struct _mwcomms_ins_data
     mt_request_generic_t    * curr_req;
 
     bool                      locked;
-    struct mutex              request_lock;
+
 } mwcomms_ins_data_t;
 
 
@@ -129,6 +128,9 @@ typedef struct _mwcomms_xen_globals
     mw_xen_event_handler_cb_t * event_cb;
 
     mwcomms_ins_data_t ins[ MAX_INS_COUNT ];
+
+    struct mutex ring_lock;
+    int new_ins_delay;
 
 } mwcomms_xen_globals_t;
 
@@ -839,13 +841,23 @@ mw_xen_ins_found( IN const char * Path )
     //
     mw_xen_ins_alive( curr );
 
-    mutex_init( &curr->request_lock );
     curr->locked = false;
 
     curr->is_ring_ready = true;
+
     pr_info( "INS %d is ready\n", curr->domid );
 
     atomic64_inc( &g_mwxen_state.ins_count );
+
+    // Slow down the first couple of transactions
+    // when secondary INS instances start up, otherwise
+    // mwcomms runs into a timeout on request responses.
+    if ( atomic64_read ( &g_mwxen_state.ins_count ) > 1 ) {
+        g_mwxen_state.new_ins_delay = 5;
+    } else {
+        g_mwxen_state.new_ins_delay = 0;
+    }
+
     g_mwxen_state.completion_cb( curr->domid );
 
 ErrorExit:
@@ -1145,7 +1157,8 @@ mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
     // acquire the lock now. That means we must also return the handle
     // to the caller (in locked state).
 
-    mutex_lock( &ins->request_lock );
+    mutex_lock(&g_mwxen_state.ring_lock);
+
     ins->locked = true;
     ins->curr_req = NULL;
 
@@ -1248,6 +1261,11 @@ mw_xen_release_request( IN void * Handle,
 
     MYASSERT( ins->locked );
 
+    if( g_mwxen_state.new_ins_delay > 0 ) {
+        g_mwxen_state.new_ins_delay--;
+        mdelay(100);
+    }
+
     if( SendRequest )
     {
         mt_request_generic_t * req  = (mt_request_generic_t *)
@@ -1269,15 +1287,17 @@ mw_xen_release_request( IN void * Handle,
 #if INS_USES_EVENT_CHANNEL
         rc = mw_xen_send_event( ins );
 #endif
+
     }
 
 ErrorExit:
+
     if( ins )
     {
         // MYASSERT( ins->locked ); // Valid in single-threaded usage
         ins->curr_req = NULL;
         ins->locked = false;
-        mutex_unlock( &ins->request_lock );
+        mutex_unlock(&g_mwxen_state.ring_lock);
     }
     return rc;
 }
@@ -1382,6 +1402,9 @@ mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
     g_mwxen_state.completion_cb = CompletionCallback;
     g_mwxen_state.event_cb = EventCallback;
     g_mwxen_state.pending_exit = false;
+
+    // Serialize all Xen ring buffer accesses
+    mutex_init(&g_mwxen_state.ring_lock);
 
     // Create keystore path for pvm
     rc = mw_xen_initialize_keystore();
