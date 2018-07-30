@@ -820,16 +820,6 @@ xe_net_defer_accept_socket( int LocalFd,
                            "deferring accept of new socket %d from listener %d\n",
                            sockfd, LocalFd );
 
-                //XXX for Debugging
-                struct sockaddr_in sockaddr = {0};
-                socklen_t sock_len = 0;
-                sock_len = sizeof( sockaddr );
-                getpeername( sockfd, (struct sockaddr *)&sockaddr, &sock_len );
-
-                log_write( LOG_DEBUG,
-                           "accepting connection from %s:%d\n",
-                           inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
-                //XXX
 
                 rc = xe_net_set_sock_nonblock( sockfd, true );
                 if( rc )
@@ -867,7 +857,7 @@ xe_net_defer_accept_socket( int LocalFd,
             peer_poll_fds[i] = mw_peer_poll_fds[i].poll_fd;
         }
 
-        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 50 );
+        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 0 );
         if( rc < 0 )
         {
             err = errno;
@@ -944,7 +934,7 @@ xe_net_defer_accept_socket( int LocalFd,
             last_idx++;
         }
 
-//        xe_net_defer_accept_wait();
+        xe_net_defer_accept_wait();
     } while( true );
 
 ErrorExit:
