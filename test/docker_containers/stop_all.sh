@@ -1,5 +1,5 @@
 #!/bin/bash
 
-./apache2/stop.sh
+./apache/stop.sh
 
-./apache2-ins/stop.sh
+./apache-ins/stop.sh

@@ -1,9 +1,9 @@
 #!/bin/bash
 
-cd ./apache2
+cd ./apache
 ./build.sh
 cd ..
 
-cd ./apache2-ins
+cd ./apache-ins
 ./build.sh
 cd ..
