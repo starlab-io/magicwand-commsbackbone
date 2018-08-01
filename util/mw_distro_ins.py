@@ -1,60 +1,35 @@
 #!/usr/bin/env python2
-
+#
+# Front-end glue for MagicWand that spawns Rump INSs and routes incoming
+# connections to a specific instance based on runtime variables.
 #
 # Assumptions:
 #   - No INS instances currently running
 #   - TCP/IP Forwarding has been enabled
 #   - Xen keys cleared
 #   - mwcomms driver loaded
+#   - start this script, then start apache, then start testing
 #
-# start script then start apache
+# Iptables debug:
+#   $ sudo iptables -v --line-numbers -t nat -n -L PREROUTING  # show NAT PREROUTINE chain
+#   $ sudo iptables -v --line-numbers -t filter -n -L FORWARD  # show FILTER FORWARD chain
 #
+# Package requirements:
+#   python-iptables: pip install --upgrade python-iptables
+#   pyxs           : pip install --upgrade pyxs
 #
-# Debug
-#     $ sudo iptables -v -t nat -n -L PREROUTING  # show NAT PREROUTINE chain
-#     $ sudo iptables -v -t filter -n -L FORWARD  # show FILTER FORWARD chain
+# Other notes:
+#   The XenStore event watcher can block forever if the PVM driver
+#   isn't loaded or in the right state. See
+#   https://bugs.python.org/issue8844 and the pyxs source (client.py)
+#   for details.
 #
+#   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We
+#   interface with Xen by calling out to xl.
 #
-
-##
-## Front-end glue for MagicWand that spawns Rump INSs and routes
-## incoming connections to a specific instance based on runtime
-## variables.
-##
-## Package requirements:
-##   python-iptables: pip install --upgrade python-iptables
-##   pysx           : pip install --upgrade pyxs
-##
-# Environmental requirements:
-##
-##   This script is run as root in an environment that is configured
-##   for Rump, i.e. rumprun is in the PATH; one way to achieve this is
-##   to source in RUMP_ENV.sh)
-##
-##   xend is installed and accessible via TCP on localhost
-##      On Ubuntu 14.04 / Xen 4.4, change /etc/xen/xend-config.sxp so
-##      this directive is enabled:
-##           (xen-api-server ((9225 localhost)))
-##      Install it as a service with:
-##       $ ln -s /usr/lib/xen-4.4/bin/xend /etc/init.d
-##       $ update-rc.d xend defaults 20 21
-##      and start/restart the service
-##       $ service xend start
-##
-## Other notes:
-##
-##   The XenStore event watcher can block forever if the PVM driver
-##   isn't loaded or in the right state. See
-##   https://bugs.python.org/issue8844 and the pyxs source (client.py)
-##   for details.
-##
-##   XenAPI is broken on Ubuntu 14.04/Xen 4.4, so we don't use it. We
-##   interface with Xen by calling out to xl.
-##
-##   The INS memory requirement is based on the number of sockets it
-##   supports. Take this into account here (manually or
-##   programmatically).
-##
+#   The INS memory requirement is based on the number of sockets it
+#   supports. Take this into account here (manually or programmatically).
+#
 
 import logging
 import sys
@@ -77,13 +52,11 @@ import argparse
 # import xen.xm.XenAPI as XenAPI
 
 # See http://libvirt.org/docs/libvirt-appdev-guide-python
-#import libvirt # system-installed build doesn't support new XenAPI
+# import libvirt # system-installed build doesn't support new XenAPI
 
-
-##
-## Constants for RUMP/NetBSD socket and TCP options that we may need.
-##
-
+#
+# Constants for RUMP/NetBSD socket and TCP options that we may need.
+#
 
 # Per-socket options: use these for mitigation
 
@@ -227,7 +200,7 @@ def handler(signum, frame):
 
 
 def generate_sys_net_opts():
-    """ Randomly, but smartly generate INS network configuration """
+    """ Randomly, but smartly generate INS network configuration. """
     params = list()
 
     # Calc send, recv settings
@@ -277,6 +250,7 @@ class INS:
         self._lock              = threading.Lock()
         self._ins_forwarders    = list()
         self._active            = False
+        self._overloaded        = False
 
         if domid == None:
             self._create()
@@ -332,15 +306,15 @@ class INS:
 
         global inst_num
 
-        # Find available MAC
-        mac = random.sample([k for k,v in macs.items() if not v['in_use']], 1)
+        # Find available MAC (random or sorted)
+        #mac = random.sample([k for k,v in macs.items() if not v['in_use']], 1)
+        mac = sorted([k for k,v in macs.items() if not v['in_use']])
         if not mac:
             raise RuntimeError("No more MACs are available")
         mac = mac[0]
         macs[mac]['in_use'] = True
         self._mac = mac
 
-        # TODO: make other part of path a define?
         RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-develop/bin/rumprun'.format(mwroot_current)
         RUMP_RUN_FILE = '{0}/ins/ins-rump/apps/ins-app/ins-rump.run'.format(mwroot_current)
 
@@ -356,9 +330,10 @@ class INS:
         logging.debug("Running command {0}".format(cmd))
 
         p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-        #(stdout, stderr) = p.communicate()
 
+        #(stdout, stderr) = p.communicate()
         #rc = p.wait()
+
         t = 0
         while True:
             rc = p.poll()
@@ -403,6 +378,9 @@ class INS:
             self.unlock()
         self._active = activated
 
+        if activated == False:
+            self._overloaded = False
+
         logging.info("{0} INS {1}".format(
             'Activated' if activated else 'Deactivated', self.domid))
 
@@ -418,7 +396,7 @@ class INS:
             self.unlock()
 
     def check_heartbeat(self):
-        """ False ==> this INS is dead """
+        """ False ==> this INS is dead. """
         global heartbeat_interval_sec_v
         global heartbeat_max_misses_v
         alive = True
@@ -476,14 +454,18 @@ class INS:
         global max_ins_load_percent
         global ins_overloaded_trigger
 
+        if self._overloaded == True:
+            return True
+
         if ins_overloaded_trigger and os.path.isfile(ins_overloaded_trigger):
             os.remove(ins_overloaded_trigger)
+            self._overloaded = True
             return True
 
         return self.get_load() >= max_ins_load_percent
 
     def wait(self):
-        """ Waits until the INS is ready to use """
+        """ Waits until the INS is ready to use. """
 
         t = 0.0
         # The watcher must have populated the INS's IP
@@ -530,13 +512,6 @@ class PortForwarder:
         self._dest = dest_ip
         self._active = False
 
-    def refresh_pf_active(self): #greg
-        logging.info("refresh_pf_active: Refreshing iptables entries - INS {}".format(self)) # greg ?
-        for (t,c,r) in self._rules:
-            t.refresh()
-            c.insert_rule(r)
-            t.refresh()
-
     def set_pf_active(self, activate):
         if self._active == activate:
             return
@@ -551,7 +526,7 @@ class PortForwarder:
 
     def _deactivate(self):
         ''' Delete iptable rules from currently inactivated INS '''
-        logging.info("Deactivate iptables entries - INS {}".format(self)) # greg ?
+        logging.info("Deactivate iptables entries - INS {}".format(self))
         for (t,c,r) in self._rules:
             t.refresh()
             c.delete_rule(r)
@@ -575,15 +550,12 @@ class PortForwarder:
 
     def _redirect_conn_to_addr(self):
         """
-        Configure an external IP address on the "outside" interface and add iptables rule:
+        Configure an external IP address on the "outside" interface
+        and add iptables rule.
         """
-
-        #print("Dump Before -----") # greg
-        #self.dump()
 
         # Forward port 80 to Y.Y.Y.Y:80:
         # iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to Y.Y.Y.Y:80
-
 
         table = iptc.Table(iptc.Table.NAT)
         chain = iptc.Chain(table, "PREROUTING")
@@ -642,25 +614,6 @@ class PortForwarder:
 
         self._enable_rule(table, chain, rule)
 
-    def dump_rule(self, table, chain, rule):
-        print("Table {0} Chain {1}".format(table.name, chain.name))
-        for r in chain.rules:
-            print("Rule 1: proto: {0} src {1} dst {2} iface {3} out {4}".
-                format(r.protocol, r.src, r.dst,
-                r.in_interface,r.out_interface))
-            print("Matches 1:")
-            for match in r.matches:
-                print("{0} target {1} comment [{2}]".format(match.name, r.target.name, match.comment))
-
-        # See if they match - greg
-
-        print("Rule 2: proto: {0} src {1} dst {2} iface {3} out {4}".
-            format(rule.protocol, rule.src, rule.dst,
-            rule.in_interface,rule.out_interface))
-        print("Matches 2:")
-        for match in rule.matches:
-            print("{0} target {1} comment [{2}]".format(match.name, rule.target.name, match.comment))
-
     def dump(self):
 
         table = iptc.Table(iptc.Table.FILTER)
@@ -676,32 +629,9 @@ class PortForwarder:
                 print("{0} target {1} comment [{2}]".format(match.name, rule.target.name, match.comment))
 
 
-#        table = iptc.Table(iptc.Table.FILTER)
-#        for table in (iptc.Table.FILTER, iptc.Table.NAT,
-#                       iptc.Table.MANGLE, iptc.Table.RAW):
-#            iptc_tbl = iptc.Table(table)
-#
-#            print("Table {0}".format(iptc_tbl.name))
-#            for chain in iptc_tbl.chains:
-#                if not chain.rules:
-#                    continue
-#                print("=======================")
-#                print("Chain {0}".format(chain.name))
-#                for rule in chain.rules:
-#                    print("Rule: proto: {0} src {1} dst {2} iface {3} out {4}".
-#                           format(rule.protocol, rule.src, rule.dst,
-#                                   rule.in_interface,rule.out_interface))
-#                    print("Matches:")
-#                    for match in rule.matches:
-#                        print("{0} target {1}".format(match.name, rule.target.name))
-#                print("=======================")
-
-
-
 class XenStoreEventHandler:
     def __init__(self, xiface):
         self._xiface = xiface
-        #self._xe_forwarders = list() # greg remove ?
 
     def event(self, client, path, newval):
         # example path:
@@ -779,15 +709,18 @@ class XenStoreWatch(threading.Thread):
 
                 self._handler.event(c, path, value)
 
+
 class UDSHTTPConnection(httplib.HTTPConnection):
-    """HTTPConnection subclass to allow HTTP over Unix domain sockets. """
+    """ HTTPConnection subclass to allow HTTP over Unix domain sockets. """
     def connect(self):
         path = self.host.replace("_", "/")
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.connect(path)
 
+
 class UDSHTTP(httplib.HTTPConnection):
     _connection_class = UDSHTTPConnection
+
 
 class UDSTransport(xmlrpclib.Transport):
     def __init__(self, use_datetime=0):
@@ -806,6 +739,7 @@ class UDSTransport(xmlrpclib.Transport):
          connection.putrequest("POST", handler)
          for key, value in self._extra_headers:
              connection.putheader(key, value)
+
 
 class XenIface:
      def __init__(self):
@@ -857,10 +791,11 @@ class XenIface:
          iface = '.'.join(bepath.split('/')[-3:]) # vif.3.0
 
          return dict(idx    = info[0],
-                      mac    = info[2],
-                      state  = info[4],
-                      bepath = bepath,
-                      iface  = iface)
+                     mac    = info[2],
+                     state  = info[4],
+                     bepath = bepath,
+                     iface  = iface)
+
 
 def print_dict(desc, mydict):
      print(desc)
@@ -868,15 +803,6 @@ def print_dict(desc, mydict):
          print(k)
          print(v)
      print('----------')
-
-def test_redir():
-     r = PortForwarder(4567, '10.30.30.50')
-     #r.dump()
-
-     while True:
-         if exit_requested:
-             return
-         time.sleep(POLL_INTERVAL)
 
 
 def balance_load():
@@ -905,7 +831,7 @@ def balance_load():
     # curr is overloaded: shift burden to the INS with the lowest load
     logging.debug("Stats: {}, load: {}, overloaded: {}".
                    format(curr.stats, curr.get_load(), curr.overloaded()))
-    logging.debug("INS {} is overloaded, looking for another one".format(curr)) # greg remove ?
+    logging.debug("INS {} is overloaded, looking for another one".format(curr))
 
     available = [v for (k,v) in ins_map.iteritems() if not v.overloaded()]
     if not available:
@@ -990,10 +916,10 @@ def ins_runner():
 
         spawn_new = balance_load()
 
-        time.sleep(POLL_INTERVAL) # greg
+        time.sleep(POLL_INTERVAL)
 
         if monitor_interval > 0:
-            monitor_cnt += POLL_INTERVAL  # greg
+            monitor_cnt += POLL_INTERVAL
             if monitor_cnt > monitor_interval:
                 monitor_cnt = 0.0
                 for domid in ins_map.keys():
@@ -1059,6 +985,13 @@ if __name__ == '__main__':
         default=False,
         help='Start all INS instances immediately instead of on demand (default: %(default)s)')
 
+    parser.add_argument(
+        '-i',
+        action='store',
+        dest='ins_instance_limit',
+        default=0,
+        help='Limit number of INS instances (default: %(default)d == do not limit)')
+
     args = parser.parse_args()
 
     # Sanity check command line arguments
@@ -1075,11 +1008,15 @@ if __name__ == '__main__':
     if args.overloaded_trigger and os.path.isfile(args.overloaded_trigger):
         parser.error("OVERLOADED_TRIGGER file should not exist")
 
+    if args.ins_instance_limit < 0:
+        parser.error("INS_INSTANCE_LIMIT should be 0 or greater")
+
     mwroot_current = args.mwroot_path
     max_ins_load_percent = args.max_ins_load / 100.0
     monitor_interval = args.monitor_period
     ins_overloaded_trigger = args.overloaded_trigger
     start_all_ins_instances = args.start_all_ins_instances
+    ins_instance_limit = args.ins_instance_limit
 
     # Obtain shared mwcomms/ins values (common/common_config.h)
 
@@ -1089,14 +1026,14 @@ if __name__ == '__main__':
         searchlines = f.readlines()
     for i, line in enumerate(searchlines):
         if "MAX_INS_COUNT" in line:
-            max_ins_count_v = int(line.split()[2])
+            max_ins_count = int(line.split()[2])
         if "HEARTBEAT_INTERVAL_SEC" in line:
             heartbeat_interval_sec_v = int(line.split()[2])
         if "HEARTBEAT_MAX_MISSES" in line:
             heartbeat_max_misses_v = int(line.split()[2])
 
-    if max_ins_count_v == 0:
-        print("Shared common define max_ins_count_v == 0")
+    if max_ins_count == 0:
+        print("Shared common define max_ins_count == 0")
         sys.exit(1)
     if heartbeat_interval_sec_v == 0:
         print("Shared common define heartbeat_interval_sec == 0")
@@ -1104,6 +1041,15 @@ if __name__ == '__main__':
     if heartbeat_max_misses_v == 0:
         print("Shared common define heartbeat_max_misses == 0")
         sys.exit(1)
+    if ins_instance_limit > max_ins_count:
+        print("INS instance limit cannot be greater than max_ins_count {0}".format(max_ins_count))
+        sys.exit(1)
+
+    # Limit maximum INS instances if requested
+    if ins_instance_limit != 0 and ins_instance_limit < max_ins_count:
+        max_ins_count_v = ins_instance_limit
+    else:
+        max_ins_count_v = max_ins_count
 
     #
     # Check prerequisites
@@ -1136,16 +1082,14 @@ if __name__ == '__main__':
         print(forward_file_2)
         sys.exit(1)
 
-    # RUMP files present - TODO
-
-    # mw_setkeys run - TODO
-
     logging.basicConfig(format='%(levelname)s: %(message)s',
         level=log_levels[args.log_level])
 
     logging.debug("PID = {0}".format(os.getpid()))
     logging.debug("mwroot_current = {0}".format(mwroot_current))
+    logging.debug("max_ins_count = {0}".format(max_ins_count))
     logging.debug("max_ins_count_v = {0}".format(max_ins_count_v))
+    logging.debug("ins_instance_limit = {0}".format(ins_instance_limit))
     logging.debug("heartbeat_interval_sec_v = {0}".format(heartbeat_interval_sec_v))
     logging.debug("heartbeat_max_misses_v = {0}".format(heartbeat_max_misses_v))
     logging.debug("monitor_interval = {0}".format(monitor_interval))
@@ -1158,18 +1102,10 @@ if __name__ == '__main__':
     signal.signal(signal.SIGABRT, handler)
     signal.signal(signal.SIGQUIT, handler)
 
-    # TODO: prereqs - no INS instances running !!! check with xl list or something for INS instances running
-
-    # TODO: prereqs - mwcomms running, but keys need to be cleared first
-
-    # TODO: prereqs - start apache on pvm after mwcomms and INS are running
-
-    # TODO: get rid of this or make it an option (max INS count or single INS, just do the iptable and monitor load)
-    # argument for max ins instances, must be =< MAX INS count found in header file.
-    #single_ins()
     ins_runner()
 
-    ins_map = None # dereference all items (destroys INS instances and deletes associated iptables entries)
+    # Dereference all items (destroys INS instances and delete associated iptables entries)
+    ins_map = None
 
     logging.info("Exiting main thread")
 
