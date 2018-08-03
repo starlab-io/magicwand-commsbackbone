@@ -433,6 +433,9 @@ typedef struct _mwsocket_instance
     // Is request/response state machine valid
     bool                state_valid;
 
+    // Used to disable preemption during socket replication
+    struct mutex          sock_rep_lock;
+
 } mwsocket_instance_t;
 
 
@@ -1106,6 +1109,7 @@ mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
     INIT_LIST_HEAD( &sockinst->inbound_list );
 
     mutex_init( &sockinst->inbound_lock );
+    mutex_init( &sockinst->sock_rep_lock );
     sema_init( &sockinst->inbound_sem, 0 );
     sema_init( &sockinst->request_sem, 1 );
 
@@ -3580,7 +3584,8 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
 
     MYASSERT( usersock );
 
-    mutex_lock( &usersock->inbound_lock );
+    // Disable preemption during socket replication
+    mutex_lock( &usersock->sock_rep_lock );
 
     if( !(usersock->mwflags & MWSOCKET_FLAG_USER) )
     {
@@ -3759,7 +3764,7 @@ ErrorExit:
         MYASSERT( !"Something went wrong" );
     }
 
-    mutex_unlock( &usersock->inbound_lock );
+    mutex_unlock( &usersock->sock_rep_lock );
 
     return rc;
 } // mwsocket_ins_sock_replicator

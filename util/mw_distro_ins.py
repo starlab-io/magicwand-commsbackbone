@@ -132,7 +132,7 @@ start_all_ins_instances = False
 
 INS_MEMORY_MB = 3048
 POLL_INTERVAL = 0.05
-DEFAULT_TIMEOUT = 5
+DEFAULT_TIMEOUT = 10 
 
 log_levels = dict(
     critical = 50,
