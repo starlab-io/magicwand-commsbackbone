@@ -1,0 +1,15 @@
+#!/bin/bash
+
+##
+## Script that sets environmental variables for the other scripts in
+## this directory. Do not use this script directly. Do modify it to
+## suit.
+##
+
+KEYSTORE_ROOT=/mw
+
+if [ -z $MWROOT ]; then
+   echo "Failure: MWROOT must be defined in environment"
+   echo "It must indicate the root directory of the magicwand comms backbone repo"
+   exit 1
+fi

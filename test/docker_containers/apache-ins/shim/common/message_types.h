@@ -590,8 +590,7 @@ typedef struct MT_STRUCT_ATTRIBS _mt_request_socket_attrib
 typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_attrib
 {
     mt_response_base_t base;
-    mt_sockfeat_name_t name;
-    mt_sockfeat_arg_t  val; //response needs name and val for socket replication
+    mt_sockfeat_arg_t  val; // optional value of requested attrib
 } mt_response_socket_attrib_t;
 
 #define MT_RESPONSE_SOCKET_ATTRIB_SIZE sizeof(mt_response_socket_attrib_t)

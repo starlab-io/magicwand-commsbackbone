@@ -387,9 +387,28 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         // globals [ via sysctl() ]
         goto ErrorExit;
     case MtSockAttribDeferAccept:
-        WorkerThread->defer_accept = true;
+        if( Request->modify )
+        {
+            if( Request->val.v32 > 0)
+            {
+                WorkerThread->defer_accept = true;
+            }
+            else
+            {
+                WorkerThread-> defer_accept = false;
+            }
+        }
+        
+        //We need to set these values to inform the driver
+        //that this sockopt needs to be replicated to other
+        //ins instances with this usersock
+        bzero( &Response->val, sizeof( Response->val ) );
+        Response->name = MtSockAttribDeferAccept;
+        Response->val.v32 = WorkerThread->defer_accept;
         rc = 0;
+
         goto ErrorExit;
+
     case MtSockAttribError:
         name = SO_ERROR;
         break;
@@ -428,6 +447,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
             Response->val.v32 = *(uint32_t *) &t;
         }
     }
+
 
     if ( rc )
     {
@@ -820,16 +840,6 @@ xe_net_defer_accept_socket( int LocalFd,
                            "deferring accept of new socket %d from listener %d\n",
                            sockfd, LocalFd );
 
-                //XXX for Debugging
-                struct sockaddr_in sockaddr = {0};
-                socklen_t sock_len = 0;
-                sock_len = sizeof( sockaddr );
-                getpeername( sockfd, (struct sockaddr *)&sockaddr, &sock_len );
-
-                log_write( LOG_DEBUG,
-                           "accepting connection from %s:%d\n",
-                           inet_ntoa( sockaddr.sin_addr ), ntohs(sockaddr.sin_port) );
-                //XXX
 
                 rc = xe_net_set_sock_nonblock( sockfd, true );
                 if( rc )
@@ -867,7 +877,7 @@ xe_net_defer_accept_socket( int LocalFd,
             peer_poll_fds[i] = mw_peer_poll_fds[i].poll_fd;
         }
 
-        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 50 );
+        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 0 );
         if( rc < 0 )
         {
             err = errno;
@@ -944,7 +954,7 @@ xe_net_defer_accept_socket( int LocalFd,
             last_idx++;
         }
 
-//        xe_net_defer_accept_wait();
+        xe_net_defer_accept_wait();
     } while( true );
 
 ErrorExit:
