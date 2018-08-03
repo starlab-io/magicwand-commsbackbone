@@ -111,6 +111,7 @@ net.inet.tcp.congctl.available: reno newreno cubic
 MW_XENSTORE_ROOT = b"/mw"
 
 mwroot_current = ''
+mwroot_branch = ''
 
 # Shared values from common C header file
 path_common_config_h ='/common/common_config.h'
@@ -305,6 +306,7 @@ class INS:
         """
 
         global inst_num
+        global mwroot_branch
 
         # Find available MAC (random or sorted)
         #mac = random.sample([k for k,v in macs.items() if not v['in_use']], 1)
@@ -315,7 +317,7 @@ class INS:
         macs[mac]['in_use'] = True
         self._mac = mac
 
-        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-develop/bin/rumprun'.format(mwroot_current)
+        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-{1}/bin/rumprun'.format(mwroot_current, mwroot_branch)
         RUMP_RUN_FILE = '{0}/ins/ins-rump/apps/ins-app/ins-rump.run'.format(mwroot_current)
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
@@ -1044,6 +1046,18 @@ if __name__ == '__main__':
     if ins_instance_limit > max_ins_count:
         print("INS instance limit cannot be greater than max_ins_count {0}".format(max_ins_count))
         sys.exit(1)
+
+    # Obtain GIT branch name, required to find RUMP files
+    p = subprocess.Popen(['git', 'symbolic-ref', '--short', 'HEAD'],
+                         stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+
+    (stdout, stderr) = p.communicate()
+
+    rc = p.wait()
+    if rc:
+        raise RuntimeError("Call to git failed: {0}".format(stderr))
+
+    mwroot_branch = stdout.rstrip('\r\n')
 
     # Limit maximum INS instances if requested
     if ins_instance_limit != 0 and ins_instance_limit < max_ins_count:
