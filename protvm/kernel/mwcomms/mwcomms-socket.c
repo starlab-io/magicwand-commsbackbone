@@ -333,7 +333,7 @@ typedef struct _mwsocket_instance
     int                   backlog;
 
     // accept()
-    int                   accept_flags; // XXXX: unused
+    int                   defer_accept;
 
     // For management of queue of inbound connections
     struct list_head      inbound_list; // anchor for list of active requests
@@ -1777,6 +1777,13 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketRecvFrom:
         ActiveRequest->sockinst->tot_recv += Response->socket_recvfrom.count;
         break;
+    case MtResponseSocketAttrib:
+        //This is a little hackey, we need a way to keep track of all socket
+        //options
+        if ( Response->socket_attrib.name == MtSockAttribDeferAccept )
+        {
+            ActiveRequest->sockinst->usersock->defer_accept = Response->socket_attrib.val.v32;
+        }
     default:
         break;
     }
@@ -1971,7 +1978,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
     case MtRequestSocketAccept:
         ActiveRequest->sockinst->mwflags     |= MWSOCKET_FLAG_ACCEPT;
-        ActiveRequest->sockinst->accept_flags = request->socket_accept.flags;
+        ActiveRequest->sockinst->defer_accept = request->socket_accept.flags;
         // If we're accepting and a sibling socket is active, then
         // route the accept() to the INS that's waiting
         if( ActiveRequest->sockinst->poll_active &&
@@ -2976,7 +2983,7 @@ mwsocket_handle_attrib( IN struct file       * File,
     request->modify = SetAttribs->modify;
     request->name   = SetAttribs->name;
     request->val    = SetAttribs->val;
-
+    
     rc = mwsocket_send_request( actreq, true );
     if( rc ) { goto ErrorExit; }
 
@@ -3685,6 +3692,29 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
         }
     }
 
+    //Replicate defer_accept option
+    if( ( usersock->defer_accept > 0 ) &&
+        !( newsock->defer_accept > 0 ) )
+    {
+        mt_request_socket_attrib_t sock_attrib =
+            {  .base.type    = MtRequestSocketAttrib,
+               .base.size    = MT_REQUEST_SOCKET_ATTRIB_SIZE,
+               .base.sockfd  = newsock->remote_fd,
+               .modify       = true,
+               .name         = MtSockAttribDeferAccept,
+               .val.v32      = usersock->defer_accept };
+
+        rc = mwsocket_send_message( newsock,
+                                    ( mt_request_generic_t * ) &sock_attrib,
+                                    true );
+        if( rc )
+        {
+            pr_err( "Socket replication: defer_accept failed domid=%d\n", Domid );
+            MYASSERT( !"mwsocket_send_message() / listen" );
+            goto ErrorExit;
+        }
+    }
+
     // Accept: if this is the first accept send request but don't wait for response
     if( !(newsock->mwflags & MWSOCKET_FLAG_ACCEPT) )
     {
@@ -3692,7 +3722,7 @@ mwsocket_ins_sock_replicator( IN domid_t Domid,
             { .base.type    = MtRequestSocketAccept,
               .base.size    = MT_REQUEST_SOCKET_ACCEPT_SIZE,
               .base.sockfd  = newsock->remote_fd,
-              .flags        = usersock->accept_flags };
+              .flags        = usersock->defer_accept };
         mwsocket_active_request_t * actreq = NULL;
 
         rc = mwsocket_create_active_request( newsock, &actreq );

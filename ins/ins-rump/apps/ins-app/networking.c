@@ -387,9 +387,28 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         // globals [ via sysctl() ]
         goto ErrorExit;
     case MtSockAttribDeferAccept:
-        WorkerThread->defer_accept = true;
+        if( Request->modify )
+        {
+            if( Request->val.v32 > 0)
+            {
+                WorkerThread->defer_accept = true;
+            }
+            else
+            {
+                WorkerThread-> defer_accept = false;
+            }
+        }
+        
+        //We need to set these values to inform the driver
+        //that this sockopt needs to be replicated to other
+        //ins instances with this usersock
+        bzero( &Response->val, sizeof( Response->val ) );
+        Response->name = MtSockAttribDeferAccept;
+        Response->val.v32 = WorkerThread->defer_accept;
         rc = 0;
+
         goto ErrorExit;
+
     case MtSockAttribError:
         name = SO_ERROR;
         break;
@@ -428,6 +447,7 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
             Response->val.v32 = *(uint32_t *) &t;
         }
     }
+
 
     if ( rc )
     {
