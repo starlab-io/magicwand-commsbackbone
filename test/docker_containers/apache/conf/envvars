@@ -20,7 +20,7 @@ export LD_PRELOAD=/home/alex/ins-production/magicwand-commsbackbone/protvm/user/
 #
 # This file is generated from envvars-std.in
 #
-LD_LIBRARY_PATH="/usr/local/apache2/lib:$LD_LIBRARY_PATH"
+LD_LIBRARY_PATH="/opt/httpd/lib:$LD_LIBRARY_PATH"
 export LD_LIBRARY_PATH
 #
 
