@@ -5,25 +5,26 @@ RUN apt update
 RUN apt upgrade -y
 RUN apt install wget unzip make gcc autoconf libtool -y
 
-RUN mkdir -p /tmp/workspace
-WORKDIR /tmp/workspace
+RUN mkdir -p /opt/httpd
+RUN mkdir -p /opt/httpd/test
+
+WORKDIR /opt/httpd
 
 RUN wget http://archive.apache.org/dist/httpd/httpd-2.2.11.tar.gz
 RUN mkdir src
 RUN tar -zxvf httpd-2.2.11.tar.gz -C src
 
-WORKDIR /tmp/workspace/src/httpd-2.2.11
+WORKDIR /opt/httpd/src/httpd-2.2.11
 
-RUN ./configure --with-included-apr
+RUN ./configure --prefix=/opt/httpd/ --with-included-apr
 RUN make
 RUN make install
 
-WORKDIR /usr/local/apache2/conf
-COPY ./conf/httpd.conf .
 
-COPY ./conf/index.html /usr/local/apache2/htdocs
+COPY ./conf/httpd.conf /opt/httpd/conf
+COPY ./conf/index.html /opt/httpd/htdocs
 
-WORKDIR /usr/local/apache2/bin
+WORKDIR /opt/httpd/bin
 
-CMD ["/usr/local/apache2/bin/apachectl","-DFOREGROUND","-k","start"]
+CMD ["/opt/httpd/bin/apachectl","-DFOREGROUND","-k","start"]
 
