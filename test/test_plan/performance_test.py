@@ -13,7 +13,7 @@ def do_ab( n, c, hostname, fout ):
     if sanity is True:
         n = c + 2
 
-    call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "-s 100", "http://" + hostname + "/" ]
+    call = ["ab", "-n " + str(n), "-c " + str(c), "-r", "-s 1000", "http://" + hostname + "/" ]
     
     print "\nRunning: " + str( call )
     
@@ -91,7 +91,7 @@ def plot_scatter_plot( t, c, hostname ):
     if not os.path.exists( "./graphs" ):
         os.makedirs( "./graphs" )
         
-    call = ["ab", "-t " + str(t), "-s 100", "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
+    call = ["ab", "-t " + str(t), "-s 1000", "-c " + str(c), "-g", "./data/testing.tsv", "http://" + hostname + "/" ]
 
     print "Running: " + str( call )
     
