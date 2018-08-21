@@ -9,6 +9,7 @@ sudo docker run						\
 	-dit 						\
 	--security-opt seccomp=unconfined               \
 	--privileged					\
+	--mount type=bind,source="$(pwd)"/conf/htdocs,target=/opt/httpd/htdocs \
 	--device=/dev/mwcomms				\
 	--network=host					\
 	--name $CONTAINER_NAME				\

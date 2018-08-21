@@ -23,6 +23,7 @@ RUN make install
 
 COPY ./conf/httpd.conf /opt/httpd/conf
 COPY ./conf/index.html /opt/httpd/htdocs
+#COPY ./conf/httpd-mpm.conf /opt/httpd/conf/extra
 
 WORKDIR /opt/httpd/bin
 
