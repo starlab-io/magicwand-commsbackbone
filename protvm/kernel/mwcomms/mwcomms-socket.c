@@ -607,7 +607,7 @@ static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
  * Caller must hold the global active_request_lock.
  */
 static mt_id_t
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_get_next_id( void )
 {
     static atomic64_t counter = ATOMIC64_INIT( 0 );
@@ -727,7 +727,7 @@ static struct file_system_type mwsocket_fs_type =
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_fs_init( void )
 {
     int rc = 0;
@@ -762,7 +762,7 @@ ErrorExit:
  ******************************************************************************/
 
 void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_debug_dump_sockinst( void )
 {
     mwsocket_instance_t * curr = NULL;
@@ -778,7 +778,7 @@ mwsocket_debug_dump_sockinst( void )
 
 
 void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_debug_dump_actreq( void )
 {
     mwsocket_active_request_t * curr = NULL;
@@ -805,7 +805,7 @@ mwsocket_debug_dump_actreq( void )
  * @todo: Can we remove this and point file->private to the sockinst ?
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
                         IN  struct file          * File )
 {
@@ -830,7 +830,7 @@ mwsocket_find_sockinst( OUT mwsocket_instance_t ** SockInst,
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
                                      IN  mw_socket_fd_t         RemoteFd )
 {
@@ -869,7 +869,7 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
  * @brief Supports mitigation by forcing a remote close of the given socket.
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_close_by_remote_fd( IN mw_socket_fd_t RemoteFd,
                              IN bool           Wait )
 {
@@ -894,7 +894,7 @@ ErrorExit:
  *        remote socket FD.
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_signal_owner_by_remote_fd( IN mw_socket_fd_t RemoteFd,
                                     IN int            SignalNum )
 {
@@ -921,7 +921,7 @@ ErrorExit:
 
 // @brief Reference the socket instance
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
 {
     int val = 0;
@@ -963,7 +963,7 @@ mwsocket_get_sockinst(  mwsocket_instance_t * SockInst )
  *
  */
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_set_pollable( IN mwsocket_instance_t * SockInst,
                        IN bool                  Pollable )
 {
@@ -997,7 +997,7 @@ ErrorExit:
  * @brief Dereferences the socket instance, destroying upon 0 reference count
  */
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_put_sockinst( mwsocket_instance_t * SockInst )
 {
     MYASSERT( SockInst );
@@ -1058,7 +1058,7 @@ ErrorExit:
 
 // XXXX: update to accept optional INS (domid) as parameter
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_create_sockinst( OUT mwsocket_instance_t ** SockInst,
                           IN  int                    Flags,
                           IN  bool                   Pollable,
@@ -1217,7 +1217,7 @@ ErrorExit:
  * @return 0 on success, or error, which could be either local or remote
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_close_remote( IN mwsocket_instance_t * SockInst,
                        IN bool                  WaitForResponse )
 {
@@ -1293,7 +1293,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
 {
     if( NULL == Request )
@@ -1326,7 +1326,7 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
  * @brief Gets a new active request struct from the cache and does basic init.
  */
 static int 
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
                                 OUT mwsocket_active_request_t ** ActReq )
 {
@@ -1386,7 +1386,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_find_active_request_by_id( OUT mwsocket_active_request_t ** Request,
                                     IN  mt_id_t                      Id )
 {
@@ -1443,7 +1443,7 @@ ErrorExit:
  * @return Returns pending error, or 0 if none
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_pending_error( mwsocket_instance_t * SockInst,
                         mt_request_type_t     RequestType )
 {
@@ -1492,7 +1492,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
                               OUT mw_endpoint_t *  Endpoint )
 {
@@ -1524,7 +1524,7 @@ mwsocket_populate_netflow_ip( IN struct sockaddr * SockAddr,
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
                            OUT mw_netflow_info_t        * Netflow )
 {
@@ -1554,7 +1554,7 @@ mwsocket_populate_netflow( IN mwsocket_active_request_t * ActiveRequest,
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
                                 mt_response_generic_t     * Response )
 {
@@ -1629,7 +1629,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                               mt_response_generic_t     * Response )
 {
@@ -1804,7 +1804,7 @@ ErrorExit:
  * which creates a new socket.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_postproc_in_task( IN mwsocket_active_request_t * ActiveRequest,
                            IN mt_response_generic_t     * Response )
 {
@@ -1882,7 +1882,7 @@ ErrorExit:
  * is in progress.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 {
     MYASSERT( ActiveRequest );
@@ -2026,7 +2026,7 @@ mwsocket_pre_process_request( mwsocket_active_request_t * ActiveRequest )
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_await_inbound_connection( IN mwsocket_active_request_t   * ActiveRequest,
                                    OUT mwsocket_active_request_t ** InboundRequest )
 {
@@ -2061,7 +2061,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                        IN bool                        WaitForRing )
 {
@@ -2167,7 +2167,7 @@ ErrorExit:
  * AwaitResponse is true.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_send_message( IN mwsocket_instance_t  * SockInst,
                        IN mt_request_generic_t * Request,
                        IN bool                   AwaitResponse )
@@ -2227,7 +2227,7 @@ ErrorExit:
  * popualates it.
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
                             INOUT mt_response_generic_t * Response )
 {
@@ -2277,7 +2277,7 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 {
     int rc = 0;
@@ -2474,7 +2474,7 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
  ******************************************************************************/
 
 static int
-//MWSOCKET_DEBUG_ATTRIB // yep, enable optimization here: ugh!
+//MWSOCKET_DEBUG_OPTIMIZE_OFF // yep, enable optimization here: ugh!
 mwsocket_response_consumer( void * Arg )
 {
     int                         rc = 0;
@@ -2631,7 +2631,7 @@ ErrorExit:
 
 #ifdef ENABLE_POLLING
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_poll_handle_notifications( IN mwsocket_instance_t * SockInst )
 {
     // The pseudo-socket must not be pollable, and must always
@@ -2811,7 +2811,7 @@ ErrorExit:
  * and for remote IO events.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_monitor( void * Arg )
 {
     int rc = 0;
@@ -2895,7 +2895,7 @@ ErrorExit:
  * @brief Processes an mwsocket creation request. Reachable via IOCTL.
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_create( OUT mwsocket_t * SockFd,
                  IN  int          Domain,
                  IN  int          Type,
@@ -2953,7 +2953,7 @@ ErrorExit:
  * @brief Returns whether the given file descriptor is backed by an MW socket.
  */
 bool
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_verify( const struct file * File )
 {
     return (File->f_op == &mwsocket_fops);
@@ -2961,7 +2961,7 @@ mwsocket_verify( const struct file * File )
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_handle_attrib( IN struct file       * File,
                         IN mwsocket_attrib_t * SetAttribs )
 {
@@ -3020,7 +3020,7 @@ ErrorExit:
 
 
 static ssize_t
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_read( struct file * File,
                char        * Bytes,
                size_t        Len,
@@ -3151,7 +3151,7 @@ ErrorExit:
 
 
 static ssize_t
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_write( struct file * File,
                 const char  * Bytes,
                 size_t        Len,
@@ -3289,7 +3289,7 @@ ErrorExit:
  * (vs. the mwcomms device)
  */
 static long
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_ioctl( struct file * File,
                 unsigned int   Cmd,
                 unsigned long  Arg )
@@ -3341,7 +3341,7 @@ ErrorExit:
 
 
 static unsigned int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_poll( struct file * File,
                struct poll_table_struct * PollTbl )
 {
@@ -3373,7 +3373,7 @@ mwsocket_poll( struct file * File,
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_release( struct inode * Inode,
                   struct file  * File )
 {
@@ -3454,7 +3454,7 @@ ErrorExit:
  * Module-level init and fini function
  ******************************************************************************/
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_init( IN struct sockaddr * LocalIp )
 {
     // Do everything we can, then wait for the ring to be ready
@@ -3570,7 +3570,7 @@ ErrorExit:
  * that isn't a requirement.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_ins_sock_replicator( IN domid_t Domid,
                               IN void *  Arg )
 {
@@ -3819,7 +3819,7 @@ mwsocket_propogate_listeners( struct work_struct * Work )
  * calling thread.
  */
 static int
-//MWSOCKET_DEBUG_ATTRIB: incompatible with workq API
+//MWSOCKET_DEBUG_OPTIMIZE_OFF: incompatible with workq API
 mwsocket_new_ins( domid_t Domid )
 {
     int rc = 0;
@@ -3847,7 +3847,7 @@ ErrorExit:
 
 
 void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwsocket_fini( void )
 {
     mwsocket_active_request_t * currar = NULL;

@@ -108,7 +108,7 @@ mw_netflow_dump( void )
  * @brief Read data off the given buffer. Won't block.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_read( IN    mwcomms_netflow_channel_t * Channel,
                  OUT   void                      * Message,
                  INOUT size_t                    * Len )
@@ -185,7 +185,7 @@ ErrorExit:
  * Caller must hold connection lock.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_write_one( IN mwcomms_netflow_channel_t * Channel,
                       IN void                      * Message,
                       IN size_t                      Len )
@@ -239,7 +239,7 @@ ErrorExit:
  * Acquires connection lock.
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_write_all( void * Message, size_t Len )
 {
     int rc = 0;
@@ -389,7 +389,7 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
  * Caller must hold connection lock.
  */
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
 {
     int rc = 0;
@@ -610,7 +610,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_monitor( void * Arg )
 {
     int rc = 0;
