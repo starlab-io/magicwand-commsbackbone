@@ -110,7 +110,7 @@ INFO_FMT = "!HQQQQQ" + ENDPOINT_FMT + ENDPOINT_FMT + "QQQ"
 INFO_FMT_SIZE = struct.calcsize(INFO_FMT)
 
 # Feature request - mw_feature_request_t (46 bytes)
-FEATURE_REQ_FMT = BASE_FMT + "HH" + "QQ" + "i16s"
+FEATURE_REQ_FMT = BASE_FMT + "H" + "H" + "Q" + "Q" + "Q" + "12s"
 
 # Feature response - mw_feature_response_t (20 bytes)
 FEATURE_RES_FMT = "!i16s"
@@ -122,10 +122,9 @@ SIG_FEA_REQ = 0xd320
 SIG_FEA_RES = 0xd32f
 
 # Request flags
-FLAGS = dict(
-    MW_FEATURE_FLAG_WRITE   = 0x1,
-    MW_FEATURE_FLAG_BY_SOCK = 0x2
-)
+MW_FEATURE_FLAG_READ    = 0x0
+MW_FEATURE_FLAG_WRITE   = 0x1
+MW_FEATURE_FLAG_BY_SOCK = 0x2
 
 # Feature message names
 FEATURES = dict(
@@ -141,8 +140,8 @@ FEATURES = dict(
 
     # *** Per-socket features: name => (value, argtype)
 
-    MtSockAttribOwnerRunning   = (0x0101, bool), # arg: bool
-    MtSockAttribOpen           = (0x0102, bool), # arg: bool
+    MtSockAttribOpen           = (0x0101, bool), # arg: bool
+    MtSockAttribOwnerRunning   = (0x0102, bool), # arg: bool
 
     MtSockAttribSndBuf         = (0x0109, int), # arg: sz in bytes (uint32_t)
     MtSockAttribRcvBuf         = (0x010a, int), # arg: sz in bytes (uint32_t)
@@ -298,6 +297,7 @@ def server_connect(server):
 #      None - no data available during the timeout period
 #
 def get_msg(sock):
+    msg = {}
     sock.settimeout(1.0)
     try:
         data = sock.recv(BASE_FMT_SIZE)
@@ -368,11 +368,9 @@ def process_info_netflow(sock):
 
 #####
 # Receive and process the response data
-#
 # in :
 #   sock  - (socket object) connection socket
 #   ident - (int) message id
-#
 # out: (dict)
 #   mtype    - (str) "information" - protected application traffic data
 #   age      - (float) seconds since connection was established 
@@ -411,26 +409,20 @@ def process_response(sock, ident):
     return msg
 
 
-def send_feature_request(conn, sockfd, name, value=None):
+def send_feature_request(conn, sockfd, name, value, flag):
     ''' Send netflow request '''
     ident = get_next_id()
-    modify = (None == value)
-    val = value
-    if not val:
-        val = (0, 0)
 
     outstanding_requests[ident] = {
         'mtype' : 'feature',
-        'mod'   : modify,
+        'flag' : flag,
         'sockfd': sockfd,
         'name'  : name,
         'value' : value
         }
 
-    flag = 'MW_FEATURE_FLAG_BY_SOCK'
-
     req = struct.pack(FEATURE_REQ_FMT, SIG_FEA_REQ, ident,
-        FLAGS[flag], name, val[0], val[1], sockfd, "")
+        flag, name, value[0], value[1], sockfd, "")
 
     conn.sendall(req)
 
@@ -466,14 +458,22 @@ if __name__ == '__main__':
                 r = 1
                 mt = time.time()
                 print("*** Turning netflow monitor off")
-                send_feature_request(nf_sock, 0,
-                    FEATURES['MtChannelTrafficMonitorOff'][0], None)
+                send_feature_request(
+                    nf_sock,
+                    0,
+                    FEATURES['MtChannelTrafficMonitorOff'][0],
+                    (0,0),
+                    MW_FEATURE_FLAG_READ)
             else:
                 r = 0
                 mt = time.time()
                 print("*** Turning netflow monitor on")
-                send_feature_request(nf_sock, 0,
-                    FEATURES['MtChannelTrafficMonitorOn'][0], None)
+                send_feature_request(
+                    nf_sock,
+                    0,
+                    FEATURES['MtChannelTrafficMonitorOn'][0],
+                    (0,0),
+                    MW_FEATURE_FLAG_READ)
         if time.time() - st  > 60:
             break
 
