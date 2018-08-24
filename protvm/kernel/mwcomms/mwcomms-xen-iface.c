@@ -355,7 +355,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_create_unbound_evt_chn( mwcomms_ins_data_t *Ins  )
 {
    struct evtchn_alloc_unbound alloc_unbound; 
@@ -428,7 +428,7 @@ mw_xen_irq_event_handler( int Port, void * Data )
 
 
 static int
-//MWSOCKET_DEBUG_ATTRIB
+//MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_send_event( mwcomms_ins_data_t * Ins )
 {
     MYASSERT( Ins );
@@ -500,7 +500,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_offer_grant( mwcomms_ins_data_t * Ins )
 {
    int rc = 0;
@@ -595,7 +595,7 @@ ErrorExit:
 
 
 static int
-//MWSOCKET_DEBUG_ATTRIB // XXXX: don't uncomment directive
+//MWSOCKET_DEBUG_OPTIMIZE_OFF // XXXX: don't uncomment directive
 mw_xen_get_ins_from_xs_path( IN  const char         *  Path,
                              OUT mwcomms_ins_data_t ** Ins )
 {
@@ -651,7 +651,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_bind_evt_chn( const char * Path )
 {
     char * is_bound_str = NULL;
@@ -702,7 +702,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_ins_heartbeat( const char * Path )
 {
     int rc = 0;
@@ -730,7 +730,7 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_init_ring( mwcomms_ins_data_t * Ins )
 {
     int rc = 0;
@@ -746,7 +746,7 @@ mw_xen_init_ring( mwcomms_ins_data_t * Ins )
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_init_ring_block( IN mwcomms_ins_data_t * Ins )
 {
     int rc = 0;
@@ -770,7 +770,7 @@ mw_xen_init_ring_block( IN mwcomms_ins_data_t * Ins )
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_ins_found( IN const char * Path )
 {
     char               *client_id_str = NULL;
@@ -858,7 +858,7 @@ ErrorExit:
 
 
 bool
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_iface_ready( void )
 {
     bool ready = false;
@@ -907,7 +907,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_release_ins( mwcomms_ins_data_t * Ins )
 {
     if ( 0 == atomic64_read( &Ins->in_use ) ) { goto ErrorExit; }
@@ -940,7 +940,7 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_reap_dead_ins( OUT int Dead_INS_Array[ MAX_INS_COUNT ] )
 {
     unsigned long now = jiffies;
@@ -1012,7 +1012,7 @@ mw_xen_response_available( OUT void ** Handle )
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
                           OUT void                   * Handle )
 {
@@ -1114,7 +1114,7 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_get_next_request_slot( IN  bool                    WaitForRing,
                               IN  domid_t                 DomId,
                               OUT mt_request_generic_t ** Dest,
@@ -1229,7 +1229,7 @@ mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
  * mw_xen_get_next_request_slot().
  */
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_release_request( IN void * Handle,
                         IN bool   SendRequest )
 {
@@ -1284,7 +1284,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_xenstore_state_changed( struct xenbus_watch * W,
                                const char         ** V,
                                unsigned int          L )
@@ -1371,7 +1371,7 @@ ErrorExit:
 
 
 int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_init( mw_xen_init_complete_cb_t CompletionCallback ,
              mw_xen_event_handler_cb_t EventCallback )
 {
@@ -1422,7 +1422,7 @@ ErrorExit:
 
 
 void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_fini( void )
 {
     g_mwxen_state.pending_exit = true;

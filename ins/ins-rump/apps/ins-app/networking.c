@@ -628,7 +628,7 @@ ErrorExit:
 // Checks status of socket by reading from the socket returns 0 for
 // disconnect, 1 for data available and -1 for error
 int
-INS_DEBUG_ATTRIB
+INS_DEBUG_OPTIMIZE_OFF
 xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
 {
     int rc = -1;
@@ -709,7 +709,7 @@ ErrorExit:
 
 
 int
-INS_DEBUG_ATTRIB
+INS_DEBUG_OPTIMIZE_OFF
 xe_net_set_sock_nonblock( int  SockFd,
                           bool NonBlock)
 {
@@ -747,7 +747,7 @@ ErrorExit:
 
 
 int
-INS_DEBUG_ATTRIB
+INS_DEBUG_OPTIMIZE_OFF
 xe_net_defer_accept_socket( int LocalFd,
                             struct sockaddr * sockaddr,
                             socklen_t * addrlen )
@@ -1340,7 +1340,7 @@ xe_net_close_socket( IN  mt_request_socket_close_t  * Request,
 
 
 int
-INS_DEBUG_ATTRIB
+INS_DEBUG_OPTIMIZE_OFF
 xe_net_send_socket(  IN  mt_request_socket_send_t    * Request,
                      OUT mt_response_socket_send_t   * Response,
                      IN thread_item_t                * WorkerThread )

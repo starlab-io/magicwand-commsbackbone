@@ -52,7 +52,7 @@ echo "----------------------------------------------------------------------"
 echo "   DomU >> INSTALLING PACKAGE DEPENDECIES"
 echo "----------------------------------------------------------------------"
 sudo apt-get update
-sudo apt-get install -y git make gcc linux-headers-4.4.0-93-generic xenstore-utils
+sudo apt-get install -y git make gcc linux-headers-$(uname -r) xenstore-utils
 sudo apt install python -y #just for debugging a little
 
 

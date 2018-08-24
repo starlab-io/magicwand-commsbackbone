@@ -466,7 +466,7 @@ ErrorExit:
 
 
 static int
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwbase_dev_init( void )
 {
     int rc = 0;
@@ -571,7 +571,7 @@ ErrorExit:
 
 
 static void
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
@@ -631,7 +631,7 @@ mwbase_dev_release(struct inode *Inode,
  * checking.
  */
 static long
-MWSOCKET_DEBUG_ATTRIB
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwbase_dev_ioctl( struct file  * File,
                   unsigned int   Cmd,
                   unsigned long  Arg )
