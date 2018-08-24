@@ -415,7 +415,7 @@ mw_netflow_handle_feat_req( IN mwcomms_netflow_channel_t * Channel )
 
         if ( req.flags & MW_FEATURE_FLAG_BY_SOCK )
         {
-            req.ident.sockfd = __be32_to_cpu( req.ident.sockfd );
+            req.ident.sockfd = __be64_to_cpu( req.ident.sockfd );
         }
         else
         {
