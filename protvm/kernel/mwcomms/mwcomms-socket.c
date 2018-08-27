@@ -845,7 +845,7 @@ mwsocket_find_sockinst_by_remote_fd( OUT mwsocket_instance_t ** SockInst,
     mwsocket_instance_t * curr = NULL;
     list_for_each_entry( curr, &g_mwsocket_state.sockinst_list, list_all )
     {
-        if( curr->remote_fd  == RemoteFd )
+        if( curr->remote_fd == RemoteFd )
         {
             *SockInst = curr;
             rc = 0;
@@ -1585,9 +1585,8 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketBind:
         obs = MwObservationBind;
         break;
-    case MtResponseSocketAccept: // "extra" field holds new sockfd
+    case MtResponseSocketAccept:
         obs = MwObservationAccept;
-        nf.extra = __cpu_to_be64( Response->socket_accept.base.sockfd );
         break;
     case MtResponseSocketSend:
         obs = MwObservationSend;
@@ -1617,7 +1616,20 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     MYASSERT( sizeof(mw_obs_space_t) == sizeof(uint16_t) );
     nf.obs = __cpu_to_be16( (mw_obs_space_t) obs );
 
+    // Remote INS socket file descriptor
+    nf.extra = __cpu_to_be64( Response->socket_accept.base.sockfd );
+
     mwsocket_populate_netflow( ActiveRequest, &nf );
+
+    // TODO: A bit of a hack so the remote fd is available in netflow accept response
+    if ( Response->base.type == MtResponseSocketAccept )
+    {
+        mw_endpoint_t *Endpoint = &nf.remote;
+        Endpoint->addr.af = __cpu_to_be32( 4 );
+        Endpoint->port = Response->socket_accept.sockaddr.sin_port;
+        memcpy( &Endpoint->addr.a, &Response->socket_accept.sockaddr.sin_addr,
+            sizeof( Response->socket_accept.sockaddr.sin_addr ) );
+    }
 
     mw_netflow_write_all( &nf, sizeof(nf) );
     pr_debug( "Wrote netflow info about request %lx\n",
