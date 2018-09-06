@@ -7,9 +7,9 @@
 ##
 
 # Standard no-strings-attached compilation of the test TCP/IP app and
-# its accompanying shared library.  The shared library preloads the
+# its accompanying shared library. The shared library preloads the
 # app and intercepts selected TCP/IP calls to the network stack.
-# 
+#
 
 CC = gcc
 CFLAGS = -Wall -fPIC -DPIC -std=gnu99 -Wno-missing-braces
@@ -18,11 +18,12 @@ CFLAGS += -ggdb
 CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYDEBUG
 #CFLAGS += -DMYTRAP
-#CFLAGS +=  -DDEVLOG
 
-#enable ftrace trace_markers for shim shared object
+# Enable ftrace trace_markers for shim shared object
 #CFLAGS += -DENABLE_TRACING
 
+# Enable log_write()
+#CFLAGS += -DENABLE_LOGGING
 
 # Some programs use "check" versions of certain libc functions, which
 # we may have to wrap for proper exection (since they may contain
