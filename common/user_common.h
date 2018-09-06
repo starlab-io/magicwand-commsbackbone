@@ -62,11 +62,7 @@ static pthread_mutex_t __debug_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define SHIM_LOG_PATH_SIZE 64
 
-#ifdef DEVLOG
-#  define SHIM_LOG_PATH "/tmp/ins_log"
-#else
-#  define SHIM_LOG_PATH "/var/log/output"
-#endif
+#define SHIM_LOG_PATH "/tmp/ins_log"
 
 #ifdef MYDEBUG
 #  define DEBUG_EMIT_META() _DEBUG_EMIT_META()

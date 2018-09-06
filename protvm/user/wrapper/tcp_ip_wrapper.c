@@ -1871,8 +1871,11 @@ dl_callback(struct dl_phdr_info * Info,
 void __attribute__((constructor))
 init_wrapper( void )
 {
+#if defined(ENABLE_LOGGING) || defined(ENABLE_TRACING)
     int rc = 0;
+#endif
 
+#ifdef ENABLE_LOGGING
     //
     // Prepare the log file for writing
     // 
@@ -1890,10 +1893,9 @@ init_wrapper( void )
     }
 
     log_write( LOG_INFO, "Intercept module loaded\n" );
-
+#endif
 
 #ifdef ENABLE_TRACING
-    
     log_write( LOG_DEBUG, "Loading trace_maker\n" );
     rc = trace_marker_init();
     if ( rc != 0 )
@@ -1964,7 +1966,7 @@ init_wrapper( void )
     // XXXX: Linux-only function
     //
     dl_iterate_phdr(dl_callback, NULL);
-#endif // DEBUG
+#endif
 
 }
 
@@ -1985,5 +1987,8 @@ fini_wrapper( void )
 
     // Don't call DEBUG_PRINT() after g_log_file is closed!
     log_write( LOG_INFO, "Intercept module unloaded\n" );
+
+#ifdef ENABLE_LOGGING
     log_close();
+#endif
 }
