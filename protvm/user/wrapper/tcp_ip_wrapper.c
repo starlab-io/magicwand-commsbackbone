@@ -1901,6 +1901,9 @@ init_wrapper( void )
     if ( rc != 0 )
     {
         log_write( LOG_DEBUG, "Failed to load trace maker file\n" );
+        fprintf( stderr, "\nSHIM CANNOT OPEN TRACE MARKER FILE\n"
+                         "Either you need to run this command as root \n"
+                         "or turn off ENABLE_TRACING in the shim makefile \n\n" );
     }
 #endif //ENABLE_TRACING
 

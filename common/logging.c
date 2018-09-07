@@ -192,6 +192,11 @@ void
 log_write(log_level Level, const char* Format, ...)
 {
     char tmp[50] = { 0 };
+
+    if( fp == NULL )
+    {
+        return;
+    }
     
     if( Level <= loglevel )
     {
@@ -206,12 +211,22 @@ log_write(log_level Level, const char* Format, ...)
 
 void log_flush( void )
 {
+    if( fp == NULL )
+    {
+        return;
+    }
+
     fflush(fp);
 }
 
 
 void log_close( void )
 {
+
+    if( fp == NULL )
+    {
+        return;
+    }
     if( fp != LOG_DEFAULT_OUTPUT_STREAM )
     {
         fclose(fp);
