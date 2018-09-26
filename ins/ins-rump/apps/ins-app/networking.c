@@ -583,15 +583,6 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
 }
 
 void
-xe_net_defer_accept_wait( void )
-{
-    struct timespec ts = {0,100};
-
-    while ( ts.tv_nsec > 0 )
-    {
-        (void) nanosleep( &ts, &ts );
-    }
-}
 
 //return one if timeout has been exceeded
 int
@@ -668,6 +659,9 @@ xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
         //to wake up the thread and kill it
         if( bytes_read == 0 )
         {
+            rc = 0;
+            goto ErrorExit;
+            
             if( xe_net_idle_socket_timeout ( MwPollFd ) )
             {
                 rc = 0;
@@ -954,12 +948,15 @@ xe_net_defer_accept_socket( int LocalFd,
             last_idx++;
         }
 
-        xe_net_defer_accept_wait();
+        sched_yield();
+        
     } while( true );
 
 ErrorExit:
+
     log_write( LOG_INFO, "Defer accept returning with value: %d\n", rc );
     errno = err;
+
     return rc;
 }
 

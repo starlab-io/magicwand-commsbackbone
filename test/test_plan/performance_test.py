@@ -21,6 +21,8 @@ def do_ab( n, c, hostname, fout ):
                                 stdout=subprocess.PIPE );
 
     for line in process.stdout:
+        if "Time taken for tests:" in line:
+            tot_time = line.split()[4]
         if "Failed requests:" in line:
             failed = line.split()[2]
         if "Time per request:" in line and "[ms] (mean)" in line:
@@ -36,8 +38,9 @@ def do_ab( n, c, hostname, fout ):
             
     column = concurrency + "\t\t\t\t" + time + "\t\t\t\t" + failed +"\n"; 
 
-    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
+    fout.write( "%-15s %-13s %-13s %-10s %-10s %-10s %-10s\n" %
                 ( concurrency,
+                  tot_time,
                   time,
                   failed,
                   percentile_50,
@@ -58,8 +61,9 @@ def plot_line_graph():
 
     fout = open( "data/line.dat", 'w' );
     
-    fout.write( "%-15s %-13s %-10s %-10s %-10s %-10s\n" %
+    fout.write( "%-15s %-13s %-13s %-10s %-10s %-10s %-10s\n" %
                 ("concurrency",
+                 "total time",
                  "ms per req",
                  "Failures",
                  "50%",

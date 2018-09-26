@@ -23,7 +23,7 @@
 #endif
 
 #define MW_TIMER_INIT()                                         \
-    struct timeval mw_start_time, mw_end_time, mw_res = {0};
+    static __thread struct timeval mw_start_time, mw_end_time, mw_res = {0};
 
 #include <string.h>
 #define MW_TIMER_SHORT_FILE strrchr(__FILE__, '/') ? strrchr(__FILE__, '/' ) + 1 : __FILE__
@@ -35,7 +35,11 @@
                              MW_TIMER_SHORT_FILE,   \
                              __LINE__ );
 
-#define MW_TIMER_START()                                                \
+
+#define MW_TIMER_START()                        \
+    gettimeofday( &mw_start_time, NULL );
+
+#define MW_TIMER_START_PRINT()                                          \
     gettimeofday( &mw_start_time, NULL );                               \
     MW_TIMER_PRINT_FUNCTION( MW_TIMER_FILE_STREAM,                      \
                              "Start time: %f \n",                       \
