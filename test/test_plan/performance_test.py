@@ -5,6 +5,7 @@ import socket
 import subprocess
 import resource
 import argparse
+from distutils import spawn
 
 
 
@@ -117,6 +118,14 @@ def main():
     global sanity
     global hostname
 
+    if spawn.find_executable("gnuplot") is None:
+        print "Gnuplot not found on the system, please install"
+        exit()
+
+    if spawn.find_executable("ab") is None:
+        print "apache-utils not found on the system, please install"
+        exit()
+        
     parser = argparse.ArgumentParser(description="Run ab benchmarks for plot data")
 
     group = parser.add_mutually_exclusive_group( required=True )
