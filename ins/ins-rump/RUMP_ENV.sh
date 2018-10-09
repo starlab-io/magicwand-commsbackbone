@@ -66,8 +66,9 @@ export RUMPRUN_WARNING_STFU=please
 
 echo "Standard build with: build-rr.sh xen"
 dbgbuildrump() {
-    echo "Building rump; build log is build.log"
-    ./build-rr.sh -j 8 xen -- -F DBG=-ggdb > build.log
+    num_cores=$(grep -e '^cpu\scores' /proc/cpuinfo | uniq | awk '{print $4}')
+    echo "Building rump (num_cores=${num_cores:-1}); build log is build.log"
+    ./build-rr.sh -j ${num_cores:-1} xen -- -F DBG=-ggdb > build.log
     if [ $? -ne 0 ]; then
         grep 'error:' build.log
     fi
