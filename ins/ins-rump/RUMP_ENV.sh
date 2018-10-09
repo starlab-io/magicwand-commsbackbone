@@ -67,7 +67,7 @@ export RUMPRUN_WARNING_STFU=please
 echo "Standard build with: build-rr.sh xen"
 dbgbuildrump() {
     echo "Building rump; build log is build.log"
-    ./build-rr.sh xen -- -F DBG=-ggdb > build.log
+    ./build-rr.sh -j 8 xen -- -F DBG=-ggdb > build.log
     if [ $? -ne 0 ]; then
         grep 'error:' build.log
     fi

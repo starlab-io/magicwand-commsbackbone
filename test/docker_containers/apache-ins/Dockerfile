@@ -3,7 +3,7 @@ FROM apache-performance-image
 
 # ins driver
 RUN apt update  -y
-RUN apt upgrade -y
+#RUN apt upgrade -y
 RUN apt install -y apt-utils
 RUN apt install -y gcc make 
 
