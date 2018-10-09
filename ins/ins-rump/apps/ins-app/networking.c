@@ -327,9 +327,10 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     int level = SOL_SOCKET; // good for most cases
     int name  = 0;
     int err   = 0;
+
+    void* optval = NULL;
     // We have to manage the input/output buffer. If input, point to
     // Request; if output, point to response.
-
     bool timeval = false;
     // Unconditionally stuff the optval into this struct....
     struct timeval t = {0};
@@ -337,6 +338,8 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     //mt_sockfeat_arg_t * optval = &Request->val.v32;
     socklen_t len = sizeof( Request->val.v32 );
     *(uint32_t *) &t = Request->val.v32;
+
+    struct accept_filter_arg afa = {0};
 
     if ( MtSockAttribNonblock == Request->name )
     {
@@ -387,28 +390,9 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         // globals [ via sysctl() ]
         goto ErrorExit;
     case MtSockAttribDeferAccept:
-        if( Request->modify )
-        {
-            if( Request->val.v32 > 0)
-            {
-                WorkerThread->defer_accept = true;
-            }
-            else
-            {
-                WorkerThread-> defer_accept = false;
-            }
-        }
-        
-        //We need to set these values to inform the driver
-        //that this sockopt needs to be replicated to other
-        //ins instances with this usersock
-        bzero( &Response->val, sizeof( Response->val ) );
-        Response->name = MtSockAttribDeferAccept;
-        Response->val.v32 = WorkerThread->defer_accept;
-        rc = 0;
-
-        goto ErrorExit;
-
+        name = SO_ACCEPTFILTER;
+        strncpy( afa.af_name, "dataready", 10 );
+        break;
     case MtSockAttribError:
         name = SO_ERROR;
         break;
@@ -425,11 +409,21 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
                WorkerThread->public_fd, WorkerThread->local_fd,
                level, name, Request->val.v32 );
 
+    if( strnlen( afa.af_name, 10 ) == 0 )
+    {
+        optval = &t;
+    }
+    else
+    {
+        optval = &afa;
+        len = sizeof( afa );
+    }
+
     if ( Request->modify ) // Set the feature's value
     {
         rc = setsockopt( WorkerThread->local_fd,
                          level, name,
-                         (void *) &t, len );
+                         optval, len );
     }
     else // Get the feature's value, put it into t
     {
@@ -582,130 +576,6 @@ xe_net_listen_socket( IN    mt_request_socket_listen_t  * Request,
     return 0;
 }
 
-void
-xe_net_defer_accept_wait( void )
-{
-    struct timespec ts = {0,100};
-
-    while ( ts.tv_nsec > 0 )
-    {
-        (void) nanosleep( &ts, &ts );
-    }
-}
-
-//return one if timeout has been exceeded
-int
-xe_net_idle_socket_timeout( struct mw_pollfd *MwPollFd )
-{
-
-    struct timeval curr_tv = {0};
-    struct timeval res_tv  = {0};
-    double elapsed = 0.0;
-    int rc = 0;
-
-    MYASSERT( MwPollFd );
-
-    gettimeofday( &curr_tv, NULL );
-    
-    timersub( &curr_tv, &MwPollFd->conn_tv, &res_tv );
-
-    elapsed = (double)res_tv.tv_sec + ( res_tv.tv_usec/1000000.0 );
-
-    if ( elapsed >= DEFER_ACCEPT_MAX_IDLE )
-    {
-        log_write( LOG_WARN,
-                   "socket: %d idle for more than %f secs, closing\n",
-                   MwPollFd->poll_fd.fd, DEFER_ACCEPT_MAX_IDLE );
-        rc = 1;
-        goto ErrorExit;
-    }
-
-ErrorExit:
-    return rc;
-}
-
-
-// Checks status of socket by reading from the socket returns 0 for
-// disconnect, 1 for data available and -1 for error
-int
-INS_DEBUG_OPTIMIZE_OFF
-xe_net_check_idle_socket( struct mw_pollfd *MwPollFd )
-{
-    int rc = -1;
-    int bytes_read = 0;
-    char buf = 0;
-    int err = 0;
-
-    if( MwPollFd->poll_fd.fd == -1 )
-    {
-        rc = -1;
-        goto ErrorExit;
-    }
-
-    // Check for socket timeout if timeout has passed, return 0
-    if( xe_net_idle_socket_timeout( MwPollFd ) == 1 )
-    {
-        rc = 0;
-        goto ErrorExit;
-    }
-
-    if( ( MwPollFd->poll_fd.revents & ( POLLIN | POLLRDNORM ) ) ||
-        ( MwPollFd->poll_fd.revents == 0 ) )
-    {
-        bytes_read = recv( MwPollFd->poll_fd.fd, ( void * ) &buf, 1, MSG_PEEK );
-
-        if( bytes_read > 0 )
-        {
-            rc = 1;
-            goto ErrorExit;
-        }
-
-        //Because sometimes there will be a slight delay between the
-        //client initiating a connection and them actually sending data
-        //e.g. The way apache wakes up idle processes to kill them is
-        //by connecting to 0.0.0.0:80 asynchronously, then waiting for
-        //poll to return POLLOUT before sending data across the connection
-        //to wake up the thread and kill it
-        if( bytes_read == 0 )
-        {
-            if( xe_net_idle_socket_timeout ( MwPollFd ) )
-            {
-                rc = 0;
-                goto ErrorExit;
-            }
-            else
-            {
-                rc = 1;
-                goto ErrorExit;
-            }
-        }
-        
-        // For some reason read sometimes returns -1 and errno:0 when
-        // it seems like errno should be EAGAIN
-        if( ( bytes_read < 0 && ( errno == EAGAIN ) ) ||
-            ( bytes_read < 0 && ( errno == 0 ) ) )
-        {
-            rc = -1;
-            goto ErrorExit;
-        }
-
-        // If we got here, this is not good
-        err = errno;
-        log_write( LOG_ERROR,
-                   "recieve error when checking for peer disconnect. rc: %d "
-                   "errno: %d sockfd: %d\n",
-                   bytes_read, err, MwPollFd->poll_fd.fd );
-        rc = -1;
-    }
-
-ErrorExit:
-    log_write( LOG_DEBUG,
-               "xe_net_data_on_socket returning: %d socket: %d "
-               "revents: 0x%x errno: %d\n",
-               rc, MwPollFd->poll_fd.fd, MwPollFd->poll_fd.revents, errno );
-    errno = err;
-    return rc;
-}
 
 
 int
@@ -746,222 +616,8 @@ ErrorExit:
 }
 
 
-int
-INS_DEBUG_OPTIMIZE_OFF
-xe_net_defer_accept_socket( int LocalFd,
-                            struct sockaddr * sockaddr,
-                            socklen_t * addrlen )
-{
-    int rc = 0;
-    struct pollfd listen_poll_fd = {0};
-    int sockfd = -1;
-    int err = 0;
-
-//For some reason, gdb will not work if we have thread local storage defined here
-//if that is the case, use a single threaded version of apache and standard
-//static variables
-//    static int last_idx = 0;
-//    static bool init = false;
-//    static struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
-
-    static __thread int last_idx = 0;
-    static __thread bool init = false;
-    static __thread struct mw_pollfd mw_peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
-    static __thread struct pollfd peer_poll_fds[ MAX_THREAD_COUNT ] = {0};
-
-    if( !init )
-    {
-        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
-        {
-            mw_peer_poll_fds[i].poll_fd.fd = -1;
-            mw_peer_poll_fds[i].poll_fd.events = POLLIN | POLLRDNORM;
-        }
-
-        init = true;
-    }
-
-    listen_poll_fd.fd = LocalFd;
-    listen_poll_fd.events = POLLIN | POLLRDNORM | POLLHUP | POLLNVAL;
-    listen_poll_fd.revents = 0;
-
-    do
-    {
-        // Poll for incoming connection
-        do
-        {
-            rc = poll( &listen_poll_fd, 1, 0 );
-            if( rc < 0 )
-            {
-                err = errno;
-                log_write( LOG_ERROR, "poll() on socket %d failed: %d\n",
-                           LocalFd, err );
-                break;
-            }
 
 
-            if( listen_poll_fd.revents & POLLNVAL )
-            {
-                err = ENOENT;
-                rc = -1;
-                log_write( LOG_NOTICE,
-                           "Listening socket closed while defer accept was waiting\n" );
-                goto ErrorExit;
-            }
-
-            // Listen FD has incoming connection
-            if( listen_poll_fd.revents & ( POLLIN | POLLRDNORM ) )
-            {
-#if 0
-                rc = paccept( LocalFd,
-                              sockaddr,
-                              addrlen,
-                              NULL,
-                              SOCK_NONBLOCK );
-                if( rc < 0 )
-                {
-                    err = errno;
-                    rc = -1;
-                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
-                               LocalFd, errno );
-                    break;
-                }
-#endif
-                sockfd = accept( LocalFd, sockaddr, addrlen );
-                if( sockfd < 0 )
-                {
-                    err = errno;
-                    rc = -1;
-                    log_write( LOG_ERROR, "accept(%d, ...) failed: %d\n",
-                               LocalFd, errno );
-                    break;
-                }
-
-                log_write( LOG_INFO,
-                           "deferring accept of new socket %d from listener %d\n",
-                           sockfd, LocalFd );
-
-
-                rc = xe_net_set_sock_nonblock( sockfd, true );
-                if( rc )
-                {
-                    err = errno;
-                    goto ErrorExit;
-                }
-
-                // Add connection to peer pool
-                for( int i = 0; i < MAX_THREAD_COUNT; i++ )
-                {
-                    if( mw_peer_poll_fds[i].poll_fd.fd == -1 )
-                    {
-                        gettimeofday( &mw_peer_poll_fds[i].conn_tv, NULL );
-                        mw_peer_poll_fds[i].poll_fd.fd = sockfd;
-                        mw_peer_poll_fds[i].poll_fd.revents = 0;
-
-                        log_write( LOG_INFO,
-                                   "Added socket %d (nonblocking) to defer accept list\n", sockfd );
-                        break;
-                    }
-
-                    if( i == ( MAX_THREAD_COUNT - 1 ) )
-                    {
-                        log_write( LOG_ERROR, "Socket count exceeded closing socket: %d\n", sockfd);
-                        close( sockfd );
-                    }
-                }
-            }
-        } while( rc > 0 );
-
-        // Copy mw_peer_poll_fds info into peer_poll_fds for poll call
-        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
-        {
-            peer_poll_fds[i] = mw_peer_poll_fds[i].poll_fd;
-        }
-
-        rc = poll( peer_poll_fds, MAX_THREAD_COUNT, 0 );
-        if( rc < 0 )
-        {
-            err = errno;
-            log_write( LOG_ERROR, "poll() failed: %d\n", err );
-        }
-
-        // Copy results of poll call into mw_peer_poll_fds
-        for( int i = 0; i < MAX_THREAD_COUNT; i++ )
-        {
-            mw_peer_poll_fds[i].poll_fd = peer_poll_fds[i];
-        }
-
-        // first check for sockets that we already know have data
-        for( int i=0; i < MAX_THREAD_COUNT; i++ )
-        {
-            last_idx = last_idx % MAX_THREAD_COUNT;
-
-            if( mw_peer_poll_fds[last_idx].poll_fd.fd == -1 )
-            {
-                last_idx++;
-                continue;
-            }
-
-            rc = xe_net_check_idle_socket( &mw_peer_poll_fds[last_idx] );
-            if( rc == 1 )
-            {
-                // Return this FD to the caller in blocking state
-                rc = mw_peer_poll_fds[last_idx].poll_fd.fd;
-
-                xe_net_set_sock_nonblock( mw_peer_poll_fds[last_idx].poll_fd.fd, false );
-
-                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
-                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
-
-                last_idx++;
-
-                goto ErrorExit;
-            }
-
-            if( rc == 0 )
-            {
-                log_write( LOG_NOTICE,
-                           "Defer accept peer disconnect detected. Closing local fd: %d\n",
-                            mw_peer_poll_fds[last_idx].poll_fd.fd );
-
-                // Peer has disconnected
-                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
-
-                mw_peer_poll_fds[last_idx].poll_fd.fd = -1;
-                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
-
-                last_idx++;
-                continue;
-            }
-
-            //if rc == -1 do nothing
-
-            if( mw_peer_poll_fds[last_idx].poll_fd.revents &
-                ( POLLNVAL | POLLERR | POLLHUP ) )
-            {
-                log_write( LOG_NOTICE,
-                           "Error: Closing socket %d revents: %x\n",
-                           mw_peer_poll_fds[last_idx].poll_fd.fd,
-                           mw_peer_poll_fds[last_idx].poll_fd.revents );
-
-                close( mw_peer_poll_fds[last_idx].poll_fd.fd );
-                mw_peer_poll_fds[last_idx].poll_fd.fd      = -1;
-                mw_peer_poll_fds[last_idx].poll_fd.revents = 0;
-
-                last_idx++;
-                continue;
-            }
-
-            last_idx++;
-        }
-
-        xe_net_defer_accept_wait();
-    } while( true );
-
-ErrorExit:
-    log_write( LOG_INFO, "Defer accept returning with value: %d\n", rc );
-    errno = err;
-    return rc;
-}
 
 
 int
@@ -994,18 +650,10 @@ xe_net_accept_socket( IN   mt_request_socket_accept_t  *Request,
         Response->flags = Request->flags;
     }
 
-    if( WorkerThread->defer_accept )
-    {
-        sockfd = xe_net_defer_accept_socket( WorkerThread->local_fd,
-                                             (struct sockaddr *) &sockaddr,
-                                             (socklen_t *) &addrlen );
-    }
-    else
-    {
-        sockfd = accept( WorkerThread->local_fd,
-                         (struct sockaddr *) &sockaddr,
-                         (socklen_t *) &addrlen );
-    }
+
+    sockfd = accept( WorkerThread->local_fd,
+                     (struct sockaddr *) &sockaddr,
+                     (socklen_t *) &addrlen );
     if ( sockfd < 0 )
     {
         // Apache2 shutdown process will leave outstanding accept requests
@@ -1308,7 +956,6 @@ xe_net_internal_close_socket( IN thread_item_t * WorkerThread )
 ErrorExit:
     WorkerThread->local_fd  = MT_INVALID_SOCKET_FD;
     WorkerThread->public_fd = MT_INVALID_SOCKET_FD;
-    WorkerThread->defer_accept = false;
     if ( 0 != WorkerThread->bound_port_num )
     {
         WorkerThread->bound_port_num = 0;

@@ -26,6 +26,7 @@
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/socketvar.h>
+#include <errno.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -53,6 +54,9 @@ void get_inaddrs( void )
     int family, s, n;
     char host[NI_MAXHOST];
 
+
+    printf("Interface info:\n");
+    
     if (getifaddrs(&ifaddr) == -1) {
         perror("getifaddrs");
         exit(EXIT_FAILURE);
@@ -94,22 +98,24 @@ void get_inaddrs( void )
     }
 
     freeifaddrs(ifaddr);
+    printf("\n");
 }
 
 
 int main(int argc , char *argv[])
 {
 
-    int                 client_addrlen = 0;
-    struct sockaddr_in  server_sockaddr, client_sockaddr;
-    int                 port = 0;
-    char                client_message[MSG_SIZE];
-    
-//    struct accept_filter *myfilter;
-//    accept_filter_init();
-//    myfilter = accept_filt_get( );
+    int                      client_addrlen = 0;
+    int                      port = 0;
+    int                      rc = 0;
+    char                     client_message[MSG_SIZE];
+    struct sockaddr_in       server_sockaddr, client_sockaddr;
+    struct accept_filter_arg afa = {0};
+    socklen_t                len = 0;
 
     get_inaddrs();
+
+    len = sizeof( afa );
 
     if ( argc != 2 )
     {
@@ -136,9 +142,6 @@ int main(int argc , char *argv[])
     {
         printf("Could not create socket\n");
         goto ErrorExit;
-
-    } else {
-        printf("Socket Number: %d\n", server_sockfd);
     }
 
     //Prepare sockaddr_in struct with needed values
@@ -151,10 +154,6 @@ int main(int argc , char *argv[])
     {
         printf("bind failed\n");
         goto ErrorExit;
-    }
-    else
-    {
-        printf( "Bind succeeeded\n" );
     }
 
 
@@ -171,7 +170,18 @@ int main(int argc , char *argv[])
 
     client_addrlen = sizeof(struct sockaddr_in);
 
-    printf("Waiting for connection without accf_data filter enabled\n");
+
+
+
+
+//Should return einval because no filter set
+    rc = getsockopt( server_sockfd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, &len );
+    if( rc && errno != EINVAL )
+    {
+        perror("getsockopt");
+    }
+
+    printf( "Filter enabled: %s\n", afa.af_name );
 
     client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
     if( client_sockfd < 0 )
@@ -184,16 +194,23 @@ int main(int argc , char *argv[])
         printf("connection accepted\n");
     }
 
-    int rc = 0;
-    struct accept_filter_arg afa = {0};
-    strcpy( afa.af_name, "dataready" );
-    rc = setsockopt( server_sockfd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, sizeof(afa) );
-    if(rc)
+    
+//Should return "dataready" in afa.af_name
+
+    strncpy( afa.af_name, "dataready", 10 );
+    rc = setsockopt( server_sockfd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, sizeof( afa ) );
+    if( rc )
     {
-        perror("setsockopt");
+        perror( "setsockopt" );
     }
     
-    printf("Waiting for connection with accf_data filter enabled\n" );
+    rc = getsockopt( server_sockfd, SOL_SOCKET, SO_ACCEPTFILTER, &afa, &len );
+    if( rc && errno != EINVAL )
+    {
+        perror("getsockopt");
+    }
+
+    printf( "Filter enabled: %s\n", afa.af_name );
 
     client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_sockaddr, (socklen_t *) &client_addrlen);
     if( client_sockfd < 0 )
@@ -207,11 +224,10 @@ int main(int argc , char *argv[])
     }
 
 
-    
+
 ErrorExit:
     printf("Error exit called\n");
     if ( server_sockfd > 0 ) close( server_sockfd );
     if ( client_sockfd > 0 ) close( client_sockfd );
-
     return 1;
 }
