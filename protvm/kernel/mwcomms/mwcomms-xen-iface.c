@@ -135,6 +135,103 @@ typedef struct _mwcomms_xen_globals
 static mwcomms_xen_globals_t g_mwxen_state = {0};
 
 
+long long timespec_diff(struct timespec start, struct timespec end)
+{
+    struct timespec temp;
+    if ((end.tv_nsec - start.tv_nsec) < 0) {
+        temp.tv_sec = end.tv_sec - start.tv_sec - 1;
+        temp.tv_nsec = 1000000000 + end.tv_nsec - start.tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec - start.tv_sec;
+        temp.tv_nsec = end.tv_nsec - start.tv_nsec;
+    }
+    return (temp.tv_sec * 1000000) + (temp.tv_nsec / 1000);
+}
+
+
+void
+debug_performance_log( mwcomms_ins_data_t * Ins )
+{
+#ifdef PERFMONITOR
+
+    enum mt_index {
+        Invalid      = 0,
+        Create       = 1,
+        Shutdown     = 2,
+        Close        = 3,
+        Connect      = 4,
+        Bind         = 5,
+        Listen       = 6,
+        Accept       = 7,
+        Send         = 8,
+        Recv         = 9,
+        RecvFrom     = 10,
+        GetName      = 11,
+        GetPeer      = 12,
+        Attrib       = 13,
+        PollsetQuery = 14,
+        Size         = 15
+    }
+    
+    static atomic64_t init = { 0 }
+    static atomic64_t count_arr[ mt_c.Size ] = {0};
+    static struct timespec curr_ts, start_ts = { 0 };
+
+    if ( atomic64_cmpexchg( &init, 0, 1 ) )
+    {
+        getnstimeofday( &start_ts );
+        for( int i = 0; i < mt_index.Size; i++ )
+        {
+            ATOMIC_INIT( count_arr[i] );
+        }
+    }
+
+    switch ( Ins->curr_req->base.type )
+    {
+    case MtRequestInvalid:
+        break;
+    case MtRequestSocketCreate
+        break;
+    case MtRequestSocketShutdown
+        break;
+    case MtRequestSocketClose
+        break;
+    case MtRequestSocketConnect
+        break;
+    case MtRequestSocketBind
+        break;
+    case MtRequestSocketListen
+        break;
+    case MtRequestSocketAccept
+        break;
+    case MtRequestSocketSend
+        atomic64_inc( count_arr[ mt_index.Send ] );
+        break;
+    case MtRequestSocketRecv
+        atomic64_inc( count_arr[ mt_index.Recv ] );
+        break;
+    case MtRequestSocketRecvFrom
+        break;
+    case MtRequestSocketGetName
+        break;
+    case MtRequestSocketGetPeer
+        break;
+    case MtRequestSocketAttrib
+        break;
+    case MtRequestPollsetQuery
+        break;
+    default:
+
+    }
+
+    if( timespec_diff( start_ts, curr_ts
+
+#endif
+    
+    return;
+}
+
+
 static int
 mw_xen_rm( const char * Dir, const char * Node )
 {
@@ -1265,6 +1362,8 @@ mw_xen_release_request( IN void * Handle,
         // Advance the ring metadata in shared memory, notify remote side
         ++ins->front_ring.req_prod_pvt;
         RING_PUSH_REQUESTS( &ins->front_ring );
+
+        debug_performance_log( ins );
 
 #if INS_USES_EVENT_CHANNEL
         rc = mw_xen_send_event( ins );
