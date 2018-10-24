@@ -25,5 +25,5 @@ fi
 
 rumprun -S xen -dip -D $port -M 3084 -N mw-ins-rump \
         -I xen0,xenif \
-        -W xen0,inet,static,$RUMP_IP/24,$_GW \
+        -W xen0,inet,static,$RUMP_IP/8,$_GW \
         $target

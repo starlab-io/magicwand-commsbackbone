@@ -19,11 +19,11 @@
 
 #ifdef MYDEBUG
 
-#define MAX_THREAD_COUNT 200 // for testing
+#define MAX_THREAD_COUNT 500 // for testing
 
 #else
 
-#define MAX_THREAD_COUNT 1000   // for production
+#define MAX_THREAD_COUNT 4000   // for production
 
 #endif //MYDEBUG
 
