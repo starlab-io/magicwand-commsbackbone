@@ -3044,6 +3044,10 @@ mwsocket_read( struct file * File,
     mwsocket_instance_t       * sockinst = NULL;
     mwsocket_instance_t       * sockinst_old = NULL;
 
+#ifdef MW_DEBUGFS
+g_mwcomms_debugfs.mwsocket_read_cnt++;
+#endif
+
     pr_debug( "Processing read()\n" );
 
     rc = mwsocket_find_sockinst( &sockinst, File );
@@ -3175,6 +3179,10 @@ mwsocket_write( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     mt_request_base_t base;
     bool sent = false;
+
+#ifdef MW_DEBUGFS
+g_mwcomms_debugfs.mwsocket_write_cnt++;
+#endif
 
     if( Len < MT_REQUEST_BASE_SIZE )
     {
@@ -3311,6 +3319,10 @@ mwsocket_ioctl( struct file * File,
     mwsocket_attrib_t * uattrib = (mwsocket_attrib_t *)Arg;
     mwsocket_instance_t * sockinst = NULL;
 
+#ifdef MW_DEBUGFS
+g_mwcomms_debugfs.mwsocket_ioctl_cnt++;
+#endif
+
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
 
@@ -3361,6 +3373,10 @@ mwsocket_poll( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     unsigned long events = 0;
 
+#ifdef MW_DEBUGFS
+g_mwcomms_debugfs.mwsocket_poll_cnt++;
+#endif
+
     rc = mwsocket_find_sockinst( &sockinst, File );
     MYASSERT( 0 == rc );
     pr_verbose( "Processing poll(), fd %d\n", sockinst->local_fd );
@@ -3391,6 +3407,10 @@ mwsocket_release( struct inode * Inode,
 {
     int rc = 0;
     mwsocket_instance_t * sockinst = NULL;
+
+#ifdef MW_DEBUGFS
+g_mwcomms_debugfs.mwsocket_release_cnt++;
+#endif
 
     // Do not incur a decrement against our module for this close(),
     // since the file we're closing was not opened by an open()

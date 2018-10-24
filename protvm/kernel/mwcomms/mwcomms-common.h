@@ -75,4 +75,29 @@ typedef struct _mw_region
 #  define pr_verbose(...)   ((void)0)
 #endif
 
+#ifdef MW_DEBUGFS
+typedef struct _mwcomms_debugfs
+{
+    /* --- Driver entry point counters --- */
+
+    // File `/sys/kernel/debug/mwcomms/mwsocket_read_cnt` points to this variable.
+    u64 mwsocket_read_cnt;
+
+    // File `/sys/kernel/debug/mwcomms/mwsocket_write_cnt` points to this variable.
+    u64 mwsocket_write_cnt;
+
+    // File `/sys/kernel/debug/mwcomms/mwsocket_ioctl_cnt` points to this variable.
+    u64 mwsocket_ioctl_cnt;
+
+    // File `/sys/kernel/debug/mwcomms/mwsocket_poll_cnt` points to this variable.
+    u64 mwsocket_poll_cnt;
+
+    // File `/sys/kernel/debug/mwcomms/mwsocket_release_cnt` points to this variable.
+    u64 mwsocket_release_cnt;
+
+} mwcomms_debugfs_t;
+
+extern mwcomms_debugfs_t g_mwcomms_debugfs;
+#endif
+
 #endif // mwcomms_common_h
