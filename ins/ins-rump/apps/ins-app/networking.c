@@ -391,6 +391,18 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
         goto ErrorExit;
     case MtSockAttribDeferAccept:
         name = SO_ACCEPTFILTER;
+        // Check if the acceptfilter is already set on this socket,
+        // if so just no-op the setsockopt() back to mwcomms.
+        if ( Request->modify )
+        {
+            optval = NULL;
+            len = 0;
+            rc = getsockopt( WorkerThread->local_fd, level, name, &optval, &len );
+            if (rc == 0)
+            {
+                goto ErrorExit;
+            }
+        }
         strncpy( afa.af_name, "dataready", 10 );
         break;
     case MtSockAttribError:
@@ -403,10 +415,11 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     }
 
     log_write( LOG_DEBUG,
-               "Worker thread %d (socket %lx / %d) is calling get/setsockopt"
-               "%d/%d/%d\n",
+               "Worker thread %d (socket %lx / %d) is calling %s"
+               " %d/%d/%d\n",
                WorkerThread->idx,
                WorkerThread->public_fd, WorkerThread->local_fd,
+               Request->modify ? "setsockopt" : "getsockopt",
                level, name, Request->val.v32 );
 
     if( strnlen( afa.af_name, 10 ) == 0 )

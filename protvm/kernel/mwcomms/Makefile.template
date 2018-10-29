@@ -40,7 +40,7 @@ ccflags-y += -ggdb
 #ccflags-y += -DMYDEBUG
 #ccflags-y += -DDEBUG # enable pr_debug
 #ccflags-y += -DMYVERBOSE # enable our custom "pr_verbose"
-#ccflags-y += -DPERFMONITOR
+#ccflags-y += -DMW_DEBUGFS # enable debugfs /sys/kernel/debug/mwcomms
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build/ M=$(PWD) modules

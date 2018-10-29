@@ -264,6 +264,10 @@
 #include <linux/inetdevice.h>
 #include <net/if_inet6.h>
 
+#ifdef MW_DEBUGFS
+#include <linux/debugfs.h>
+#endif
+
 #include <xen/grant_table.h>
 #include <xen/page.h>
 #include <xen/xenbus.h>
@@ -310,6 +314,12 @@ typedef struct _mwcomms_base_globals
 } mwcomms_base_globals_t;
 
 static mwcomms_base_globals_t g_mwcomms_state;
+
+#ifdef MW_DEBUGFS
+// This directory entry will point to `/sys/kernel/debug/mwcomms`.
+static struct dentry *mw_debugfs_dir = 0;
+mwcomms_debugfs_t g_mwcomms_debugfs = {0};
+#endif
 
 
 /******************************************************************************
@@ -471,6 +481,9 @@ mwbase_dev_init( void )
 {
     int rc = 0;
     struct module * mod = (struct module *) THIS_MODULE;
+#ifdef MW_DEBUGFS
+    struct dentry *mw_tmp_dir;
+#endif
 
     pr_info( "\n################################\n"
              "%s.ko @ 0x%p\n"
@@ -560,6 +573,52 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
+#ifdef MW_DEBUGFS
+    mw_debugfs_dir = debugfs_create_dir(DEVICE_NAME, 0);
+    if (!mw_debugfs_dir) {
+        pr_err( "Failed to create debugfs directory /sys/kernel/debug/%s\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_u64("mwsocket_read_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_read_cnt);
+    if (!mw_tmp_dir) {
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_read_cnt\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_u64("mwsocket_write_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_write_cnt);
+    if (!mw_tmp_dir) {
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_write_cnt\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_u64("mwsocket_ioctl_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_ioctl_cnt);
+    if (!mw_tmp_dir) {
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_ioctl_cnt\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_u64("mwsocket_poll_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_poll_cnt);
+    if (!mw_tmp_dir) {
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_poll_cnt\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_u64("mwsocket_release_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_release_cnt);
+    if (!mw_tmp_dir) {
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_release_cnt\n", DEVICE_NAME);
+        rc = -1;
+        goto ErrorExit;
+    }
+
+    pr_info( "debugfs created at /sys/kernel/debug/%s\n", DEVICE_NAME );
+#endif
+
 ErrorExit:
     if ( rc )
     {
@@ -575,6 +634,11 @@ MWSOCKET_DEBUG_OPTIMIZE_OFF
 mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
+
+#ifdef MW_DEBUGFS
+    // Remove the debugfs entries
+    debugfs_remove_recursive(mw_debugfs_dir);
+#endif
 
     // Tear down open mwsockets and mwsocket subsystem
     mwsocket_fini();
