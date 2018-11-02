@@ -194,6 +194,11 @@ inst_num = 0
 
 exit_requested = False
 
+def do_exit(status):
+    global exit_requested
+    exit_requested = True
+    sys.exit(status)
+
 def handler(signum, frame):
     global exit_requested
     logging.warn("Caught signal {0}".format(signum))
@@ -258,6 +263,8 @@ class INS:
 
     def __del__(self):
         """ Destroy the INS associated with this object. """
+        if self.domid == None:
+           return
 
         p = subprocess.Popen(["xl", "destroy", "{0:d}".format(self.domid)],
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE)
@@ -317,8 +324,15 @@ class INS:
         macs[mac]['in_use'] = True
         self._mac = mac
 
-        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-{1}/bin/rumprun'.format(mwroot_current, mwroot_branch)
+        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun{1}/bin/rumprun'.format(mwroot_current, mwroot_branch)
         RUMP_RUN_FILE = '{0}/ins/ins-rump/apps/ins-app/ins-rump.run'.format(mwroot_current)
+
+        if not os.path.isfile(RUMP_RUN_CMD):
+            print("Rump run cmd does not exist: {}\n".format(RUMP_RUN_CMD))
+            do_exit(1)
+        if not os.path.isfile(RUMP_RUN_FILE):
+            print("Rump run file does not exist: {}\n".format(RUMP_RUN_FILE))
+            do_exit(1)
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = '{} -S xen -d '.format(RUMP_RUN_CMD)
@@ -331,7 +345,11 @@ class INS:
 
         logging.debug("Running command {0}".format(cmd))
 
-        p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        try:
+            p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        except Exception as e:
+            print("Failed to start INS: {}\n".format(str(e)))
+            do_exit(1)
 
         #(stdout, stderr) = p.communicate()
         #rc = p.wait()
@@ -930,6 +948,10 @@ def ins_runner():
 
 if __name__ == '__main__':
 
+    if os.geteuid() != 0:
+        print("Must have root privileges to run this script")
+        sys.exit(1)
+
     # Assume MWROOT is parent of CWD
     mwroot_default = '/'.join(os.getcwd().split('/')[:-1])
 
@@ -991,6 +1013,7 @@ if __name__ == '__main__':
         '-i',
         action='store',
         dest='ins_instance_limit',
+        type=int,
         default=0,
         help='Limit number of INS instances (default: %(default)d == do not limit)')
 
@@ -1057,7 +1080,10 @@ if __name__ == '__main__':
     if rc:
         raise RuntimeError("Call to git failed: {0}".format(stderr))
 
-    mwroot_branch = stdout.rstrip('\r\n')
+    mwroot_branch = '-' + stdout.rstrip('\r\n')
+
+    if mwroot_branch == "-master" or mwroot_branch == "-HEAD":
+        mwroot_branch = ''
 
     # Limit maximum INS instances if requested
     if ins_instance_limit != 0 and ins_instance_limit < max_ins_count:
