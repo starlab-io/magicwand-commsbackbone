@@ -40,13 +40,13 @@
 // need to be broken upand distributed evenly among this number
 // number of clients
 //
-#define MAX_INS_COUNT 2
+#define MAX_INS_COUNT 3
 
 
 //
 // How often should an INS emit a heartbeat?
 //
-#define HEARTBEAT_INTERVAL_SEC  15
+#define HEARTBEAT_INTERVAL_SEC  1
 
 
 //
