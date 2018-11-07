@@ -576,47 +576,69 @@ mwbase_dev_init( void )
 #ifdef MW_DEBUGFS
     mw_debugfs_dir = debugfs_create_dir(DEVICE_NAME, 0);
     if (!mw_debugfs_dir) {
-        pr_err( "Failed to create debugfs directory /sys/kernel/debug/%s\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs directory /sys/kernel/debug/%s\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_u64("mwsocket_read_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_read_cnt);
+    mw_tmp_dir = debugfs_create_u64( "mwsocket_read_cnt",
+                                     0666,
+                                     mw_debugfs_dir,
+                                     &g_mwcomms_debugfs.mwsocket_read_cnt );
     if (!mw_tmp_dir) {
-        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_read_cnt\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_read_cnt\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_u64("mwsocket_write_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_write_cnt);
+    mw_tmp_dir = debugfs_create_u64( "mwsocket_write_cnt",
+                                     0666,
+                                     mw_debugfs_dir,
+                                     &g_mwcomms_debugfs.mwsocket_write_cnt);
     if (!mw_tmp_dir) {
-        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_write_cnt\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_write_cnt\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_u64("mwsocket_ioctl_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_ioctl_cnt);
+    mw_tmp_dir = debugfs_create_u64( "mwsocket_ioctl_cnt",
+                                     0666,
+                                     mw_debugfs_dir,
+                                     &g_mwcomms_debugfs.mwsocket_ioctl_cnt);
     if (!mw_tmp_dir) {
-        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_ioctl_cnt\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_ioctl_cnt\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_u64("mwsocket_poll_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_poll_cnt);
+    mw_tmp_dir = debugfs_create_u64( "mwsocket_poll_cnt",
+                                     0666,
+                                     mw_debugfs_dir,
+                                     &g_mwcomms_debugfs.mwsocket_poll_cnt);
     if (!mw_tmp_dir) {
-        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_poll_cnt\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_poll_cnt\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_u64("mwsocket_release_cnt", 0666, mw_debugfs_dir, &g_mwcomms_debugfs.mwsocket_release_cnt);
+    mw_tmp_dir = debugfs_create_u64( "mwsocket_release_cnt",
+                                     0666,
+                                     mw_debugfs_dir,
+                                     &g_mwcomms_debugfs.mwsocket_release_cnt);
     if (!mw_tmp_dir) {
-        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_release_cnt\n", DEVICE_NAME);
+        pr_err( "Failed to create debugfs file /sys/kernel/debug/%s/mwsocket_release_cnt\n",
+                DEVICE_NAME);
         rc = -1;
         goto ErrorExit;
     }
 
     pr_info( "debugfs created at /sys/kernel/debug/%s\n", DEVICE_NAME );
+
 #endif
 
 ErrorExit:
