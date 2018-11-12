@@ -1055,6 +1055,8 @@ mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
     }
 
     *Response = response;
+    
+    mw_debugfs_response_count( response );
 
 ErrorExit:
     return rc;
