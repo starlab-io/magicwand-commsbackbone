@@ -1,5 +1,7 @@
 #!/bin/bash
 
-./apache/run.sh
+cd apache
+./run.sh
 
-./apache-ins/run.sh
+cd ../apache-ins
+./run.sh

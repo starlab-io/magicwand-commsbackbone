@@ -64,6 +64,8 @@
 
 #include "mwcomms-xen-iface.h"
 
+#include "mwcomms-debugfs.h"
+
 // How long to wait if we want to write a request but the ring is full?
 #define RING_FULL_TIMEOUT (HZ >> 6)
 
@@ -143,149 +145,6 @@ int mw_xen_timediff(struct timespec* Start, struct timespec* End)
     end   = timespec_to_ns( End );
     
     return (int)( end - start ) / NSEC_PER_SEC;
-}
-
-
-void
-debug_performance_log( mwcomms_ins_data_t * Ins )
-{
-    
-#ifdef PERFMONITOR
-
-    static struct _mt_count {
-        atomic64_t invalid;
-        atomic64_t create;
-        atomic64_t shutdown; 
-        atomic64_t close;
-        atomic64_t connect;
-        atomic64_t bind;
-        atomic64_t listen;
-        atomic64_t accept;
-        atomic64_t send;
-        atomic64_t recv;
-        atomic64_t recvfrom;
-        atomic64_t getname;
-        atomic64_t getpeer;
-        atomic64_t attrib;
-        atomic64_t pollsetquery;
-        atomic64_t unknown;
-        atomic64_t total;
-    } mt_count = { 0 };
-
-
-    static atomic64_t init_v = ATOMIC64_INIT( 0 );
-    static struct timespec curr_ts, start_ts = { 0 };
-
-
-    if ( ! atomic64_cmpxchg( &init_v, 0, 1 ) )
-    {
-        printk( "Initializing the timeval (should only happen once)\n" );
-        getnstimeofday( &start_ts );
-        printk( "start_ts tv_sec = %ld\n", start_ts.tv_sec );
-        printk( "start_ts tv_nsec = %ld\n", start_ts.tv_nsec );
-    }
-
-    switch ( Ins->curr_req->base.type )
-    {
-    case MtRequestInvalid:
-        atomic64_inc( &mt_count.invalid );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketCreate:
-        atomic64_inc( &mt_count.create );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketShutdown:
-        atomic64_inc( &mt_count.shutdown );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketClose:
-        atomic64_inc( &mt_count.close );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketConnect:
-        atomic64_inc( &mt_count.connect );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketBind:
-        atomic64_inc( &mt_count.bind );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketListen:
-        atomic64_inc( &mt_count.listen );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketAccept:
-        atomic64_inc( &mt_count.accept );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketSend:
-        atomic64_inc( &mt_count.send );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketRecv:
-        atomic64_inc( &mt_count.recv );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketRecvFrom:
-        atomic64_inc( &mt_count.recvfrom );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketGetName:
-        atomic64_inc( &mt_count.getname );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketGetPeer:
-        atomic64_inc( &mt_count.getpeer );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestSocketAttrib:
-        atomic64_inc( &mt_count.attrib );
-        atomic64_inc( &mt_count.total );
-        break;
-    case MtRequestPollsetQuery:
-        atomic64_inc( &mt_count.pollsetquery );
-        atomic64_inc( &mt_count.total );
-        break;
-    default:
-        atomic64_inc( &mt_count.total );
-        atomic64_inc( &mt_count.unknown );
-    }
-
-    getnstimeofday( &curr_ts );
-    
-    if( mw_xen_timediff( &start_ts, &curr_ts ) >= 1 )
-    {
-        printk( "\n" );
-        printk( "Message Type                Request     Response(coming soon!)\n" );
-        printk( "MtRequestSocketInvalid      %lu\n", atomic64_read( &mt_count.invalid ) );
-        printk( "MtRequestSocketCreate       %lu\n", atomic64_read( &mt_count.create ) );
-        printk( "MtRequestSocketShutdown     %lu\n", atomic64_read( &mt_count.shutdown ) );
-        printk( "MtRequestSocketClose        %lu\n", atomic64_read( &mt_count.close ) );
-        printk( "MtRequestSocketConnect      %lu\n", atomic64_read( &mt_count.connect ) );
-        printk( "MtRequestSocketBind         %lu\n", atomic64_read( &mt_count.bind ) );
-        printk( "MtRequestSocketListen       %lu\n", atomic64_read( &mt_count.listen ) );
-        printk( "MtRequestSocketAccept       %lu\n", atomic64_read( &mt_count.accept ) );
-        printk( "MtRequestSocketSend         %lu\n", atomic64_read( &mt_count.send ) );
-        printk( "MtRequestSocketRecv         %lu\n", atomic64_read( &mt_count.recv ) );
-        printk( "MtRequestSocketRecvFrom     %lu\n", atomic64_read( &mt_count.recvfrom ) );
-        printk( "MtRequestSocketGetName      %lu\n", atomic64_read( &mt_count.getname ) );
-        printk( "MtRequestSocketGetPeer      %lu\n", atomic64_read( &mt_count.getpeer ) );
-        printk( "MtRequestSocketAttrib       %lu\n", atomic64_read( &mt_count.attrib ) );
-        printk( "MtRequestSocketPollSetQuery %lu\n", atomic64_read( &mt_count.pollsetquery ) );
-        printk( "Unknown                     %lu\n", atomic64_read( &mt_count.unknown ) );
-        printk( "---------------------------------------\n");
-        printk( "Total                       %lu\n", atomic64_read( &mt_count.total ) );
-        printk( "\n" );
-
-        //Reset the timer
-        getnstimeofday( &start_ts );
-    }
-
-#endif
-    
-    return;
-    
 }
 
 
@@ -1420,7 +1279,7 @@ mw_xen_release_request( IN void * Handle,
         ++ins->front_ring.req_prod_pvt;
         RING_PUSH_REQUESTS( &ins->front_ring );
 
-        debug_performance_log( ins );
+        mw_debugfs_request_count( ins->curr_req );
 
 #if INS_USES_EVENT_CHANNEL
         rc = mw_xen_send_event( ins );
