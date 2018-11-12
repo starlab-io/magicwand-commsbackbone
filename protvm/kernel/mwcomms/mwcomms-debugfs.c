@@ -330,7 +330,72 @@ void mw_debugfs_response_count( mt_response_generic_t* Response )
     default:
         atomic64_inc( &g_mw_dbg_resp_count.total );
         atomic64_inc( &g_mw_dbg_resp_count.unknown );
-    }
+=======
+    switch ( Request->base.type )
+    {
+    case MtRequestInvalid:
+        atomic64_inc( &g_mw_dbg_req_count.invalid );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketCreate:
+        atomic64_inc( &g_mw_dbg_req_count.create );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketShutdown:
+        atomic64_inc( &g_mw_dbg_req_count.shutdown );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketClose:
+        atomic64_inc( &g_mw_dbg_req_count.close );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketConnect:
+        atomic64_inc( &g_mw_dbg_req_count.connect );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketBind:
+        atomic64_inc( &g_mw_dbg_req_count.bind );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketListen:
+        atomic64_inc( &g_mw_dbg_req_count.listen );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketAccept:
+        atomic64_inc( &g_mw_dbg_req_count.accept );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketSend:
+        atomic64_inc( &g_mw_dbg_req_count.send );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketRecv:
+        atomic64_inc( &g_mw_dbg_req_count.recv );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketRecvFrom:
+        atomic64_inc( &g_mw_dbg_req_count.recvfrom );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketGetName:
+        atomic64_inc( &g_mw_dbg_req_count.getname );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketGetPeer:
+        atomic64_inc( &g_mw_dbg_req_count.getpeer );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestSocketAttrib:
+        atomic64_inc( &g_mw_dbg_req_count.attrib );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    case MtRequestPollsetQuery:
+        atomic64_inc( &g_mw_dbg_req_count.pollsetquery );
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        break;
+    default:
+        atomic64_inc( &g_mw_dbg_req_count.total );
+        atomic64_inc( &g_mw_dbg_req_count.unknown );
 
 ErrorExit:
     
