@@ -131,9 +131,12 @@ ins_overloaded_trigger = None
 # Startup all INS instances at beginning instead of on demand
 start_all_ins_instances = False
 
+# Use Least Busy INS scheduling algorithm
+least_busy_scheduler = False
+
 INS_MEMORY_MB = 3048
 POLL_INTERVAL = 0.05
-DEFAULT_TIMEOUT = 10 
+DEFAULT_TIMEOUT = 10
 
 log_levels = dict(
     critical = 50,
@@ -193,6 +196,11 @@ macs = { '00:16:3e:28:2a:50' : { 'in_use' : False },
 inst_num = 0
 
 exit_requested = False
+
+def do_exit(status):
+    global exit_requested
+    exit_requested = True
+    sys.exit(status)
 
 def handler(signum, frame):
     global exit_requested
@@ -258,6 +266,8 @@ class INS:
 
     def __del__(self):
         """ Destroy the INS associated with this object. """
+        if self.domid == None:
+           return
 
         p = subprocess.Popen(["xl", "destroy", "{0:d}".format(self.domid)],
                               stdout = subprocess.PIPE, stderr = subprocess.PIPE)
@@ -317,8 +327,15 @@ class INS:
         macs[mac]['in_use'] = True
         self._mac = mac
 
-        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun-{1}/bin/rumprun'.format(mwroot_current, mwroot_branch)
+        RUMP_RUN_CMD  = '{0}/ins/ins-rump/rumprun{1}/bin/rumprun'.format(mwroot_current, mwroot_branch)
         RUMP_RUN_FILE = '{0}/ins/ins-rump/apps/ins-app/ins-rump.run'.format(mwroot_current)
+
+        if not os.path.isfile(RUMP_RUN_CMD):
+            print("Rump run cmd does not exist: {}\n".format(RUMP_RUN_CMD))
+            do_exit(1)
+        if not os.path.isfile(RUMP_RUN_FILE):
+            print("Rump run file does not exist: {}\n".format(RUMP_RUN_FILE))
+            do_exit(1)
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = '{} -S xen -d '.format(RUMP_RUN_CMD)
@@ -331,7 +348,11 @@ class INS:
 
         logging.debug("Running command {0}".format(cmd))
 
-        p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        try:
+            p = subprocess.Popen(cmd.split(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        except Exception as e:
+            print("Failed to start INS: {}\n".format(str(e)))
+            do_exit(1)
 
         #(stdout, stderr) = p.communicate()
         #rc = p.wait()
@@ -383,7 +404,7 @@ class INS:
         if activated == False:
             self._overloaded = False
 
-        logging.info("{0} INS {1}".format(
+        logging.debug("{0} INS {1}".format(
             'Activated' if activated else 'Deactivated', self.domid))
 
     def is_active(self):
@@ -528,7 +549,7 @@ class PortForwarder:
 
     def _deactivate(self):
         ''' Delete iptable rules from currently inactivated INS '''
-        logging.info("Deactivate iptables entries - INS {}".format(self))
+        logging.debug("Deactivate iptables entries - INS {}".format(self))
         for (t,c,r) in self._rules:
             t.refresh()
             c.delete_rule(r)
@@ -813,6 +834,7 @@ def balance_load():
     if the current one is too busy. If all of them are too busy, returns
     True so caller will create a new one.
     """
+    global least_busy_scheduler
 
     assert len(ins_map), "No INS is running at all"
 
@@ -826,20 +848,37 @@ def balance_load():
         assert len(all_active) == 1, "Only one INS should be active here"
         curr = all_active[0]
 
-    if not curr.overloaded():
-        # Nothing to do here
+    # If active INS is not listening then there is no need to load balance
+    if not curr._ins_forwarders:
+        logging.debug("Current INS {} is not listening, no load balancing required".format(curr))
         return False
 
-    # curr is overloaded: shift burden to the INS with the lowest load
-    logging.debug("Stats: {}, load: {}, overloaded: {}".
-                   format(curr.stats, curr.get_load(), curr.overloaded()))
-    logging.debug("INS {} is overloaded, looking for another one".format(curr))
+    if least_busy_scheduler:
+        # Direct transactions to the least busy INS
+        available = [v for (k,v) in ins_map.iteritems()]
+        for ins in available:
+            logging.debug("INS {}, stats: {}, load: {}, overloaded: {}, active: {}".
+                          format(ins.domid, ins.stats, ins.get_load(), ins.overloaded(), ins.is_active()))
+        logging.debug("Finding least busy INS for possible switch")
 
-    available = [v for (k,v) in ins_map.iteritems() if not v.overloaded()]
-    if not available:
-        logging.info("All INS instances are overloaded".format(curr))
-        # Nothing is available - the caller needs to create a new INS
-        return True
+    else:
+        # If the current INS is overloaded, direct transactions to
+        # the least busy, non-overloaded INS if available.
+        if not curr.overloaded():
+            # Nothing to do here
+            return False
+
+        # Active INS is overloaded, switch transactions to the
+        # INS with the lowest load that isn't overloaded
+
+        logging.debug("INS {}, stats: {}, load: {}, overloaded: {}, looking for substitute".
+                       format(curr.domid, curr.stats, curr.get_load(), curr.overloaded()))
+
+        available = [v for (k,v) in ins_map.iteritems() if not v.overloaded()]
+        if not available:
+            logging.debug("No INS instances are available as substitute")
+            # Nothing is available - the caller needs to create a new INS
+            return True
 
     # Remove INS instances that have an empty forwarders
     # list (listen event has not happened yet)
@@ -848,18 +887,35 @@ def balance_load():
             available.remove(ins)
 
     if not available:
+        logging.debug("No INS instances on available list")
         return False
 
     # All INS instances on available list have listeners
 
     new = min(available, key=lambda x: x.get_load())
 
-    logging.debug("{} overloaded, directing traffic to {}".format(curr, new))
+    if least_busy_scheduler:
+        if curr == new:
+            logging.debug("{} is the least busy or only INS".format(curr.domid))
+            return False
+
+        logging.debug("Switch from INS {} to least busy INS {}".format(curr.domid, new.domid))
+
+    else:
+        logging.debug("{} overloaded, directing traffic to {}".format(curr.domid, new.domid))
+
+    # Switch INS instances
 
     new.set_ins_active(True)   # 2 INSs are active
     curr.set_ins_active(False) # 1 INS is active
 
-    return False
+    # If all INS instances are overloaded launch another INS if possible
+    if len(ins_map) == len([v for (k,v) in ins_map.iteritems() if v.overloaded()]):
+        logging.debug("All INS instances are overloaded")
+        return True
+    else:
+        logging.debug("Not all INS instances are overloaded")
+        return False
 
 
 def single_ins():
@@ -908,6 +964,8 @@ def ins_runner():
             logging.debug("Spawned new INS instance ({0} of {1})".format(
                 len(ins_map), max_ins_count_v))
 
+        time.sleep(POLL_INTERVAL)
+
         # Fresh query of INSs in each iteration; the set may have changed.
         # N.B. INSs are inserted into ins_map by the XS monitor.
 
@@ -917,8 +975,6 @@ def ins_runner():
                 del ins_map[domid]
 
         spawn_new = balance_load()
-
-        time.sleep(POLL_INTERVAL)
 
         if monitor_interval > 0:
             monitor_cnt += POLL_INTERVAL
@@ -991,10 +1047,22 @@ if __name__ == '__main__':
         '-i',
         action='store',
         dest='ins_instance_limit',
+        type=int,
         default=0,
         help='Limit number of INS instances (default: %(default)d == do not limit)')
 
+    parser.add_argument(
+        '-b',
+        action='store_true',
+        dest='least_busy_scheduler',
+        default=False,
+        help='Use Least Busy INS scheduling algorithm (default: %(default)s)')
+
     args = parser.parse_args()
+
+    if os.geteuid() != 0:
+        print("Must have root privileges to run this script")
+        sys.exit(1)
 
     # Sanity check command line arguments
 
@@ -1018,6 +1086,7 @@ if __name__ == '__main__':
     monitor_interval = args.monitor_period
     ins_overloaded_trigger = args.overloaded_trigger
     start_all_ins_instances = args.start_all_ins_instances
+    least_busy_scheduler = args.least_busy_scheduler
     ins_instance_limit = args.ins_instance_limit
 
     # Obtain shared mwcomms/ins values (common/common_config.h)
@@ -1057,7 +1126,10 @@ if __name__ == '__main__':
     if rc:
         raise RuntimeError("Call to git failed: {0}".format(stderr))
 
-    mwroot_branch = stdout.rstrip('\r\n')
+    mwroot_branch = '-' + stdout.rstrip('\r\n')
+
+    if mwroot_branch == "-master" or mwroot_branch == "-HEAD":
+        mwroot_branch = ''
 
     # Limit maximum INS instances if requested
     if ins_instance_limit != 0 and ins_instance_limit < max_ins_count:
@@ -1110,6 +1182,7 @@ if __name__ == '__main__':
     logging.debug("max_ins_load_percent = {0}".format(max_ins_load_percent))
     logging.debug("ins_overloaded_trigger = {0}".format(ins_overloaded_trigger))
     logging.debug("start_all_ins_instances = {0}".format(start_all_ins_instances))
+    logging.debug("least_busy_scheduler = {0}".format(least_busy_scheduler))
 
     signal.signal(signal.SIGINT,  handler)
     signal.signal(signal.SIGTERM, handler)
