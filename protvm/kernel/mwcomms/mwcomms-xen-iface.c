@@ -137,15 +137,6 @@ typedef struct _mwcomms_xen_globals
 static mwcomms_xen_globals_t g_mwxen_state = {0};
 
 
-int mw_xen_timediff(struct timespec* Start, struct timespec* End)
-{
-    long long int start, end = 0;
-
-    start = timespec_to_ns( Start );
-    end   = timespec_to_ns( End );
-    
-    return (int)( end - start ) / NSEC_PER_SEC;
-}
 
 
 static int
