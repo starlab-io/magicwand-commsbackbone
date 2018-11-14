@@ -23,9 +23,8 @@ typedef struct _mt_count {
     atomic64_t total;
 } mt_dbg_count_t;
 
-extern mt_dbg_count_t g_mw_dbg_req_count;
-extern mt_dbg_count_t g_mw_dbg_resp_count;
-extern u64 mw_tracing_on;
+extern mt_dbg_count_t g_mw_debugfs_req_count;
+extern mt_dbg_count_t g_mw_debugfs_resp_count;
 
 void mw_debugfs_init( void );
 
