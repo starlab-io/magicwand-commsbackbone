@@ -217,7 +217,7 @@ void mw_debugfs_init()
                                      &mw_debugfs_message_counts_fops);
     if( ! mw_tmp_dir )
     {
-        printk("Could not create text file\n");
+        printk("Could not create message_counts in mwcomms debugfs directory\n");
         goto ErrorExit;
     }
 
@@ -228,7 +228,7 @@ void mw_debugfs_init()
                                      &mw_debugfs_reset_fops);
     if( ! mw_tmp_dir )
     {
-        printk("Could not create text file\n");
+        printk("Could not create reset in mwcomms debugfs directory\n");
         goto ErrorExit;
     }
 
@@ -239,7 +239,7 @@ void mw_debugfs_init()
                                     &mw_debugfs_tracing_on );
     if( ! mw_tmp_dir )
     {
-        printk( "Could not create tracing_on debugfs directory\n" );
+        printk( "Could not create tracing_on in mwcomms debugfs directory\n" );
         goto ErrorExit;
     }
     

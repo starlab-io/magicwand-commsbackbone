@@ -556,7 +556,9 @@ mwbase_dev_init( void )
        goto ErrorExit;
    }
 
+#ifdef MW_DEBUGFS
    mw_debugfs_init();
+#endif
 
 ErrorExit:
     if ( rc )
@@ -574,8 +576,10 @@ mwbase_dev_fini( void )
 {
     pr_debug( "Unloading...\n" );
 
+#ifdef MW_DEBUGFS
     //destroy debugfs
     mw_debugfs_fini();
+#endif
 
     // Tear down open mwsockets and mwsocket subsystem
     mwsocket_fini();
