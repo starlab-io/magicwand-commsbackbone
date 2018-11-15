@@ -1,4 +1,4 @@
-/*************************************************************************
+/************************************************************************
  * STAR LAB PROPRIETARY & CONFIDENTIAL
  * Copyright (C) 2018, Star Lab — All Rights Reserved
  * Unauthorized copying of this file, via any medium is strictly prohibited.
@@ -63,6 +63,8 @@
 
 
 #include "mwcomms-xen-iface.h"
+
+#include "mwcomms-debugfs.h"
 
 // How long to wait if we want to write a request but the ring is full?
 #define RING_FULL_TIMEOUT (HZ >> 6)
@@ -133,6 +135,8 @@ typedef struct _mwcomms_xen_globals
 } mwcomms_xen_globals_t;
 
 static mwcomms_xen_globals_t g_mwxen_state = {0};
+
+
 
 
 static int
@@ -1042,6 +1046,8 @@ mw_xen_get_next_response( OUT mt_response_generic_t ** Response,
     }
 
     *Response = response;
+    
+    mw_debugfs_response_count( response );
 
 ErrorExit:
     return rc;
@@ -1265,6 +1271,8 @@ mw_xen_release_request( IN void * Handle,
         // Advance the ring metadata in shared memory, notify remote side
         ++ins->front_ring.req_prod_pvt;
         RING_PUSH_REQUESTS( &ins->front_ring );
+
+        mw_debugfs_request_count( ins->curr_req );
 
 #if INS_USES_EVENT_CHANNEL
         rc = mw_xen_send_event( ins );
