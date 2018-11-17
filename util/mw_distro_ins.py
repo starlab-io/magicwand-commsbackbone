@@ -108,6 +108,10 @@ net.inet.tcp.congctl.available: reno newreno cubic
 # Globals
 #
 
+INS_MEMORY_MB = 3048
+POLL_INTERVAL = 0.05
+DEFAULT_TIMEOUT = 10
+
 MW_XENSTORE_ROOT = b"/mw"
 
 mwroot_current = ''
@@ -134,9 +138,8 @@ start_all_ins_instances = False
 # Use Least Busy INS scheduling algorithm
 least_busy_scheduler = False
 
-INS_MEMORY_MB = 512
-POLL_INTERVAL = 0.05
-DEFAULT_TIMEOUT = 10
+# Maximum MB of memory for each INS instance
+ins_max_memory = INS_MEMORY_MB
 
 log_levels = dict(
     critical = 50,
@@ -317,6 +320,7 @@ class INS:
 
         global inst_num
         global mwroot_branch
+        global ins_max_memory
 
         # Find available MAC (random or sorted)
         #mac = random.sample([k for k,v in macs.items() if not v['in_use']], 1)
@@ -339,7 +343,7 @@ class INS:
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = '{} -S xen -d '.format(RUMP_RUN_CMD)
-        cmd += '-M {} '.format(INS_MEMORY_MB)
+        cmd += '-M {} '.format(ins_max_memory)
         cmd += '-N mw-ins-rump-{:04x} '.format(inst_num)
         cmd += '-I xen0,xenif,mac={} '.format(mac)
         cmd += '-W xen0,inet,dhcp {}'.format(RUMP_RUN_FILE)
@@ -1058,6 +1062,14 @@ if __name__ == '__main__':
         default=False,
         help='Use Least Busy INS scheduling algorithm (default: %(default)s)')
 
+    parser.add_argument(
+        '-x',
+        action='store',
+        dest='ins_max_memory',
+        type=int,
+        default=INS_MEMORY_MB,
+        help='Maximum MB of memory for INS instance (default: %(default)d)')
+
     args = parser.parse_args()
 
     if os.geteuid() != 0:
@@ -1183,6 +1195,7 @@ if __name__ == '__main__':
     logging.debug("ins_overloaded_trigger = {0}".format(ins_overloaded_trigger))
     logging.debug("start_all_ins_instances = {0}".format(start_all_ins_instances))
     logging.debug("least_busy_scheduler = {0}".format(least_busy_scheduler))
+    logging.debug("ins_max_memory = {0}".format(ins_max_memory))
 
     signal.signal(signal.SIGINT,  handler)
     signal.signal(signal.SIGTERM, handler)
