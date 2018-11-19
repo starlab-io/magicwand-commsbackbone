@@ -108,7 +108,7 @@ net.inet.tcp.congctl.available: reno newreno cubic
 # Globals
 #
 
-INS_MEMORY_MB = 3048
+INS_MEMORY_MB = 512
 POLL_INTERVAL = 0.05
 DEFAULT_TIMEOUT = 10
 
@@ -1100,6 +1100,7 @@ if __name__ == '__main__':
     start_all_ins_instances = args.start_all_ins_instances
     least_busy_scheduler = args.least_busy_scheduler
     ins_instance_limit = args.ins_instance_limit
+    ins_max_memory = args.ins_max_memory
 
     # Obtain shared mwcomms/ins values (common/common_config.h)
 
