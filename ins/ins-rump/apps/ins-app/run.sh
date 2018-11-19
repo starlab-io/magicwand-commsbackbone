@@ -28,13 +28,14 @@ USAGE="Usage: `basename $0`
   -d : Use DHCP for INS networking
   -s : Use \$RUMP_IP and \$_GW for INS networking (default)
   -S : Use \$RUMP_IP2 and \$_GW for INS networking
-  -g : Enable INS debugging with GDB"
+  -g : Enable INS debugging with GDB
+  -m : MB of memory for INS (default = ${MEMORY}MB)"
 
 DHCP=0
 STATIC=0
 GDB=""
 
-while getopts ":dsSg" opt; do
+while getopts ":dsSgm:" opt; do
   case $opt in
     d)
       if [ $STATIC -gt 0 ] ; then
@@ -71,6 +72,9 @@ while getopts ":dsSg" opt; do
       ;;
     g)
       GDB="-p -D $PORT"
+      ;;
+    m)
+      MEMORY=$OPTARG
       ;;
     ?|h)
       echo "$USAGE"
