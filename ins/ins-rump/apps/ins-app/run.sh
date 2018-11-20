@@ -106,7 +106,7 @@ if [ $STATIC -gt 0 -a -z "$_GW" ]; then
     exit 1
 fi
 
-if [ $# -eq 0 ] ; then
+if [ $DHCP -eq 0 -a $STATIC -eq 0 ] ; then
   STATIC=1
   IP="${RUMP_IP:foobar}"
 fi
