@@ -18,20 +18,17 @@
 ## your PATH accordingly.
 ##
 
-CC = x86_64-rumprun-netbsd-gcc 
+CC = x86_64-rumprun-netbsd-gcc
 CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -ggdb
 
-MWROOT  = ../../../..
+MWROOT = ../../../..
 
 CFLAGS += -I..
 CFLAGS += -I$(MWROOT)/common
 CFLAGS += -I$(MWROOT)/exports/imports
-CFLAGS += -I../platform/xen/xen/include 
+CFLAGS += -I../platform/xen/xen/include
 CFLAGS += -I../../rump-common
-
-
-
 
 CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYDEBUG #enable debug_print_state
@@ -57,24 +54,23 @@ all: $(APPNAME).run
 
 # We can call rumprun-bake in the most annoying manner possible;
 # but it shows exactly what the bake script is doing. Here's how:
-# bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)	
+# bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 #
 # Direct running instrutions:
-#@echo "Run    rumprun -S xen -i $@"
-#@echo " rumprun -S xen -dip -D 1234 $@"
+# @echo "Run rumprun -S xen -i $@"
+# @echo "rumprun -S xen -dip -D 1234 $@"
 #
 # N.B. Calling rumprun with -d works here, but it doesn't work with
 # thread_app. Why?
 
 $(APPNAME).run: $(APPNAME).bin
 	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
-	@echo "Run   ./run.sh"
-	@echo "Or debug with ./debug.sh and"
-	@echo " gdb -ex 'target remote localhost:1234' $@"
+	@echo "Start INS instance with: ./run.sh"
+	@echo "Or debug with GDB using: ./run.sh -g"
+	@echo "Start GDB with: gdb -ex 'target remote localhost:1234' $@"
 
 $(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c logging.c
 	$(CC) $(CFLAGS) -o $@ $^
-
 
 clean:
 	rm -f $(APPNAME).run $(APPNAME).bin *.o
