@@ -1201,6 +1201,7 @@ ErrorExit:
 
 
 int
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
                           IN void *              Arg )
 {

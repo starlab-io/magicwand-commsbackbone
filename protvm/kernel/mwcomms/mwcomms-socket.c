@@ -597,6 +597,9 @@ mwsocket_new_ins( domid_t Domid );
 static int
 mwsocket_propogate_listeners( struct work_struct * Work );
 
+static int
+mwsocket_create_sockinst( mwsocket_instance_t **, int, bool, bool );
+
 static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
 
 /******************************************************************************
@@ -918,8 +921,48 @@ ErrorExit:
 }
 
 
+/**
+ * @brief Supports mitigation by forwarding block ip data to all INS
+ *        instances
+ */
+int
+MWSOCKET_DEBUG_OPTIMIZE_OFF
+mwsocket_block_ip_mitigation( IN domid_t Domid, IN void * args  )
+{
+    
+    int rc = 0;
+    mt_request_addr_block_t request = { 0 };
+    mw_feature_request_t * feat = args;
+    mwsocket_instance_t * newsock = NULL;
+    
+    request.base.sig     = MT_SIGNATURE_REQUEST;
+    request.base.type    = MtRequestAddrBlock;
+    request.base.size    = MT_REQUEST_ADDR_BLOCK_SIZE;
+    request.base.sockfd  = MT_INVALID_SOCKET_FD;
+        
+    request.block = feat->val.v32;
+    strncpy( request.addr, feat->ident.remote.a, MT_INET_ADDRSTRLEN );
 
-
+    rc = mwsocket_create_sockinst( &newsock, 0, false, false );
+    if( rc )
+    {
+        goto ErrorExit;
+    }
+    
+    rc = mwsocket_send_message( newsock,
+                                (mt_request_generic_t *)&request,
+                                true );
+    if( rc )
+    {
+        pr_err( "Could not forward block request to domid: %d\n",
+                  Domid );
+        goto ErrorExit;
+    }
+    
+ErrorExit:
+ 
+    return rc;
+}
 
 // @brief Reference the socket instance
 static void
@@ -1604,6 +1647,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketGetPeer:
     case MtResponseSocketAttrib:
     case MtResponsePollsetQuery:
+    case MtResponseAddrBlock:
         // Ignored cases
         drop = true;
         break;
@@ -2103,6 +2147,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     // Either we don't have a backing remote socket, or else the remote FD is valid
     MYASSERT( MtRequestSocketCreate == base->type ||
               MtRequestPollsetQuery == base->type ||
+              MtRequestAddrBlock    == base->type ||
               MW_SOCKET_IS_FD( base->sockfd ) );
 
     if( !MT_IS_REQUEST( &ActiveRequest->rr.request ) )

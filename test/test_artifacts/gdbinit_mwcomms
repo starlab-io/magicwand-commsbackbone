@@ -2,7 +2,7 @@
 ## Magic Wand support
 #################################################
 set architecture i386:x86-64
-set substitute-path /home/alex/protvm /tmp/mwpvm/protvm
+set substitute-path /home/alex/ins-production/magicwand-commsbackbone/protvm /tmp/mwpvm/protvm
 set history save on
 
 

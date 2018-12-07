@@ -343,6 +343,7 @@ class INS:
 
         # We will not connect to the console (no "-i") so we won't wait for exit below.
         cmd  = '{} -S xen -d '.format(RUMP_RUN_CMD)
+        cmd += '-b ./images/data.iso,/data'
         cmd += '-M {} '.format(ins_max_memory)
         cmd += '-N mw-ins-rump-{:04x} '.format(inst_num)
         cmd += '-I xen0,xenif,mac={} '.format(mac)

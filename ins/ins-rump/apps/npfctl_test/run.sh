@@ -15,8 +15,8 @@ netmask_to_cidr () {
   echo "$CIDR"
 }
 
-TARGET="ins-rump.run"
-NAME="mw-ins-rump"
+TARGET="test"
+NAME="test"
 MEMORY="512"
 NETWORK="xen0,xenif"
 PLATFORM="xen"
@@ -151,11 +151,12 @@ fi
 #    inet,dhcp - IPv4 with DHCP
 #    inet,static,addr/mask[,gateway] - IPv4 with static IP
 
-rumprun -S $PLATFORM -d -i $GDB    \
-        -b ./images/data.iso,/data \
-        -M $MEMORY                 \
-        -N $NAME                   \
-        -I $NETWORK                \
-        -W $INTERFACE              \
-        $TARGET
+
+
+rumprun -S $PLATFORM -d -i $GDB -e RUMPRUN_SYSPROXY=tcp://0.0.0.0:8888    \
+        -b ./images/data.iso,/data                                        \
+        -M $MEMORY -N $NAME                                               \
+        -I $NETWORK                                                       \
+        -W $INTERFACE                                                     \
+        $TARGET show
 
