@@ -40,6 +40,8 @@ ccflags-y += -ggdb
 #ccflags-y += -DMYDEBUG
 #ccflags-y += -DDEBUG # enable pr_debug
 #ccflags-y += -DMYVERBOSE # enable our custom "pr_verbose"
+
+# For Request Tracing also enable INS MW_DEBUGFS in ins/ins-rump/apps/ins-app/Makefile
 #ccflags-y += -DMW_DEBUGFS # enable debugfs /sys/kernel/debug/mwcomms
 
 all:
