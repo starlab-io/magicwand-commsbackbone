@@ -315,6 +315,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
 
     // Flags pertaining to response or remote socket state.
     mt_flags_t flags;
+
+    // Time spent by INS processing request in nanoseconds
+    unsigned long ts_ins;
 } mt_response_base_t;
 
 #define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
