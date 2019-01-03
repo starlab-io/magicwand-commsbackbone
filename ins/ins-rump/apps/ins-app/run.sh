@@ -133,7 +133,7 @@ if [ -z "$GDB" ] ; then
   echo "DEBUG  : disabled"
 else
   echo "DEBUG  : enabled"
-  echo "GDB CMD: gdb -tui -ex 'target remote localhost:$PORT' $NAME"
+  echo "GDB CMD: gdb -tui -ex 'target remote localhost:$PORT' $TARGET"
 fi
 
 # rumprun script arguments:
