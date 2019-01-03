@@ -51,6 +51,13 @@ typedef struct _buffer_item {
     // This item's index in array of these items.
     //
     int idx;
+
+#ifdef MW_DEBUGFS
+    //
+    // Timestamp when request is pulled off ring buffer
+    //
+    struct timespec ts_ins_start;
+#endif
     
 } buffer_item_t;
 

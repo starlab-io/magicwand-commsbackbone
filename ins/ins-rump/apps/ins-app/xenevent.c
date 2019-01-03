@@ -864,6 +864,16 @@ process_buffer_item( buffer_item_t * BufferItem )
     log_write( LOG_VERBOSE, "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
 
+#ifdef MW_DEBUGFS
+    {
+        // Time taken by INS to process request
+        struct timespec ts_ins_end;
+        (void) clock_gettime(CLOCK_MONOTONIC, &ts_ins_end);
+        response.base.ts_ins = (((ts_ins_end.tv_sec * 1000000000) + ts_ins_end.tv_nsec) -
+            ((BufferItem->ts_ins_start.tv_sec * 1000000000) + BufferItem->ts_ins_start.tv_nsec));
+    }
+#endif
+
     size_t written = write( g_state.output_fd,
                             &response,
                             response.base.size );
@@ -1353,6 +1363,12 @@ message_dispatcher( void )
 
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
+
+#ifdef MW_DEBUGFS
+        // Timestamp when request is pulled off ring buffer
+        clock_gettime(CLOCK_MONOTONIC, &myitem->ts_ins_start);
+#endif
+
         if ( size < (ssize_t) sizeof(mt_request_base_t)
              || myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
         {

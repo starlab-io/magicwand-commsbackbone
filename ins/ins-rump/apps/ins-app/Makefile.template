@@ -34,6 +34,7 @@ CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYDEBUG #enable debug_print_state
 #CFLAGS += -DMYTRAP
 #CFLAGS += -DNODEVICE
+#CFLAGS += -DMW_DEBUGFS # required for mwcomms request tracing
 
 # Experimental feature: breaks protected app
 CFLAGS += -DMODIFY_NETWORK_PARAMETERS=0
