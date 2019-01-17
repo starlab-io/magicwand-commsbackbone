@@ -446,6 +446,9 @@ typedef struct _mwsocket_instance
 
     // nanosecond timestamp at fops entry (0 if internal cmd)
     unsigned long t_mw1;
+
+    // count of internal mwcomms<-->ins request/response transactions per fops entry
+    int t_cnt;
 #endif
 
 } mwsocket_instance_t;
@@ -1683,6 +1686,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
     int status = Response->base.status;
 
+#ifdef MW_DEBUGFS
+    ActiveRequest->sockinst->t_cnt++;
+    ActiveRequest->tb->t_cnt = ActiveRequest->sockinst->t_cnt;
+#endif
+
     if( MT_CLOSE_WAITS( Response ) )
     {
         if( DEBUG_SHOW_TYPE( Response->base.type ) )
@@ -1726,6 +1734,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
             }
             pr_debug( "Final batch send: total sent is %d bytes\n",
                       Response->socket_send.count );
+
+#ifdef MW_DEBUGFS
+            ActiveRequest->sockinst->t_cnt = 0;
+#endif
+
         }
         else if( Response->base.flags & _MT_FLAGS_BATCH_SEND )
         {
@@ -1739,6 +1752,9 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                       (int)Response->socket_send.count );
         }
     }
+#ifdef MW_DEBUGFS
+    else { ActiveRequest->sockinst->t_cnt = 0; }
+#endif
     
     // In case the request failed and the requestor will not process
     // the response, we have to inform the user of the error in some

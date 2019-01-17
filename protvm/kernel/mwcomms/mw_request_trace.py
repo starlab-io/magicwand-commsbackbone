@@ -76,6 +76,7 @@ def display_data(mwr, df):
     # [8]  t_mw5;  // nanoseconds timestamp at request off ring buffer
     # [9]  t_mw6;  // nanoseconds timestamp at request destruction
     # [10] t_ins;  // nanoseconds elapsed time in ins
+    # [11] t_cnt;  // transaction count per fops
 
    if df == 'raw':
        # Print raw data
@@ -86,8 +87,8 @@ def display_data(mwr, df):
        # Print formatted data
        for req in mwr:
            try:
-               print('[{0}] pid = {1}, fops = {2}, '
-                     'type = {3}, t2-t1 = {4}, t3-t2 = {5}, '
+               print('[{0}] pid = {1}, fops = {2}, type = {3}, '
+                     'cnt = {11}, t2-t1 = {4}, t3-t2 = {5}, '
                      't4-t3 = {6}, t5-t4 = {7}, t6-t5 = {8}, '
                      'ins = {9}, t5-t4-ins = {10}'.format(
                      req[0],
@@ -100,7 +101,8 @@ def display_data(mwr, df):
                      get_diff(req[8], req[7]),
                      get_diff(req[9], req[8]),
                      req[10],
-                     get_diff(get_diff(req[8], req[7]), req[10])))
+                     get_diff(get_diff(req[8], req[7]), req[10]),
+                     req[11]))
            except:
                # TODO: some entries get mangled during copy from mwcomms
                print('[mangled] {}'.format(req))
