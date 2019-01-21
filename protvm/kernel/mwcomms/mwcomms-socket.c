@@ -2391,24 +2391,32 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 
                 if( copy_response )
                 {
-                    mt_response_generic_t response = {0};
+                    mt_response_generic_t *response = NULL;
 
-                    response.base.sig = MT_SIGNATURE_RESPONSE;
-                    response.base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
-                    response.base.size = sizeof( response.base );
-                    response.base.id = curr_ar->rr.request.base.id;
-                    response.base.sockfd = curr_ar->rr.request.base.sockfd;
-                    response.base.status = -ENOENT;
-                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+                    response = (mt_response_generic_t *) kmalloc( sizeof(*response), GFP_KERNEL | __GFP_ZERO);
+                    if( NULL == response )
+                    {
+                        rc = -ENOMEM;
+                        MYASSERT( !"kmalloc" );
+                        continue;
+                    }
 
-                    mwsocket_postproc_no_context( curr_ar, &response );
-                    mwsocket_postproc_emit_netflow( curr_ar, &response );
+                    response->base.sig = MT_SIGNATURE_RESPONSE;
+                    response->base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
+                    response->base.size = sizeof( response->base );
+                    response->base.id = curr_ar->rr.request.base.id;
+                    response->base.sockfd = curr_ar->rr.request.base.sockfd;
+                    response->base.status = -ENOENT;
+                    response->base.flags = response->base.flags & _MT_FLAGS_REMOTE_CLOSED;
 
-                    memcpy( &curr_ar->rr.response, &response, response.base.size );
+                    mwsocket_postproc_no_context( curr_ar, response );
+                    mwsocket_postproc_emit_netflow( curr_ar, response );
+
+                    memcpy( &curr_ar->rr.response, response, response->base.size );
+                    kfree(response);
                     curr_ar->response_populated = true;
                     complete( &curr_ar->arrived );
                 }
-
             }
             else
             {
@@ -2472,20 +2480,29 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 // If there is no replacement INS, return failure to user on the accept() actreq
                 if( sockinst == NULL )
                 {
-                    mt_response_generic_t response = {0};
+                    mt_response_generic_t *response = NULL;
 
-                    response.base.sig = MT_SIGNATURE_RESPONSE;
-                    response.base.type = MT_RESPONSE( blockreq->rr.request.base.type );
-                    response.base.size = sizeof( response.base );
-                    response.base.id = blockreq->rr.request.base.id;
-                    response.base.sockfd = blockreq->rr.request.base.sockfd;
-                    response.base.status = -ENOENT;
-                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+                    response = (mt_response_generic_t *) kmalloc( sizeof(*response), GFP_KERNEL | __GFP_ZERO);
+                    if( NULL == response )
+                    {
+                        rc = -ENOMEM;
+                        MYASSERT( !"kmalloc" );
+                        continue;
+                    }
 
-                    mwsocket_postproc_no_context( blockreq, &response );
-                    mwsocket_postproc_emit_netflow( blockreq, &response );
+                    response->base.sig = MT_SIGNATURE_RESPONSE;
+                    response->base.type = MT_RESPONSE( blockreq->rr.request.base.type );
+                    response->base.size = sizeof( response->base );
+                    response->base.id = blockreq->rr.request.base.id;
+                    response->base.sockfd = blockreq->rr.request.base.sockfd;
+                    response->base.status = -ENOENT;
+                    response->base.flags = response->base.flags & _MT_FLAGS_REMOTE_CLOSED;
 
-                    memcpy( &blockreq->rr.response, &response, response.base.size );
+                    mwsocket_postproc_no_context( blockreq, response );
+                    mwsocket_postproc_emit_netflow( blockreq, response );
+
+                    memcpy( &blockreq->rr.response, response, response->base.size );
+                    kfree(response);
                     blockreq->response_populated = true;
                     complete( &blockreq->arrived );
 
