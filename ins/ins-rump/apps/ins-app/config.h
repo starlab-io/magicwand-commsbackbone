@@ -16,6 +16,8 @@
 // (plus some extra that do other things). Exceeding the max causes
 // open to fail with EMFILE errno.
 //
+// Must be >= 2 to function.  Values < 25 result in significant
+// performance degradation.
 
 #define MAX_THREAD_COUNT 500
 
