@@ -63,6 +63,7 @@
 #define XENEVENT_PATH_STR_LEN       32
 
 #define GNT_REF_KEY                 "gnt_ref" 
+#define GNT_REF_CHUNKS              "gnt_ref_chunks"
 #define VM_EVT_CHN_PORT_KEY         "vm_evt_chn_prt"
 #define VM_EVT_CHN_BOUND_KEY        "vm_evt_chn_is_bound"
 
@@ -97,5 +98,10 @@
 // Split the grant refs apart by this in XenStore
 #define XENEVENT_GRANT_REF_DELIM " "
 
+// End a grant ref chunk with this character
+#define XENEVENT_GRANT_REF_END ":"
+
+// Maximum number of grant references in a chunk
+#define GNT_REF_CHUNK_SIZE 64
 
 #endif // xenevent_config_h

@@ -24,16 +24,22 @@
 
 //
 // Order of the block of shared memory for the Xen ring buffer. For
-// instance, if the order is 6, we share 2^6 = 64 (0x40) pages, or
-// 0x40000 bytes. The max we've tried is 6. Xen has an upper limit on
-// how many pages can be shared. That limit can be configured by a Xen
-// boot parameter - specifically look at gnttab_max_frames. N.B. we
-// must create one grant reference per shared page.
+// instance, if the order is 6 and the page size is 4k, we share 2^6 = 64 (0x40)
+// pages, or 262144 (0x40000) bytes. The max we've tried is 8. Xen has a default upper
+// limit on how many pages can be shared (256). That limit can be configured by a Xen
+// boot parameter - specifically look at gnttab_max_frames. N.B. we must create one
+// grant reference per shared page.
 //
 // For initial development, each INS will get 32 pages of shared mem.
 //
-#define XENEVENT_GRANT_REF_ORDER  5 // (2^order == page count)
-
+// To lower the overhead of larger data transfers the default was raised to 8.
+//
+// 2^order == page count
+//
+//#define XENEVENT_GRANT_REF_ORDER  5 // 32 x 4k pages = 128k (original default)
+//#define XENEVENT_GRANT_REF_ORDER  6 // 64 x 4k pages = 256k
+//#define XENEVENT_GRANT_REF_ORDER  7 // 128 x 4k pages = 512k
+#define XENEVENT_GRANT_REF_ORDER  8 // 256 x 4k pages = 1024k (current default)
 
 //
 // Maximum number of ins clients allowed the shared memory will
@@ -42,18 +48,15 @@
 //
 #define MAX_INS_COUNT 3
 
-
 //
 // How often should an INS emit a heartbeat?
 //
 #define HEARTBEAT_INTERVAL_SEC  1
 
-
 //
 // How many heartbeats can an INS miss before it is considered dead?
 //
 #define HEARTBEAT_MAX_MISSES     2
-
 
 //
 // The items we're sharing on the ring buffer are big and we want to
@@ -88,11 +91,11 @@
 // best use of shared memory.
 //
 
-//#define MESSAGE_TARGET_MAX_SIZE  0x80 // 128
-#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256 << best performance
-//#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512
-//#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024
-//#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048
+//#define MESSAGE_TARGET_MAX_SIZE  0x80 // 128 bytes
+//#define MESSAGE_TARGET_MAX_SIZE 0x100 // 256 bytes (original default)
+//#define MESSAGE_TARGET_MAX_SIZE 0x200 // 512 bytes
+//#define MESSAGE_TARGET_MAX_SIZE 0x400 // 1024 bytes
+#define MESSAGE_TARGET_MAX_SIZE 0x800 // 2048 bytes (current default)
 
 #define MESSAGE_TYPE_MAX_PAYLOAD_LEN (MESSAGE_TARGET_MAX_SIZE - 0x3e - 1)
 
@@ -132,6 +135,5 @@
 // response arrival?
 //
 #define PVM_USES_EVENT_CHANNEL 1
-
 
 #endif //common_config_h
