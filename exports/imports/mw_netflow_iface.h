@@ -220,6 +220,9 @@ typedef enum
     // Change of delay ACK ticks: arg is signed tick differential
     MtSockAttribGlobalDelackTicks = 0x1102,
 
+    // Global IP based mitigations
+    MtSockAttribAddrBlock             = 0x1103,
+
 } mt_sockfeat_name_val_t;
 
 typedef uint16_t mt_sockfeat_name_t; // holds an mt_sockfeat_name_t
@@ -271,10 +274,10 @@ typedef uint32_t mw_status_t; // status: 0 on success, otherwise positive Linux 
  */
 typedef struct MT_STRUCT_ATTRIBS _mw_feature_request
 {
-    mw_base_t           base;
-    mw_sockfeat_flags_t flags;
-    mt_sockfeat_name_t  name;
-    mt_sockfeat_arg_t   val; // used only if flags & MW_FEATURE_FLAG_WRITE
+    mw_base_t           base;    // uint_16_t uint_32_t
+    mw_sockfeat_flags_t flags;   // uint_16_t
+    mt_sockfeat_name_t  name;    // uint_16_t
+    mt_sockfeat_arg_t   val;     // uint_64_t uint_64_t used only if flags & MW_FEATURE_FLAG_WRITE 
     union
     {
         mw_socket_fd_t  sockfd;

@@ -19,6 +19,8 @@
 ##
 
 CC = x86_64-rumprun-netbsd-gcc
+MAKE = make
+
 CFLAGS = -std=gnu99 -Wall -Wno-missing-braces
 CFLAGS += -ggdb
 
@@ -29,6 +31,7 @@ CFLAGS += -I$(MWROOT)/common
 CFLAGS += -I$(MWROOT)/exports/imports
 CFLAGS += -I../platform/xen/xen/include
 CFLAGS += -I../../rump-common
+CFLAGS += -I../lib/npfctl
 
 CFLAGS += -DLOG_LEVEL=LOG_ERROR
 #CFLAGS += -DMYDEBUG #enable debug_print_state
@@ -47,9 +50,14 @@ BAKE_FLAGS=-c ../xenevents.conf xen_events
 
 # For testing outside of Rump, use Makefile.util
 
-APPNAME=ins-rump
+APPNAME = ins-rump
 
-ARCHIVES=
+SRC = xenevent.c networking.c workqueue.c pollset.c logging.c
+
+
+LIBDIR = ../lib/npfctl
+LDFLAGS= -L$(LIBDIR) -lnpfctl -lutil -lnpf -lprop -lpcap
+LIB = libnpfctl
 
 all: $(APPNAME).run
 
@@ -58,20 +66,31 @@ all: $(APPNAME).run
 # bash -x `which $(BAKE)` $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
 #
 # Direct running instrutions:
-# @echo "Run rumprun -S xen -i $@"
-# @echo "rumprun -S xen -dip -D 1234 $@"
+#
+#rumprun -S xen -di                 \
+#        -b ./images/data.iso,/data \
+#        -M 512                     \
+#        -N mw-ins-rump             \
+#        -I "xen0,xenif"            \
+#        -W xen0,inet,dhcp          \
+#        ins-rump-run
 #
 # N.B. Calling rumprun with -d works here, but it doesn't work with
 # thread_app. Why?
 
 $(APPNAME).run: $(APPNAME).bin
-	$(BAKE) $(BAKE_FLAGS) $@ $^ $(ARCHIVES)
+	$(BAKE) $(BAKE_FLAGS) $@ $^
+	genisoimage -l -r -o ./images/data.iso ./images/data
 	@echo "Start INS instance with: ./run.sh"
 	@echo "Or debug with GDB using: ./run.sh -g"
 	@echo "Start GDB with: gdb -ex 'target remote localhost:1234' $@"
 
-$(APPNAME).bin: xenevent.c networking.c workqueue.c pollset.c logging.c
-	$(CC) $(CFLAGS) -o $@ $^
+$(APPNAME).bin: $(SRC) $(LIB)
+	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
+
+$(LIB):
+	$(MAKE) -C $(LIBDIR)
 
 clean:
 	rm -f $(APPNAME).run $(APPNAME).bin *.o
+	$(MAKE) -C $(LIBDIR) clean
