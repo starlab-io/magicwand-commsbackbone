@@ -21,11 +21,12 @@ TARGETS := \
 
 .PHONY: all
 .DEFAULT_GOAL := all
-all: doxygen $(TARGETS)
+#all: doxygen $(TARGETS)
+all:$(TARGETS)
 
-.PHONY: doxygen
-doxygen: doxy.conf
-	@doxygen $<
+#.PHONY: doxygen
+#doxygen: doxy.conf
+#	@doxygen $<
 
 .PHONY: test
 test:
