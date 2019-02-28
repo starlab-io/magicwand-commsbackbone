@@ -36,10 +36,10 @@ test:
 
 # Software Design Description (SDD)
 report.pdf: report/report.yaml report/report-pdf.md report/report-changes.md report/report.md
-		pandoc --latex-engine=xelatex -S -o $@ $^
+	pandoc --latex-engine=xelatex -S -o $@ $^
 
 report.docx: report/report.yaml report/report-pdf.md report/report-changes.md report/report.md
-		pandoc -S -o $@ $^
+	pandoc -S -o $@ $^
 
 .PHONY: clean
 clean:
