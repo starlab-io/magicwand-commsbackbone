@@ -23,7 +23,7 @@ The purpose of the INS is to provide a level of isolation between an application
 Summary of Work
 ===============
 
-The Star Lab team has successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiplefront end UniKernel VMs to handle large request load.   
+The Star Lab team has successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiplefront end UniKernel VMs to handle large request load.  
 
 
 This includes the following accomplishments:  
@@ -42,13 +42,15 @@ This includes the following accomplishments:
 
 7. Designed and implemented protocol for communicating socket call parameters and returnvalues between Xen paravirtualized guests over high speed Xen shared memory ring buffer.
 
-8. Created a custom virtual filesystem to reduce ring buffer congestion and improveperformance.
+8. Created a custom virtual filesystem to reduce ring buffer congestion and improve performance.
 Previously a message had to traverse the ring buffer, wait through a poll call andreturn again. With the custom VFS, polling is done on custom file objects that get updatedbehind the scenes.
 
 9. Modified Rump UniKernel maximum allowable open files value which originally limited thesystem to have around 200 open sockets to allow over 4000 connections to one INS instance.
 
 10. Limited INS to roughly 30ms per transaction overhead in data throughput tests.
 
+***
+NOTES:
 
 A higher level list of all the work completed by Star Lab as part of the project.
 Basically, where we spent our time and effort, maybe highlight unique or impactful
@@ -56,9 +58,52 @@ features or designs we implemented. This section could be a bulleted list or a
 sub-section for each item and a small paragraph describing each item. We can probably
 pull a lot of this information from the MSRs.
 
+***
 
 Architecture
 ============
+
+![INS Architecture diagram](./report/ins_diagram.png)
+
+## Major components
+
+This section will give an explanation of the major components of the MAGICWAND-commsbackbone in the same order a request would take through the system.
+
+### Shim 
+
+###### Location:
+```
+protvm/user/wrapper
+```
+The wrapper directory contains code that is compiled into a shared object and preloaded by the dynamic linker to intercept the following syscalls.  And forward them to the mwcomms driver.
+
+
+|          |         |          |             |
+|:---------|---------|----------|:------------|
+| write    | listen  | shutdown | send        |
+| read     | accept  | socket   | recv        |
+| readv    | accept4 | bind     | recvfrom    |
+| writev   | connect | listen   | getsockopt  |
+| close    | write   | accept   | setsockopt  |
+| shutdown | read    | accept4  | getsockname |
+| socket   | readv   | connect  | fcntl       |
+| bind     | writev  | send     | close       |
+
+
+### Mwcomms driver
+
+### Xen Ring Buffer
+
+### Rumprun Unikernel
+
+### Rumprun Unikernel xe device
+
+### xenevent.c
+
+
+***
+
+NOTES:
 
 A higher level technical description of our part of the system. Describe each sub-system
 (ATP, shim, mwcomms, ring buffer, ins, xen, VMs, etc), APIs, interfaces, interactions, maybe some
@@ -66,7 +111,7 @@ technical details, this section should set the stage for the detailed design. In
 that has all the major pieces listed, entry points and APIs and lines indicating communication
 and interaction.
 
-![INS Architecture diagram](./report/ins_diagram.png)
+***
 
 Design
 ======
