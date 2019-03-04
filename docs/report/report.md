@@ -23,6 +23,17 @@ The purpose of the INS is to provide a level of isolation between an application
 Summary of Work
 ===============
 
+***
+NOTES:
+
+A higher level list of all the work completed by Star Lab as part of the project.
+Basically, where we spent our time and effort, maybe highlight unique or impactful
+features or designs we implemented. This section could be a bulleted list or a
+sub-section for each item and a small paragraph describing each item. We can probably
+pull a lot of this information from the MSRs.
+
+***
+
 The Star Lab team has successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiplefront end UniKernel VMs to handle large request load.  
 
 
@@ -49,19 +60,21 @@ Previously a message had to traverse the ring buffer, wait through a poll call a
 
 10. Limited INS to roughly 30ms per transaction overhead in data throughput tests.
 
-***
-NOTES:
 
-A higher level list of all the work completed by Star Lab as part of the project.
-Basically, where we spent our time and effort, maybe highlight unique or impactful
-features or designs we implemented. This section could be a bulleted list or a
-sub-section for each item and a small paragraph describing each item. We can probably
-pull a lot of this information from the MSRs.
-
-***
 
 Architecture
 ============
+***
+
+NOTES:
+
+A higher level technical description of our part of the system. Describe each sub-system
+(ATP, shim, mwcomms, ring buffer, ins, xen, VMs, etc), APIs, interfaces, interactions, maybe some
+technical details, this section should set the stage for the detailed design. Include a diagram
+that has all the major pieces listed, entry points and APIs and lines indicating communication
+and interaction.
+
+***
 
 ![INS Architecture diagram](./report/ins_diagram.png)
 
@@ -80,41 +93,45 @@ The wrapper directory contains code that is compiled into a shared object and pr
 
 |          |         |          |             |
 |:---------|---------|----------|:------------|
-| write    | listen  | shutdown | send        |
-| read     | accept  | socket   | recv        |
-| readv    | accept4 | bind     | recvfrom    |
-| writev   | connect | listen   | getsockopt  |
-| close    | write   | accept   | setsockopt  |
-| shutdown | read    | accept4  | getsockname |
-| socket   | readv   | connect  | fcntl       |
-| bind     | writev  | send     | close       |
+| write    | socket  | connect  | getsockopt  |
+| read     | bind    | send     | setsockopt  |
+| readv    | listen  | sendto   | getsockname |
+| writev   | accept  | recv     | getpeername |
+| close    | accept4 | recvfrom | fcntl       |
+| shutdown |         |          |             |
 
+
+
+In order for an application to take advantage of the INS it must be started with the LD_PRELOAD environment variable set to the location of the tcp_ip_wrapper.so shared library.  When that is done, all syscalls pertaining to sockets, listed in the table above will be converted to a format that the mwcomms driver understands and forwarded to the mwcomms driver where it will then be forwarded over the Xen shared memory ring buffer to the INS.
 
 ### Mwcomms driver
 
+The mwcomms driver has the logic to negotiate with the INS to create a shared memory ring buffer, and an event channel to signal when messages are available for consumption by the INS, as well as all logic to keep track of when INS's are created or destroyed, and contains all the code for the backing pseudo file system.  This is perhaps the most complex single component of the entire comms-channel.
+
 ### Xen Ring Buffer
+
+The xen ring buffer is a purely xen component, it is composed of pages of memory that, in our case, are given read and write access by both the protected virtual machine and the rumprun unikernel.  It is in this shared memory space that messages are written and consumed by both the INS and the mwcomms driver.  A second component of the ring buffer is the event channel, which is a channel by which the Rumprun unikernel and the mwcomms driver can notify one another that a message has been written to the ring buffer and is ready to be consumed.
 
 ### Rumprun Unikernel
 
+The Rumprun unikernel is a general purpose unikernel that has minimally modified the NetBSD rump kernel, to allow running unmodified POSIX code as a unikernel.  As a general purpose unikernel, the Rumprun unikernel was chosen as it had most operating system components already built in, and could allow us to focus on developing the core application infrastructures instead of worrying about writing drivers that already exist in the case that we need them.
+
 ### Rumprun Unikernel xe device
+
+The Rumprun unikernel equivalent to the mwcomms driver that interfaces with the ring buffer and XenStore to coordinate the comms-channel initialization as well as pull messages from the ring buffer and send them to the main INS application code.
 
 ### xenevent.c
 
+This is where the messages are received from the xe device, converted to their NetBSD equivalents and executed.  Once a command is processed, or a function returned, it is converted back into an MWComms message and sent back down the comms channel to to the originating process.
 
-***
 
-NOTES:
 
-A higher level technical description of our part of the system. Describe each sub-system
-(ATP, shim, mwcomms, ring buffer, ins, xen, VMs, etc), APIs, interfaces, interactions, maybe some
-technical details, this section should set the stage for the detailed design. Include a diagram
-that has all the major pieces listed, entry points and APIs and lines indicating communication
-and interaction.
-
-***
 
 Design
 ======
+
+***
+NOTES
 
 A lower level, technical section that describes the details about the design implemented.
 Maybe a bulleted list of each major sub-system along with a paragraph or two describing
@@ -124,6 +141,44 @@ debugging, security, etc. For example the INS, why did we choose Rump, what are 
 cons, why didn't we choose a linux OS or containers, etc. Include any interesting implementation
 details or diagrams.
 
+***
+
+
+### Shim
+
+* Batch send
+    * performance differences between send_batch, send_nosync, send_final_sync, and send_batch
+
+### Mwcomms driver
+
+* Pseudo filesystem in mwcomms driver
+    * how it enables asynchronous updates of socket poll flags    
+
+* Polling
+
+* Data Structures
+    * mwsocket_instance_t
+    * mwsocket_active_request_t
+    * g_mwsocket_state
+    
+* Multi-INS
+    * Socket replication
+    * socket state propagation
+
+### INS
+
+* Buffer item
+* workqueue
+* threads
+
+### Ring Buffer
+
+* size/slots
+
+### message_types.h
+
+* mt_response_generic_t
+* mt_request_generic_t
 
 Operation
 =========
@@ -143,16 +198,13 @@ sub-sections (shim, mwcomms, ins) then give git repository pathnames and filenam
 a general overview of how all the pieces share things like data structures, ie the common header
 files. This would have been a great thing to have when I started.
 
+
 Development Environment
 =======================
 
-This section should describe in detail how someone would setup a system with our code and get it all
-running and how verify it's actually working. I would pull in our "setup" wiki contents at a bare
-minimum, then add information about netflow, any scripts such as the netflow library and example
-script, the mw_distro_ins.py script for controlling INS instances, debugging built into the code, like
-the debugfs or gdb, or shim logging. Point to the Makefiles where we have features commented out. This
-should be a very practical section, after reading this someone not familiar with the project could setup
-a development environment, verify everything is working as designed, make code changes to each major
-sub-system, compile those changes and restart the environment with those changes.
+This section should describe in detail how someone would setup a system with our code and get it all running and how verify it's actually working. I would pull in our "setup" wiki contents at a bare minimum, then add information about netflow, any scripts such as the netflow library and example script, the mw_distro_ins.py script for controlling INS instances, debugging built into the code, like the debugfs or gdb, or shim logging. Point to the Makefiles where we have features commented out. This should be a very practical section, after reading this someone not familiar with the project could setup a development environment, verify everything is working as designed, make code changes to each major sub-system, compile those changes and restart the environment with those changes.
 
+
+Future Enhancements
+===================
 ---------------------------------------------------------------------------
