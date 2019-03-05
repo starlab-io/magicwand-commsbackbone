@@ -23,21 +23,9 @@ The purpose of the INS is to provide a level of isolation between an application
 Summary of Work
 ===============
 
-***
-NOTES:
+The Star Lab team has successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiplefront end UniKernel VMs to handle large request load.
 
-A higher level list of all the work completed by Star Lab as part of the project.
-Basically, where we spent our time and effort, maybe highlight unique or impactful
-features or designs we implemented. This section could be a bulleted list or a
-sub-section for each item and a small paragraph describing each item. We can probably
-pull a lot of this information from the MSRs.
-
-***
-
-The Star Lab team has successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiplefront end UniKernel VMs to handle large request load.  
-
-
-This includes the following accomplishments:  
+This includes the following accomplishments:
 
 1.  Application agnostic shared library interface to the isolated network stacktested with Apache2 and NGINX web servers.
 
@@ -146,8 +134,10 @@ details or diagrams.
 
 ### Shim
 
-* Batch send
-    * performance differences between send_batch, send_nosync, send_final_sync, and send_batch
+
+Several different implementations of the send function were designed, and the most performant version was determined to be the batch send method.  By default the mwcomms system would only 
+
+
 
 ### Mwcomms driver
 
@@ -165,15 +155,16 @@ details or diagrams.
     * Socket replication
     * socket state propagation
 
+### Ring Buffer
+
+* size/slots
+
 ### INS
 
 * Buffer item
 * workqueue
 * threads
 
-### Ring Buffer
-
-* size/slots
 
 ### message_types.h
 
@@ -207,4 +198,7 @@ This section should describe in detail how someone would setup a system with our
 
 Future Enhancements
 ===================
+
+Mention performance downsides and talk about design enhancements that could possibly increase performance.
+
 ---------------------------------------------------------------------------
