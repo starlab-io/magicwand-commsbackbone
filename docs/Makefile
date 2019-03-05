@@ -19,6 +19,11 @@ TARGETS := \
     report.pdf \
 	report.docx
 
+OBJS = report/report.yaml report/report-pdf.md report/report-changes.md \
+	report/overview.md report/summary_of_work.md report/architecture.md \
+	report/design.md report/operation.md report/artifacts.md            \
+	report/development_environment.md report/future_enhancements.md
+
 .PHONY: all
 .DEFAULT_GOAL := all
 #all: doxygen $(TARGETS)
@@ -35,14 +40,12 @@ test:
 #%.pdf: %.gv
 #	dot -Tpdf $< > $@
 
+
 # Software Design Description (SDD)
-report.pdf: report/report.yaml report/report-pdf.md report/report-changes.md \
-			report/overview.md report/summary_of_work.md report/architecture.md \
-			report/design.md report/operation.md report/artifacts.md \
-			report/development_environment.md report/future_enhancements.md
+report.pdf: $(OBJS)
 	pandoc --latex-engine=xelatex -S -o $@ $^
 
-report.docx: report/report.yaml report/report-pdf.md report/report-changes.md report/report.md
+report.docx: $(OBJS)
 	pandoc -S -o $@ $^
 
 .PHONY: clean
