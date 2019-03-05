@@ -36,7 +36,10 @@ test:
 #	dot -Tpdf $< > $@
 
 # Software Design Description (SDD)
-report.pdf: report/report.yaml report/report-pdf.md report/report-changes.md report/report.md
+report.pdf: report/report.yaml report/report-pdf.md report/report-changes.md \
+			report/overview.md report/summary_of_work.md report/architecture.md \
+			report/design.md report/operation.md report/artifacts.md \
+			report/development_environment.md report/future_enhancements.md
 	pandoc --latex-engine=xelatex -S -o $@ $^
 
 report.docx: report/report.yaml report/report-pdf.md report/report-changes.md report/report.md
