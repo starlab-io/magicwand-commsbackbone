@@ -13,7 +13,7 @@ and interaction.
 
 ***
 
-![INS Architecture diagram](./report/ins_diagram.png)
+![INS Architecture diagram](report/ins_diagram.png)
 
 ## Major components
 
