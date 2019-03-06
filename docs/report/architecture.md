@@ -13,7 +13,7 @@ and interaction.
 
 ***
 
-![INS Architecture diagram](./report/ins_diagram.png)
+![INS Architecture diagram](report/ins_diagram.png)
 
 
 This section will give an explanation of the major components of the MAGICWAND-commsbackbone in the same order a request would take through the system.
