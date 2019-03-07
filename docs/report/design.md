@@ -68,6 +68,7 @@ When a process wants to create a new mwsocket, it sends an IOCTL to the main LKM
 The core functionality of this LKM is found in mwcomms-socket.
 
 \newpage
+
 Here's a visualization of the LKM:
 
 ```
@@ -108,9 +109,7 @@ modify mwsocket behavior --->  | ioctl   |
 
 The significant advantages to this design can be seen in the diagram: the kernel facilities are leveraged to support (1) polling and (2) mwsocket destruction, even in the case of process termination. This alleviates the LKM from those burdens. In a future refactor, this could be simplified so that the mwsocket object uses the main device's functions. In this case, a socket() call would result in a direct opening of /dev/mwcomms for a new file descriptor.
 
-
 ### Multi-INS support
-
 
 To facilitate attack mitigation and TCP/IP stack diversification, the driver supports multiple INSs. This feature is considered in beta; there are still some issues to work out.
 
@@ -120,31 +119,105 @@ Once a new INS is registered, any listening sockets must be "replicated" onto it
 
 This behavior means that when an inbound connection on port 80 could come from any known INS. The LKM must direct that connection (a response to an accept) to the thread that originally wrote the accept request, although it may have sent it to a different INS (or set of INSs). The LKM achieves this capability by maintaining a list of inbound connections for each mwsocket. Upon an inbound connection, the response is put in the list and a special semaphore is up()-ed, which the accept()ing thread is blocking on. Moreover, each "replicated" mwsocket has an associated "primary" mwsocket, which is the one exposed to the user.
 
-## Ring Buffer
+## Xen Ring Buffer
 
-The ring buffer configuration options are located in the file:
+The xen ring buffer is a non locking data structure used for producer-consumer communication between the INS and the MwComms LKM.  A typical ring buffer has a request pointer and a response pointer, that is updated when requests or responses are written to the ring, and when the pointers reach the end of the buffer and need to wrap around, wrapping the index can be an expensive operation.  Xen avoids this problem by creating the ring buffer in powers of 2 so that the lowest n bits will always act as an index into the buffer, and can be obtained by a simple mask.
+
+The MwComms ring buffer configuration options are located in the file:
 ```
 common/common_config.h
 ```
-XENEVENT_GRANT_REF_ORDER defines the order of the block of shared memory for the Xen ring buffer. For instance, if the order is 6 and the page size is 4k, we share 2^6 = 64 (0x40) pages, or 262144 (0x40000) bytes. The max we've tried is 8. Xen has a default upper limit on how many pages can be shared (256). That limit can be configured by a Xen boot parameter.
+XENEVENT_GRANT_REF_ORDER defines the order of the block of shared memory for the Xen ring buffer. For instance, if the order is 6 and the page size is 4k, we share 2^6 = 64 (0x40) pages, or 262144 (0x40000) bytes. Xen has a default upper limit on how many pages can be shared (256). That limit can be configured by a Xen boot parameter.
 
-This value was originally 5, but raised to 8 in order to mitigate slowdowns observed when the system was under heavy load.
+Initially the grant ref order was 5, but raised to 8 in order to mitigate slowdowns observed when the system was under heavy load.
 
 ```
 #define XENEVENT_GRANT_REF_ORDER  8 // 256 x 4k pages = 1024k (current default)
 ```
-The ring buffer initialization functions are found in the file mwcomms-xen-iface.c, and is called when a new INS is discovered. by means of the xenbus_watch.
-
-## INS
-
-When an INS is started, 
-* Buffer item
-* workqueue
-* threads
-
+The ring buffer initialization functions are found in the file mwcomms-xen-iface.c, and is called when a new INS is discovered. by means of xenbus_watch.  The size of the request/response slots in the ring buffer are determined by the 
 
 ## message_types.h
 
 * mt_response_generic_t
 * mt_request_generic_t
+
+
+
+## XenStore
+
+The xenstore is used by MwComms to publish data needed to coordinate the different parts of the system.  This includes grant refs for the ring buffer, and ip address/port information for the netflow and front-end APIs.
+
+This is an example xenstore configuration between one INS and the PVM:
+
+```
+
+mw = ""
+ pvm = ""
+  id = "2"
+  netflow = "20.60.60.66:49526"
+ 20 = ""
+  ins_dom_id = "20"
+  vm_evt_chn_prt = "14"
+  gnt_ref_1 = "106c 106d 106e 106f 1070 1071 1072 1073 1074 1075 1076 1077 1078 1079 107a 107b 107c 107d 107e 107f\..."
+  gnt_ref_2 = "10ac 10ad 10ae 10af 10b0 10b1 10b2 10b3 10b4 10b5 10b6 10b7 10b8 10b9 10ba 10bb 10bc 10bd 10be 10bf\..."
+  gnt_ref_3 = "10ec 10ed 10ee 10ef 10f0 10f1 10f2 10f3 10f4 10f5 10f6 10f7 10f8 10f9 10fa 10fb 10fc 10fd 10fe 10ff\..."
+  gnt_ref_4 = "112c 112d 112e 112f 1130 1131 1132 1133 1134 1135 1136 1137 1138 1139 113a 113b 113c 113d 113e 113f\..."
+  gnt_ref_chunks = "4"
+  vm_evt_chn_is_bound = "1"
+  ip_addrs = " 20.60.60.138 127.0.0.1"
+  heartbeat = "1807561"
+  network_stats = "1f4:0:0:0"
+
+```
+
+```
+mw/pvm/id holds the domain id of the PVM
+mw/pvm/netflow holds the ip address and the port used to connect to the mwcomms LKM netflow channel
+
+mw/20 is the root directory for the INS
+     /ins_dom_id="20" contains the domid as a value to extract it easily from the xenstore
+     /vm_evt_chn_prt holds the value to establish an event channel between the PVM and the INS
+     /gnt_ref_[1..4] contains the indexes into the shared memory pages used for the ring buffer.
+     /gnt_ref_chunks contains the number of chunks that are available for reading.
+     /vm_evt_chn_is_bound is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
+     /ip_addrs is the list of ip addresses associated with the INS
+     /heartbeat is a value that is updated every 1 second to indicate that the INS is still alive
+     /network_stats //TODO fill this in
+
+```
+
+## INS
+
+### INS userspace
+
+Application for Rump userspace that manages commands from the protected virtual machine (PVM) over xen shared memory, as well as the associated network connections. The application is designed to minimize dynamic memory allocations after startup and to handle multiple blocking network operations simultaneously. 
+
+This application processes incoming requests as follows:
+
+1. The dispatcher function yields its own thread to allow worker threads to process and free up their buffers. We do this because Rump uses a non-preemptive scheduler. 
+
+2. The dispatcher function selects an available buffer from the  buffer pool and reads an incoming request into it.
+
+3. The dispatcher examines the request:
+
+    a. If the request is for a new socket request, it selects an available thread for the socket.
+
+    b. Otherwise, the request is for an existing connection. It finds the thread that is handling the connection and assigns the request to that thread.
+
+A request is assigned to a thread by placing its associated buffer index into the thread's work queue and signalling to the thread that work is available via a semaphore.
+
+4. Worker threads are initialized on startup and block on a semaphore until work becomes available. When there's work to do, the thread is given control and processes the oldest request in its queue against the socket file descriptor it was assigned. In case the request is for a new socket, it is processed immediately by the dispatcher thread so subsequent requests against that socket can find the thread that handled it.
+
+The primary functions for a developer to understand are:
+
+1. worker_thread_func:
+One runs per worker thread. It waits for requests processes them against the socket that the worker thread is assigned.
+
+2. message_dispatcher:
+Finds an available buffer and reads a request into it. Finds the thread that will process the request, and, if applicable, adds the request to its work queue and signals to it that work is there.
+
+
+### INS device driver /dev/xe
+
+
 

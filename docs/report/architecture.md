@@ -46,46 +46,8 @@ The mwcomms driver has the logic to negotiate with the INS to create a shared me
 
 ## Xenstore
 
-Xenstore is a directory structured space to store information between Xen domains.  It is similar to procfs, and it is used in this project to synchronize communications between the INS and the mwcomms LKM.  It stores the grant refs, the ip address of the ins and 
+Xenstore is a space similar to procfs designed to store information that can be read by other domains.  MwComms uses it store the grant refs, and other information that the different pieces of the INS need to communicate with one another.
 
-This is an example xenstore configuration between one INS and the PVM:
-
-```
-
-mw = ""
- pvm = ""
-  id = "2"
-  netflow = "20.60.60.66:49526"
- 20 = ""
-  ins_dom_id = "20"
-  vm_evt_chn_prt = "14"
-  gnt_ref_1 = "106c 106d 106e 106f 1070 1071 1072 1073 1074 1075 1076 1077 1078 1079 107a 107b 107c 107d 107e 107f\..."
-  gnt_ref_2 = "10ac 10ad 10ae 10af 10b0 10b1 10b2 10b3 10b4 10b5 10b6 10b7 10b8 10b9 10ba 10bb 10bc 10bd 10be 10bf\..."
-  gnt_ref_3 = "10ec 10ed 10ee 10ef 10f0 10f1 10f2 10f3 10f4 10f5 10f6 10f7 10f8 10f9 10fa 10fb 10fc 10fd 10fe 10ff\..."
-  gnt_ref_4 = "112c 112d 112e 112f 1130 1131 1132 1133 1134 1135 1136 1137 1138 1139 113a 113b 113c 113d 113e 113f\..."
-  gnt_ref_chunks = "4"
-  vm_evt_chn_is_bound = "1"
-  ip_addrs = " 20.60.60.138 127.0.0.1"
-  heartbeat = "1807561"
-  network_stats = "1f4:0:0:0"
-
-```
-
-```
-mw/pvm/id holds the domain id of the PVM
-mw/pvm/netflow holds the ip address and the port used to connect to the mwcomms LKM netflow channel
-
-mw/20 is the root directory for the INS
-     /ins_dom_id="20" contains the domid as a value to extract it easily from the xenstore
-     /vm_evt_chn_prt holds the value to establish an event channel between the PVM and the INS
-     /gnt_ref_[1..4] contains the indexes into the shared memory pages used for the ring buffer.
-     /gnt_ref_chunks contains the number of chunks that are available for reading.
-     /vm_evt_chn_is_bound is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
-     /ip_addrs is the list of ip addresses associated with the INS
-     /heartbeat is a value that is updated every 1 second to indicate that the INS is still alive
-     /network_stats //TODO fill this in
-
-```
 
 ## Xen Ring Buffer
 
