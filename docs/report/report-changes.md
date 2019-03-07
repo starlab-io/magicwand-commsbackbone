@@ -6,7 +6,7 @@ Change Log
  Authors         Rev  Date       Description of change
 ---------------- ---- ---------  -------------------------------
  Alex Speasmaker 1.0  2/27/2019  Initial Draft (for review only)
- Greg pearson
+ Greg Pearson
 
 ----------------------------------------------------------------
 
