@@ -4,18 +4,9 @@ Architecture
 
 ![MWcomms Architecture diagram](ins_diagram.png)
 
+## Overview
 
-This section will give an explanation of the major components of the MAGICWAND-commsbackbone in the same order a request would take through the system.
-
-## Protected Virtual machine
-
-### Shim 
-
-###### Location:
-```
-protvm/user/wrapper
-```
-The wrapper directory contains code that is compiled into a shared object and preloaded by the dynamic linker to intercept the following syscalls.  And forward them to the mwcomms driver.
+The purpose of the MAGICWAND MwComms network isolation channel is to provide the MAGICWAND detection and mitigation engine with comprehensive telemetry data on all TCP/IP connections to the protected process running on the protected virtual machine.  This is accomplished by intercepting all syscalls pertaining to IPv4 sockets made by the protected process by means of a preloaded shared library shim between the protected process and system libraries. A list of functions that are intercepted by the shared library shim are provided in table 4.1 below:
 
 |          |         |          |             |
 |:---------|---------|----------|:------------|
@@ -25,46 +16,35 @@ The wrapper directory contains code that is compiled into a shared object and pr
 | writev   | accept  | recv     | getpeername |
 | close    | accept4 | recvfrom | fcntl       |
 | shutdown |         |          |             |
-
-In order for an application to take advantage of the INS it must be started with the LD_PRELOAD environment variable set to the location of the tcp_ip_wrapper.so shared library.  When that is done, all syscalls pertaining to sockets, listed in the table above will be converted to a format that the mwcomms driver understands and forwarded to the mwcomms driver where it will then be forwarded over the Xen shared memory ring buffer to the INS.
-
-
-### MWcomms Kernel Module
-
-The mwcomms driver has the logic to negotiate with the INS to create a shared memory ring buffer, and an event channel to signal when messages are available for consumption by the INS, as well as all logic to keep track of when INS's are created or destroyed, and contains all the code for the backing pseudo file system.  This is perhaps the most complex single component of the entire comms-channel.
+Table 4.1
 
 
-## Xen Components
+
+## Protected Virtual machine
+
+![MWcomms Architecture diagram](pvm_diagram.png){#id .class width=250}
+
+The protected virtual machine is an unprivileged domain running on top of the Xen hypervisor.  The PVM hosts the protected application, the shared library shim as well as the PVM MwComms driver code which is responsible for coordinating all syscalls, sending them over the Xen ring buffer, and providing the MAGICWAND detection and mitigation engine with telemetry data regarding the state of the protected application's network stack.
+
+### Shim
+The purpose of the shim is to transparently bypass the operating system network stack in favor of a direct shared-memory connection to the associated unikernel network stack.  This is done by intercepting the system calls in Table 1.4 and packing them into a MwComms message structure and writing it to the MwComms driver or by calling an ioctl to set socket parameters.  In the case of a system call needing to perform an operation on a local file descriptor or a local socket of a type other than IPv4 the calls are forwarded to the correct libraries for the operating system to handle as normal.
+
+### PVM Kernel MwComms Kernel Module
+
+The PVM kernel module contains the majority of the logic that maintains the sate of the MwComms network isolation channel. It is responsible for receiving and forwarding all requests and responses between the unikernel and the protected process.  As well as allocating and publishing the shared memory grant refs to the Xenstore, and establishing the event channel.
 
 
-![Xen Component Diagram](xen_diagram.png)
+![Xen Component Diagram](xen_diagram.png){#id .class width=150 height=300px }
 
-### Xenstore
-
-Xenstore is a space similar to procfs designed to store information that can be read by other domains.  MwComms uses it store the grant refs, and other information that the different pieces of the INS need to communicate with one another.
-
-
-### Xen Ring Buffer
-
-The xen ring buffer is a purely xen component, it is composed of pages of memory that, in our case, are given read and write access by both the protected virtual machine and the rumprun unikernel.  It is in this shared memory space that messages are written and consumed by both the INS and the mwcomms driver.  A second component of the ring buffer is the event channel, which is a channel by which the Rumprun unikernel and the mwcomms driver can notify one another that a message has been written to the ring buffer and is ready to be consumed.
-
-### Event Channel
 
 ## INS
 
-
-![INS Architecture diagram](rumprun_diagram.png)
+![INS Architecture diagram](rumprun_diagram.png){#id .class width=200 }
 
 
 ### Rumprun Unikernel
 
-The Rumprun unikernel is a general purpose unikernel that has minimally modified the NetBSD rump kernel, to allow running unmodified POSIX code as a unikernel.  As a general purpose unikernel, the Rumprun unikernel was chosen as it had most operating system components already built in, and could allow us to focus on developing the core application infrastructures instead of worrying about writing drivers that already exist in the case that we need them.
-
-
-### /dev/xe Kernel Module
-
-The Rumprun unikernel equivalent to the mwcomms driver that interfaces with the ring buffer and XenStore to coordinate the comms-channel initialization as well as pull messages from the ring buffer and send them to the main INS application code.
-
+The Rumprun unikernel is a minimally modified NetBSD rump kernel that is able to run unmodified POSIX code as a unikernel.  The Rumprun unikernel was chosen over other unikernels to act as the isolated network stack because, as a general purpose unikernel, it has most operating system components already built in, allowing development work to focus on core application infrastructure instead of writing drivers that already exist. The unikernel component of the MwComms channel is where the commands that have been forwarded over the ring buffer are executed and responses returned.  The INS also has a driver component that allows it to interface with the Xen ring buffer.
 
 ### Event Dispatcher
 

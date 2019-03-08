@@ -9,7 +9,9 @@ Overview
 | INS     | Isolated Network Stack                                                    |
 | PVM     | Protected virtual machine                                                 |
 | shim    | Shared libary used by LD_PRELOAD to intercept all socket related syscalls |
-| MWcomms | MAGICWAND communication backbone - all infrastructure, components, and interfaces pertaining to the support and function of the INS  |
+| NetFlow nterface | The interface responsible for reporting all protocol stack information |
+| MwComms | MAGICWAND network communication isolation channel - all components relating to the isolated network stack including shim, PVM driver, NetFlow interface and unikernel |
+
 
 
 Introduction
