@@ -13,9 +13,7 @@ environment for the mwcomms/ins component of Magicwand.
 | PVM      | Protected Virtual Machine, VM where the ATP runs |
 | Shim     | The LD_PRELOAD library loaded by the ATP providing a interface to the mwcomms driver |
 | mwcomms  | The Linux Kernel driver running on the PVM which interfaces with the Shim and INS |
-| INS      | nstrumented Unikernel Network Stacks |
-
-REMOVE: This section should describe in detail how someone would setup a system with our code and get it all running and how verify it's actually working. I would pull in our "setup" wiki contents at a bare minimum, then add information about netflow, any scripts such as the netflow library and example script, the mw_distro_ins.py script for controlling INS instances, debugging built into the code, like the debugfs or gdb, or shim logging. Point to the Makefiles where we have features commented out. This should be a very practical section, after reading this someone not familiar with the project could setup a development environment, verify everything is working as designed, make code changes to each major sub-system, compile those changes and restart the environment with those changes.
+| INS      | Instrumented Unikernel Network Stacks |
 
 ***
 
@@ -33,18 +31,19 @@ REMOVE: This section should describe in detail how someone would setup a system 
 ***
 
 ### Basic Development Environment Setup <a name="Section_01"></a>
+This section explains how to setup a basic development environment on which
+to build, run and test the mwcomms/ins subsystem.
 
 #### System configuration
-    - BIOS in Legacy mode
-    - enable VT-d
-    - WiFi off
+    # BIOS in Legacy mode
+    # enable VT-d
+    # WiFi off
 
 #### Install Ubuntu 16.04 desktop version
-    - choose LVM disk layout
-    - encrypt disk
+    # choose LVM disk layout
+    # encrypt disk
 
 #### Install latest Linux 4.4.0 kernel
-
     $ sudo apt-cache search 'linux-image-4.4.0-([1-9]*)-generic'
     $ sudo apt-get install <latest_kernel>
     $ sudo shutdown -r now
@@ -259,7 +258,9 @@ REMOVE: This section should describe in detail how someone would setup a system 
     # apache benchmark 'ab' is another good tool to use
     $ ab -n 100 -c 1 http://<RUMP_IP>:80/
 
-### Environment Setup After Switching GIT Branches <a name="Section_02"></a>
+### Environment Setup After Dom0 Reboot <a name="Section_02"></a>
+Once the full environment is setup this section explains what
+steps are needed after Dom0 is rebooted.
 
 #### Dom0
     $ sudo modprobe loop max_loop=255
@@ -290,6 +291,8 @@ REMOVE: This section should describe in detail how someone would setup a system 
     # browser.cache.disk.enable "false"
 
 ### Environment Setup After Switching GIT Branches <a name="Section_03"></a>
+Once the full environment is setup this section explains what
+steps are needed after switching to a new mwcomms/ins git branch.
 
 #### Dom0
     # cleanup existing git branch
@@ -302,29 +305,194 @@ REMOVE: This section should describe in detail how someone would setup a system 
     # cleanup existing source code
     $ cd ; rm -rf ins-production
 
-****
+***
 
 ### NetFlow Setup and Use <a name="Section_04"></a>
+Communication channel and API to the mwcomms driver used to monitor protected
+application traffic (syscalls), send requests and receive responses. Requests
+can be used to query the driver for information or to specify an action to be
+taken, such as a LVDDOS mitigation.
 
-****
+#### API
+Communication between the mwcomms driver and the monitoring application uses a
+TCP/IP socket, the address and port are published by the mwcomms driver in
+XenStore on Dom0 at "/mw/pvm/netflow".
+
+A python library used to interface with Netflow is located at:
+* magicwand-commsbackbone/util/mw_netflow.py
+
+A python script used to exercise the Netflow API is located at:
+* magicwand-commsbackbone/util/mw_netflow_consumer.py
+
+The core Netflow mwcomms driver files are located at:
+* magicwand-commsbackbone/exports/imports/mw_netflow_iface.h
+* magicwand-commsbackbone/common/message_types.h
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mwcomms-netflow.h
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mwcomms-netflow.c
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mwcomms-socket.c
+
+#### Traffic Information
+As soon as a Netflow connection is established with the mwcomms driver all
+protected application traffic monitoring data is sent to the monitoring
+application in real time. Multiple connections can be established and traffic
+data will be sent to every connected client. Traffic is broken into chunks
+equivalent to syscalls (called observations in the code) and defined by
+mw_observation_t:
+
+* MwObservationNone    = 0
+* MwObservationCreate  = 1
+* MwObservationBind    = 2
+* MwObservationAccept  = 3
+* MwObservationConnect = 4
+* MwObservationRecv    = 5
+* MwObservationSend    = 6
+* MwObservationClose   = 7
+
+Each "observation" message is comprised of a set of data defined by the mw_netflow_info_t structure:
+
+* mw_base_t        base;             // signature: MW_MESSAGE_NETFLOW_INFO
+* mw_obs_space_t   obs;              // mw_observation_t
+* mw_timestamp_t   ts_session_start; // beginning of session
+* mw_timestamp_t   ts_curr;          // time of observation
+* mw_socket_fd_t   sockfd;           // Dom-0 unique socket identifier
+* mw_endpoint_t    pvm;              // local (PVM) endpoint info
+* mw_endpoint_t    remote;           // remote endpoint info
+* mw_bytecount_t   bytes_in;         // tot bytes received by the PVM
+* mw_bytecount_t   bytes_out;        // tot bytes sent by the PVM
+* uint64_t         extra;            // extra data: new sockfd on accept msg
+
+A Request can be sent to the mwcomms driver asking for information or for an
+action to be executed, these requests are defined by mt_sockfeat_name_val_t:
+
+* MtSockAttribNone
+* MtChannelTrafficMonitorOn
+* MtChannelTrafficMonitorOff
+* MtSockAttribIsOpen
+* MtSockAttribOwnerRunning
+* MtSockAttribNonblock
+* MtSockAttribReuseaddr
+* MtSockAttribReuseport
+* MtSockAttribKeepalive
+* MtSockAttribDeferAccept
+* MtSockAttribNodelay
+* MtSockAttribSndBuf
+* MtSockAttribRcvBuf
+* MtSockAttribSndTimeo
+* MtSockAttribRcvTimeo
+* MtSockAttribSndLoWat
+* MtSockAttribRcvLoWat
+* MtSockAttribError
+* MtSockAttribGlobalCongctl
+* MtSockAttribGlobalDelackTicks
+
+#### Mitigation
+A mitigation request is used to address a possible LVDDOS attack. The following
+example illustrates how to setup "netcat" as a protected application, make a
+connection using another instance of "netcat" then request mwcomms to close
+the connection using the Netflow interface.
+
+* A PVM should be running with the mwcomms driver loaded
+* An INS instance should also be running and be connected to the mwcomms driver
+* On Dom0 execute the script located in `magicwand-commsbackbone/util/mw_netflow_consumer.py`
+* On the PVM start "netcat" in server mode, put the following two lines in a file and make it executable.
+    * `export LD_PRELOAD=/home/pvm/ins-production/magicwand-commsbackbone/protvm/user/wrapper/tcp_ip_wrapper.so`
+    * `netcat -l 4444`
+* Execute the script
+* On a different machine execute `netcat [IP] 4444` using the INS instance IP address
+* Once connected you can type any message into either netcat and it will be displayed on the other
+* In the "mw_netflow_consumer.py" window type the letter `c` which will display open sockets
+* To shutdown the netcat open socket, select it from the list, you should see the netcat client terminate
+* Shutdown the netcat server with Ctrl-C
+
+To test closing of a socket while data is being transferred use a syntax like the following:
+* server: `netcat -l 4444 > outfile`
+* client: `netcat [IP] 4444 < infile`
+Initiate the mitigation while the file is being transferred.
+
+***
 
 ### Multiple INS Startup and Control <a name="Section_05"></a>
+The mwcomms/ins subsystem allows for multiple INS instances to be running
+in parallel. A front end python utility is available for controlling multiple
+INS instances along with routing network requests to specific INS instances
+to regulate load evenly.
 
-****
+***
 
 ### DebugFS Interface <a name="Section_06"></a>
+A Linux DebugFS interface is available in the mwcomms driver to allow for
+inspecting driver operation with a minimal impact on timing.
 
-****
+The main mwcomms DebugFS code is located at:
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mwcomms-debugfs.c
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mwcomms-debugfs.h
+
+This interface is disabled by default, it can be enabled by uncommenting
+the MW_DEBUGFS line in the Makefile:
+* magicwand-commsbackbone/protvm/kernel/mwcomms/Makefile
+
+To use the Request Tracing feature the INS needs to be rebuilt with the MW_DEBUGFS
+flag uncommented also:
+* magicwand-commsbackbone/ins/ins-rump/apps/ins-app/Makefile
+
+The mwcomms DebugFS directory is located at:
+* /sys/kernel/debug/mwcomms
+
+and contains four files:
+
+* message_counts -> (read only) returns a formatted table of all MtRequest and response times as they are read/written from/to the ring buffer
+
+* reset -> (write only) when any value is written to this file, all the counts displayed in message_counts are reset
+
+* tracing_on -> (read/write) if the value is nonzero, tracing is enabled, and the counts per message type should increase as the are written to/read from the ring buffer
+
+* request_trace -> (read only) returns a buffer of transactions processed by the mwcomms driver
+
+A python utility is available to read the request_trace data, filter it and display it in a more readable format:
+* magicwand-commsbackbone/protvm/kernel/mwcomms/mw_request_trace.py
+
+***
 
 ### Shim Logging <a name="Section_07"></a>
+The Shim is an libraray loaded by the APT using the LD_PRELOAD directive and allows the mwcomms driver to
+intercept ATP system calls associated with socket communication and forward those to the mwcomms driver for
+processing. This subsystem has a debug logging facility that can be enabled through the Makefile and then
+data from the Shim and stores it in a logfile.
 
-****
+To enable this feature uncomment the line containing the ENABLE_LOGGING define and rebuild the Shim:
+* magicwand-commsbackbone/protvm/user/wrapper/Makefile
+
+The Shim prints messages to the log using the log_write() function call, the verbosity and types of
+messages printed can be controlled using the log_level parameter.
+
+By default logfiles are created in the "/tmp/ins_log" directory, specified in the hearder file:
+* magicwand-commsbackbone/common/user_common.h
+
+***
 
 ### Using GDB with the INS <a name="Section_08"></a>
+GDB can be used to attach to the INS and used to debug problems. The easiest way to start the
+INS with the proper parameters for using GDB is by using the "run.sh" script and supply the
+"-g" paramter:
+* magicwand-commsbackbone/ins/ins-rump/apps/ins-app/run.sh
 
-****
+This paramter will also cause the run.sh script to print out the proper GDB command line required
+to connect to the INS instance.
+
+***
 
 ### Makefile Features <a name="Section_09"></a>
+Many debug debug features for the Shim, mwcomms driver and INS can be enabled
+by uncommenting defines in the various makefiles. In many cases these debug
+features cause messages to be printed and can severly effect the timing and performance
+of the mwcomms/ins subsystem.
+* magicwand-commsbackbone/ins/ins-rump/apps/ins-app/Makefile.template
+* magicwand-commsbackbone/ins/ins-rump/apps/npfctl_test/Makefile.template
+* magicwand-commsbackbone/ins/ins-rump/apps/lib/npfctl/Makefile.template
+* magicwand-commsbackbone/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libaccf_dataready/Makefile.template
+* magicwand-commsbackbone/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent/Makefile.template
+* magicwand-commsbackbone/protvm/kernel/mwcomms/Makefile.template
+* magicwand-commsbackbone/protvm/user/wrapper/Makefile.template
 
-****
+***
 
