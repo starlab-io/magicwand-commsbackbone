@@ -2,11 +2,11 @@
 Summary of Work
 ===============
 
-Star Lab successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiple front end unikernels to handle large request load.
+During the project, Star Lab researchers successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications. This includes using the NetFlow API to monitor application network traffic and running multiple front end unikernels to handle large request load.
 
-This includes the following accomplishments:
+Specific accomplishments include:
 
-1.  Application agnostic shared library interface to the isolated network stacktested with Apache2 and NGINX web servers.
+1.  Application agnostic shared library interface to the isolated network stack tested with Apache2 and NGINX web servers;
 
 2. Loaded MwComms linux kernel driver in a Xen VM and communicated with multiple front end Xen VMs running fully tunable Unikernels.
 
