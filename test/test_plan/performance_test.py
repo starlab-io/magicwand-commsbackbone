@@ -8,6 +8,7 @@ import argparse
 from distutils import spawn
 
 
+MAX_CONCURRENCY = 500
 
 def do_ab( n, c, hostname, fout ):
 
@@ -74,7 +75,7 @@ def plot_line_graph():
     num = 20000
     do_ab( num, 1, hostname, fout )
     
-    for i in range( 10, 910, 10 ):
+    for i in range( 10, MAX_CONCURRENCY, 10 ):
         do_ab( num, i, hostname, fout )
 
     call = [ "gnuplot", "line.gnu" ]
