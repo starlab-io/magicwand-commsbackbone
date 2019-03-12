@@ -23,7 +23,7 @@ set yrange [0:RUMP_max_y]
 
 
 plot 'data/line.dat' using 1:2 with lines lw 3 linecolor rgb "blue" title "ms/req",          \
-     'data/line.dat' using 1:3 with lines lw 3 linecolor rgb "red" title "Failures",  \
+     'data/line.dat' using 1:4 with lines lw 3 linecolor rgb "red" title "Failures",  \
 #     'rump.dat' using 1:4 with lines lw 3 linecolor rgb "red" title "50%",              \
 #     'rump.dat' using 1:5 with lines lw 3 linecolor rgb "green" title "80%",            \
 #     'rump.dat' using 1:6 with lines lw 3 linecolor rgb "purple" title "longest",
