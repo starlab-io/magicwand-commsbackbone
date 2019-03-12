@@ -84,6 +84,14 @@ The frontend component is a python script that watches the Xenstore for availabl
 //TODO what all does the netflow interface do?
 
 
+Integration
+===========
+
+The MwComms isolated network channel was tested to work with the TwoSix container running apache, as well as 
+
+* ran on twosix apache container
+* sucessfully ran some attacks on the INS serving 
+
 Results
 =======
 
