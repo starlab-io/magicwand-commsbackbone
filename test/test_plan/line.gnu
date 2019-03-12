@@ -6,13 +6,13 @@ max(a,b) = (a > b) ? a : b
 
 set terminal png enhanced font "arial,10" fontscale 1.0 size 900, 600 
 set output 'graphs/line.png'
-set title "TCP/IP comparison: raw VS. INS" font ",10"
+set title "Milliseconds per request" font ",10"
 set xlabel 'Concurrency'
 set ylabel 'Request Time [ms]'
 
 set key box left
 
-stats 'data/line.dat' using 1:2 prefix "RUMP"
+stats 'data/line.dat' using 1:3 prefix "RUMP"
 
 set xrange [0:RUMP_max_x]
 set yrange [0:RUMP_max_y]
@@ -22,7 +22,7 @@ set yrange [0:RUMP_max_y]
 #set label 4 gprintf("MAX = %g msec", RAW_max_y )  at 800000, 60, 0
 
 
-plot 'data/line.dat' using 1:2 with lines lw 3 linecolor rgb "blue" title "ms/req",          \
+plot 'data/line.dat' using 1:3 with lines lw 3 linecolor rgb "blue" title "ms/req",          \
      'data/line.dat' using 1:4 with lines lw 3 linecolor rgb "red" title "Failures",  \
 #     'rump.dat' using 1:4 with lines lw 3 linecolor rgb "red" title "50%",              \
 #     'rump.dat' using 1:5 with lines lw 3 linecolor rgb "green" title "80%",            \
