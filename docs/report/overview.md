@@ -16,7 +16,32 @@ Overview
 Executive Summary
 -----------------
 
+## Summary of Work
 
+Star Lab researchers successfully implemented and tested the full application agnostic isolated network stack (INS) with multiple applications including Apache HTTP Server Nginx, iperf, netcat and other various Linux network applications.
+
+Specific accomplishments made by Star Lab include:
+
+* Star Lab created a custom message protocol allowing one Xen domain running Linux to forward system calls to a Rumprun unikernel running as a Xen domain on the same physical system utilizing built in Xen communication capabilities.
+
+* Star Lab wrote a Linux kernel module giving a protected virtual machine access to low level shared memory made available by Xen.
+
+* Star Lab adapted the MwComms network isolation channel to work as a one to many mapping of one protected process to many isolated network stacks.  This required duplicating socket state across an arbitrary number of isolated network stacks.  At the writing of this report, Star Lab successfully tested the system with 10,350 simultaneous connections distributed among 23 INS instances.
+
+* Star Lab instrumented the Netflow interface providing detailed telemetry data and deep insights into the network stack of the protected process.
+
+* Star Lab implemented a front end virtual machine orchestration application and load balancer for creating INS instances and dynamically routing network traffic to each INS instances with the fewest connections. 
+
+* Star Lab created a custom virtual file system to reduce ring buffer congestion and improve performance by eliminating the need for poll() function calls to send a request over the ring buffer.
+
+* Modified Rumprun unikernel to allow over 4000 connections to one INS instance.
+
+* Limited INS to roughly 10ms per transaction overhead in data throughput tests.
+
+
+## Integration
+
+The MwComms isolated network channel was tested to work with the TwoSix container running apache, as well as natively on Star Lab machines outside of a container.  A slowloris attack was run against the apache server running as a protected application using the INS, and the attack was observed to have worked.  Additionally, the Netflow protocol was added to the PVM kernel module and python library facilitating integration into the detection and mitigation engine.
 
 
 Introduction
@@ -76,31 +101,32 @@ The Rumprun unikernel is a minimally modified NetBSD rump kernel that is able to
 
 ## Frontend
 
-The frontend component is a python script that watches the Xenstore for available INS's and what ports they have open, and forwards traffic via IP tables.  The frontend scrip is also responsible for spinning up INS's and assigning them 
-
-//TODO what do they assign them?
+The frontend script runs on domain 0 and spins up INS's and monitors the load on each one based on configurable criteria, spinning up new INS's as needed.  The frontend script also listens on port 80 and forwards traffic to INS's with available bandwidth to handle new requests.  The forwarding is done using iptables so it is fast, and reliable.
 
 ## Netflow Interface
-//TODO what all does the netflow interface do?
 
+One of the goals of the INS is to provide telemetry data and a method to change network stack behavior in real time, this is accomplished through the Netflow interface.  The Netflow interface is a listening socket in the PVM kernel module that can be interacted with to enable mitigations and receive telemetry data regarding the network stack.  The interface to the Netflow protocol is made available though a python library and as well as a python command line tool that acts as a user interface for manually interacting with the Netflow interface.
 
-Integration
-===========
-
-The MwComms isolated network channel was tested to work with the TwoSix container running apache, as well as 
-
-* ran on twosix apache container
-* sucessfully ran some attacks on the INS serving 
-
-Results
-=======
 
 
 
 Performance
 ===========
 
+Performance statistics were gathered from a Dell Optiplex 9010 with an 4 core Intel(R) Core(TM) i7-3770 CPU @ 3.40GHz 32Gb DDR3 memory and a Seagate hard drive.  The performance benchmarking tool used was ab, Apache's HTTP benchmarking tool.  Apache's ab tool was chosen because it is simple and can be run from the command line allowing easy integration into testing scripts. Additionally the page being served in the performance test is a simple static html page consisting of only a small amount of text, so more robust testing tools seemed unnecessary.
 
+To measure performance under load, the research team at Star Lab ran ab against apache with and without the INS using increasing levels of concurrency from 1 to 500.  Concurrency is here defined as the number of connections ab has open to the target system all performing http requests.  The average at each concurrency level was calculated from a sample size of 20,000 requests.  The following table shows these results by representing average time per request in milliseconds on the vertical axis and concurrency level on the horizontal axis. Based on the best fit lines for this graph, it is estimated that by running an application using the MwComms isolated network channel, an overhead of two milliseconds with 0.27 milliseconds added per request made concurrently that is compared to apache running without the MwComms channel incurring an overhead of one millisecond with 0.19 milliseconds of overhead added per concurrent request.
+
+![Performance vs Concurrency](raw_vs_rump_3_13_2019.png)
+
+The table below displays system overhead on a per request basis.  This table was taken directly from the output of the ab tool with a concurrency level of one and a sample size of ten thousand.  The percentage column indicates the percentage of requests that arrived within the amount of time indicated in the second and third columns.  For example 95 percent of all requests were received within two milliseconds when apache was being run with the INS, and one millisecond when being run without.  The bottom row's first column value 100% indicates the time taken for the longest request received during the test.  For this run, that was thirteen milliseconds for apache using the ins and three milliseconds for apache without the ins.
+
+| Percentage | Time (ms) INS      | Time (ms) non INS       |
+| ---------- | ------------------ | ----------------------- |
+| 95%        | 2                  | 1                       |
+| 98%        | 3                  | 1                       |
+| 99%        | 5                  | 1                       |
+| 100%       | 13                 | 3                       |
 
 References
 ==========

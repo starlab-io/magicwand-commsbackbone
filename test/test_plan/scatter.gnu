@@ -15,7 +15,7 @@ stats 'data/testing.tsv' using 2:5 prefix "STATS"
 #set label gprintf("AV = %1.2f msec", (STATS_mean/1000000.0)) at graph 5,300
 #set label gprintf("STD DEV = %1.2f msec", (STATS_stddev/1000000.0)) at graph 5,275
 
-set yrange [0:300]
+set yrange [0:STATS_max_y]
 set xrange [STATS_min_x:STATS_max_x]
 
 set grid y

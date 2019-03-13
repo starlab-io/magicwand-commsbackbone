@@ -19,8 +19,8 @@ set xrange [0:RUMP_max_x]
 set yrange [0:RUMP_max_y]
 
 
-set label 3 sprintf("Raw: \ny = %g x + %g", RAW_slope , RAW_intercept)  at 10.0, 1400.0, 0
-set label 4 sprintf("Rump: \ny = %g x + %g", RUMP_slope , RUMP_intercept)  at 10.0, 1200.0, 0
+set label 3 sprintf("Raw: \ny = %g x + %g", RAW_slope , RAW_intercept)  at 10.0, RUMP_max_y-35.0, 0
+set label 4 sprintf("Rump: \ny = %g x + %g", RUMP_slope , RUMP_intercept)  at 10.0, RUMP_max_y-20, 0
 #set label 3 gprintf("MIN = %g msec", RAW_min_y )  at 50000, 3.0000, 0
 #set label 4 gprintf("MAX = %g msec", RAW_max_y )  at 800000, 60, 0
 
