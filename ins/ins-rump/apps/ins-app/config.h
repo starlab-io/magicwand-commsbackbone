@@ -19,7 +19,7 @@
 // Must be >= 2 to function.  Values < 25 result in significant
 // performance degradation.
 
-#define MAX_THREAD_COUNT 500
+#define MAX_THREAD_COUNT 50
 
 //
 // Number of buffer items. This is the number of requests (from the
