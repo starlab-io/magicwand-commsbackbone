@@ -3,31 +3,25 @@
 # Unauthorized copying of this file, via any medium is strictly prohibited.
 
 TARGETS := \
-    report.pdf \
-    report.docx
+    documentation.pdf \
+	executive_summary.pdf
 
 OBJS = report.yaml \
-    report-pdf.md \
-    report-changes.md \
-    overview.md \
-    summary_of_work.md \
-    architecture.md \
     design.md \
-    operation.md \
-    artifacts.md \
-    development_environment.md \
-    future_enhancements.md
+    development_environment.md
 
 .PHONY: all
 .DEFAULT_GOAL := all
 all:$(TARGETS)
 
-report.pdf: $(OBJS)
+documentation.pdf: $(OBJS)
 	pandoc --latex-engine=xelatex -S -o $@ $^
+	mv $@ ./artifacts
 
-report.docx: $(OBJS)
-	pandoc -S -o $@ $^
+executive_summary.pdf: executive_summary.md
+	pandoc --latex-engine=xelatex -S -o $@ $^
+	mv $@ ./artifacts
 
 .PHONY: clean
 clean:
-	@-rm -f $(TARGETS)
+	rm -f ./artifacts/documentation.pdf ./artifacts/executive_summary.pdf
