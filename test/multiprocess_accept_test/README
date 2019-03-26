@@ -1,1 +1,0 @@
-This test is meant to be run with the LD_PRELOAD flag set to test the functionality of SOCK_CLOEXEC while using the wrapper
