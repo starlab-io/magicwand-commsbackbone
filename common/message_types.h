@@ -26,6 +26,13 @@
 #include <mw_netflow_iface.h> // common definitions for socket features
 
 
+// Per http://elixir.free-electrons.com/linux/latest/source/include/linux/inet.h
+// #define INET_ADDRSTRLEN      (16)
+// #define INET6_ADDRSTRLEN     (48)
+
+#define MT_INET_ADDRSTRLEN 16
+
+
 #define _common_config_defined
 #   include "common_config.h"
 #undef  _common_config_defined
@@ -120,6 +127,7 @@ typedef enum
     MtRequestSocketGetPeer  = MT_REQUEST( 0x31 | _MT_TYPE_MASK_CLOSE_WAITS ),
     MtRequestSocketAttrib   = MT_REQUEST( 0x32 ),
     MtRequestPollsetQuery   = MT_REQUEST( 0x33 ),
+    MtRequestAddrBlock      = MT_REQUEST( 0x34 ),
 } mt_request_type_t;
 
 
@@ -143,6 +151,7 @@ typedef enum
     MtResponseSocketGetPeer     = MT_RESPONSE( MtRequestSocketGetPeer  ),
     MtResponseSocketAttrib      = MT_RESPONSE( MtRequestSocketAttrib   ),
     MtResponsePollsetQuery      = MT_RESPONSE( MtRequestPollsetQuery   ),
+    MtResponseAddrBlock         = MT_RESPONSE( MtRequestAddrBlock      ),
 } mt_response_type_t;
 
 typedef uint32_t mt_addrlen_t;
@@ -315,6 +324,9 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_base
 
     // Flags pertaining to response or remote socket state.
     mt_flags_t flags;
+
+    // Time spent by INS processing request in nanoseconds
+    unsigned long ts_ins;
 } mt_response_base_t;
 
 #define MT_REQUEST_BASE_SIZE  sizeof(mt_request_base_t)
@@ -597,6 +609,23 @@ typedef struct MT_STRUCT_ATTRIBS _mt_response_socket_attrib
 #define MT_RESPONSE_SOCKET_ATTRIB_SIZE sizeof(mt_response_socket_attrib_t)
 
 
+typedef struct MT_STRUCT_ATTRIBS _mt_request_addr_block
+{
+    mt_request_base_t      base;
+    uint32_t               block;  //bool true block false unblock
+    char                   addr[MT_INET_ADDRSTRLEN];
+} mt_request_addr_block_t;
+
+#define MT_REQUEST_ADDR_BLOCK_SIZE sizeof( mt_request_addr_block_t )
+
+typedef struct MT_STRUCT_ATTRIBS _mt_response_addr_block
+{
+    mt_response_base_t base;
+    
+} mt_response_addr_block_t;
+
+#define MT_RESPONSE_ADDR_BLOCK_SIZE sizeof( mt_response_addr_block_t )
+
 //
 // Poll sets: only these (Linux-based) values will be in shared memory
 //
@@ -666,6 +695,8 @@ typedef union _mt_request_generic
     mt_request_socket_getname_t   socket_getname;
     mt_request_socket_getpeer_t   socket_getpeer;
 
+    mt_request_addr_block_t       addr_block;
+
     mt_request_socket_attrib_t    socket_attrib;
     mt_request_pollset_query_t    pollset_query;
 } mt_request_generic_t;
@@ -693,6 +724,8 @@ typedef union _mt_response_generic
     mt_response_socket_recvfrom_t   socket_recvfrom;
     mt_response_socket_getname_t    socket_getname;
     mt_response_socket_getpeer_t    socket_getpeer;
+
+    mt_response_addr_block_t        addr_block;
 
     mt_response_socket_attrib_t     socket_attrib;
     mt_response_pollset_query_t     pollset_query;

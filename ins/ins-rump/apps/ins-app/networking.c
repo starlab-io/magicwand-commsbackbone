@@ -51,6 +51,8 @@
 #include "pollset.h"
 #include <mw_netflow_iface.h>
 
+#include "npfctl.h"
+
 #define XE_NET_NETWORK_PARAM_WIDTH 30
 
 extern xenevent_globals_t g_state;
@@ -327,6 +329,8 @@ xe_net_sock_attrib( IN  mt_request_socket_attrib_t  * Request,
     int level = SOL_SOCKET; // good for most cases
     int name  = 0;
     int err   = 0;
+    
+
 
     void* optval = NULL;
     // We have to manage the input/output buffer. If input, point to
@@ -471,6 +475,50 @@ ErrorExit:
 
     return 0;
 }
+
+
+int xe_net_addr_block( IN  mt_request_addr_block_t  * Request,
+                       OUT mt_response_addr_block_t * Response,
+                       IN  thread_item_t            * WorkerThread )
+{
+    int rc = 0;
+    char *block_cmd[5] = { "npfctl", "table", "blacklist", "add", NULL };
+    char *unblock_cmd[5] = { "npfctl", "table", "blacklist", "rem", NULL };
+    char buf[16] = { 0 };
+
+    MYASSERT( NULL != Request );
+    MYASSERT( NULL != Response );
+    MYASSERT( NULL != WorkerThread );
+    
+    strncpy( buf, Request->addr, INET_ADDRSTRLEN );
+    
+    switch ( Request->block )
+    {
+    case 1:
+        block_cmd[4] = buf;
+        log_write( LOG_DEBUG, "Blocking %s\n", buf );
+        rc = do_npfctl_command( 5, block_cmd );
+        break;
+    case 0:
+        unblock_cmd[4] = buf;
+        log_write(LOG_DEBUG,  "Unblocking %s\n", buf );
+        rc = do_npfctl_command( 5, unblock_cmd );
+        break;
+    default:
+        rc = -1;
+        log_write( LOG_ERROR, "MtRequestAddrBlock invalid block value\n" );
+        break;
+    }
+
+
+    xe_net_set_base_response( (mt_request_generic_t *) Request,
+                              MT_RESPONSE_ADDR_BLOCK_SIZE,
+                              (mt_response_generic_t *) Response );
+
+    Response->base.status = rc;
+    return rc;
+}
+
 
 
 int

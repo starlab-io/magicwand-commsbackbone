@@ -1,19 +1,24 @@
 #include "mwcomms-common.h"
 #include "mwcomms-debugfs.h"
-
 #include <linux/debugfs.h>
-
 
 #define MW_DEBUGFS_BUFF_SIZE 2048
 #define MW_DEBUGFS_LINE_SIZE 256
+#define MW_DEBUGFS_RT_LINE_SIZE 256
+#define MW_DEBUGFS_RT_BUFF_SIZE (MW_DEBUGFS_RT_LINE_SIZE * MW_DEBUGFS_TRACE_BUF_MAX)
 
 // This directory entry will point to `/sys/kernel/debug/mwcomms`.
 static struct dentry *mw_debugfs_dir = 0;
+
 static u64 mw_debugfs_tracing_on = 0;
 static char mw_debugfs_buffer[ MW_DEBUGFS_BUFF_SIZE ] = { 0 };
 
 mt_dbg_count_t g_mw_debugfs_req_count = { 0 };
 mt_dbg_count_t g_mw_debugfs_resp_count = { 0 };
+
+static char mw_debugfs_rt_buffer[ MW_DEBUGFS_RT_BUFF_SIZE ] = { 0 };
+atomic64_t g_mw_trace_cur = ATOMIC64_INIT( 0 );
+mwsocket_trace_buffer_t g_mw_trace_buf[MW_DEBUGFS_TRACE_BUF_MAX] = {0};
 
 
 static void
@@ -195,6 +200,74 @@ static const struct file_operations mw_debugfs_reset_fops =
     .write = mw_debugfs_reset
 };
 
+static void
+mw_debugfs_rt_buff_append( const char* fmt, ... )
+{
+    char line[ MW_DEBUGFS_RT_LINE_SIZE ] = { 0 };
+    va_list args = { 0 };
+    int i, remain = 0;
+
+    va_start( args, fmt );
+    i = vsnprintf( line, MW_DEBUGFS_RT_LINE_SIZE - 1, fmt, args );
+    va_end( args );
+
+    remain = MW_DEBUGFS_RT_BUFF_SIZE - strnlen( mw_debugfs_rt_buffer, MW_DEBUGFS_RT_BUFF_SIZE ) - 1;
+
+    (void) strncat( mw_debugfs_rt_buffer, line,  remain );
+}
+
+static void
+mw_debugfs_make_rt_buffer( void )
+{
+    int cnt = 0;
+    int cur = (atomic64_read(&g_mw_trace_cur) % MW_DEBUGFS_TRACE_BUF_MAX);
+    mwsocket_trace_buffer_t *tb;
+
+    memset( mw_debugfs_rt_buffer, 0, MW_DEBUGFS_RT_BUFF_SIZE );
+
+    // Most recent trace event first
+    for (cnt = 0; cnt < MW_DEBUGFS_TRACE_BUF_MAX; cnt++) {
+
+        tb = &g_mw_trace_buf[cur];
+
+        mw_debugfs_rt_buff_append( "%lu:%u:%u:%u:%lu:%lu:%lu:%lu:%lu:%lu:%lu\n",
+            tb->index,
+            tb->pid,
+            tb->fops,
+            tb->type,
+            tb->t_mw1,
+            tb->t_mw2,
+            tb->t_mw3,
+            tb->t_mw4,
+            tb->t_mw5,
+            tb->t_mw6,
+            tb->t_ins);
+
+        if (cur == 0) {
+            cur = MW_DEBUGFS_TRACE_BUF_MAX - 1;
+        } else {
+            cur--;
+        }
+    }
+}
+
+static ssize_t mw_debugfs_rt_reader( struct file *fp, char __user *user_buffer,
+                                     size_t count, loff_t *position )
+{
+    mw_debugfs_make_rt_buffer();
+
+    return simple_read_from_buffer( user_buffer,
+                                    count,
+                                    position,
+                                    &mw_debugfs_rt_buffer,
+                                    strnlen( mw_debugfs_rt_buffer, MW_DEBUGFS_RT_BUFF_SIZE ));
+}
+
+static const struct file_operations mw_debugfs_rt_fops =
+{
+    .read = mw_debugfs_rt_reader,
+};
+
 void mw_debugfs_init()
 {
     
@@ -210,45 +283,56 @@ void mw_debugfs_init()
         goto ErrorExit;
     }
 
-    mw_tmp_dir = debugfs_create_file("message_counts",
+    mw_tmp_dir = debugfs_create_file( "message_counts",
+                                      0644,
+                                      mw_debugfs_dir,
+                                      &filevalue,
+                                      &mw_debugfs_message_counts_fops);
+    if( ! mw_tmp_dir )
+    {
+        printk( "Could not create message_counts in mwcomms debugfs directory\n" );
+        goto ErrorExit;
+    }
+
+    mw_tmp_dir = debugfs_create_file( "reset",
+                                      0244,
+                                      mw_debugfs_dir,
+                                      &filevalue,
+                                      &mw_debugfs_reset_fops);
+    if( ! mw_tmp_dir )
+    {
+        printk( "Could not create reset in mwcomms debugfs directory\n" );
+        goto ErrorExit;
+    }
+
+
+    mw_tmp_dir = debugfs_create_u64( "tracing_on",
                                      0644,
                                      mw_debugfs_dir,
-                                     &filevalue,
-                                     &mw_debugfs_message_counts_fops);
+                                     &mw_debugfs_tracing_on );
     if( ! mw_tmp_dir )
     {
-        printk("Could not create text file\n");
-        goto ErrorExit;
-    }
-
-    mw_tmp_dir = debugfs_create_file("reset",
-                                     0244,
-                                     mw_debugfs_dir,
-                                     &filevalue,
-                                     &mw_debugfs_reset_fops);
-    if( ! mw_tmp_dir )
-    {
-        printk("Could not create text file\n");
-        goto ErrorExit;
-    }
-
-
-    mw_tmp_dir = debugfs_create_u64("tracing_on",
-                                    0644,
-                                    mw_debugfs_dir,
-                                    &mw_debugfs_tracing_on );
-    if( ! mw_tmp_dir )
-    {
-        printk( "Could not create tracing_on debugfs directory\n" );
+        printk( "Could not create tracing_on in mwcomms debugfs directory\n" );
         goto ErrorExit;
     }
     
     pr_info( "debugfs created at /sys/kernel/debug/%s\n", DEVICE_NAME );
 
+    mw_tmp_dir = debugfs_create_file( "request_trace",
+                                      0444,
+                                      mw_debugfs_dir,
+                                      &filevalue,
+                                      &mw_debugfs_rt_fops);
+
+    if( ! mw_tmp_dir )
+    {
+        printk( "Could not create request_trace in mwcomms debugfs directory\n" );
+        goto ErrorExit;
+    }
+
 ErrorExit:
     return;
 }
-
 
 
 void mw_debugfs_request_count( mt_request_generic_t* Request )

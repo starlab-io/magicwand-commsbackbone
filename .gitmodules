@@ -1,0 +1,3 @@
+[submodule "ins/rumpctrl"]
+	path = ins/rumpctrl
+	url = git@github.com:rumpkernel/rumpctrl.git

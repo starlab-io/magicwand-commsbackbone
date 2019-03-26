@@ -112,6 +112,8 @@ INFO_FMT_SIZE = struct.calcsize(INFO_FMT)
 # Feature request - mw_feature_request_t (46 bytes)
 FEATURE_REQ_FMT = BASE_FMT + "H" + "H" + "Q" + "Q" + "Q" + "12s"
 
+FEATURE_REQ_FMT_IP = BASE_FMT + "H" + "H" + "Q" + "Q" + "I" + "16s"
+
 # Feature response - mw_feature_response_t (20 bytes)
 FEATURE_RES_FMT = "!i16s"
 FEATURE_RES_FMT_SIZE = struct.calcsize(FEATURE_RES_FMT)
@@ -159,6 +161,8 @@ FEATURES = dict(
 
     # Change of delay ACK ticks: arg is signed tick differential
     MtSockAttribSystemDelackTicks   = (0x21, int),  # arg: tick count (uint32_t)
+
+    MtSockAttribAddrBlock           = (0x1103, int),
 )
 
 ##
@@ -409,7 +413,7 @@ def process_response(sock, ident):
     return msg
 
 
-def send_feature_request(conn, sockfd, name, value, flag):
+def send_feature_request(conn, sockfd, name, value, flag, addr):
     ''' Send netflow request '''
     ident = get_next_id()
 
@@ -421,8 +425,20 @@ def send_feature_request(conn, sockfd, name, value, flag):
         'value' : value
         }
 
-    req = struct.pack(FEATURE_REQ_FMT, SIG_FEA_REQ, ident,
-        flag, name, value[0], value[1], sockfd, "")
+    
+    if name == FEATURES['MtSockAttribAddrBlock'][0]:
+        try:
+            socket.inet_aton( addr );
+        except:
+            print "Invalid ip address format, expected: X.X.X.X"
+            return
+
+        req = struct.pack(FEATURE_REQ_FMT_IP, SIG_FEA_REQ, ident,
+                          flag, name, value[0], value[1], socket.AF_INET, addr)
+        
+    else:    
+        req = struct.pack(FEATURE_REQ_FMT, SIG_FEA_REQ, ident,
+                          flag, name, value[0], value[1], sockfd, "")
 
     conn.sendall(req)
 

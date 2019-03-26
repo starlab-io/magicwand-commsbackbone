@@ -81,7 +81,10 @@ int
 xe_net_get_name( IN mt_request_socket_getname_t  * Request,
                  IN mt_response_socket_getname_t * Response,
                  IN thread_item_t                * WorkerThread );
-
+int
+xe_net_addr_block( IN mt_request_addr_block_t    * Request,
+                   OUT mt_response_addr_block_t  * Response,
+                   IN thread_item_t              * WorkerThread );
 
 int
 xe_net_init( void );

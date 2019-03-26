@@ -294,6 +294,7 @@ ErrorExit:
  * @brief Processes feature request, either on PVM or via ring buffer.
  */
 static int
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
                              IN mwcomms_netflow_channel_t * Channel,
                              OUT mw_feature_response_t * Response )
@@ -352,6 +353,10 @@ mw_netflow_process_feat_req( IN  mw_feature_request_t  * Request,
     case MtSockAttribGlobalCongctl:
     case MtSockAttribGlobalDelackTicks:
         send = true;
+        break;
+    case MtSockAttribAddrBlock:
+        Request->val.v64 = __be64_to_cpu( Request->val.v64 );
+        rc = mw_xen_for_each_live_ins( mwsocket_block_ip_mitigation, Request );
         break;
     default:
         MYASSERT( !"Unsupported name given" );

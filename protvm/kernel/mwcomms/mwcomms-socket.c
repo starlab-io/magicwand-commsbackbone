@@ -438,8 +438,20 @@ typedef struct _mwsocket_instance
     // Used to disable preemption during socket replication
     struct mutex          sock_rep_lock;
 
-} mwsocket_instance_t;
+#ifdef MW_DEBUGFS
+    // Need to store these values before a request has been created
 
+    // file operation entry point (read(1), write(2), ioctl(3), poll(4), release(5) or none(0))
+    int fops;
+
+    // nanosecond timestamp at fops entry (0 if internal cmd)
+    unsigned long t_mw1;
+
+    // count of internal mwcomms<-->ins request/response transactions per fops entry
+    int t_cnt;
+#endif
+
+} mwsocket_instance_t;
 
 /**
  * @brief For tracking state on requests whose responses have not yet
@@ -487,6 +499,11 @@ typedef struct _mwsocket_active_request
     struct list_head list_inbound;
 
     struct list_head list_all;
+
+#ifdef MW_DEBUGFS
+    // Pointer to request trace buffer entry
+    mwsocket_trace_buffer_t *tb;
+#endif
 
 } mwsocket_active_request_t;
 
@@ -566,7 +583,6 @@ pfn_dynamic_dname_t(struct dentry *, char *, int, const char *, ...);
 
 static pfn_dynamic_dname_t * gfn_dynamic_dname = NULL;
 
-
 /******************************************************************************
  * Forward declarations
  ******************************************************************************/
@@ -596,6 +612,9 @@ mwsocket_new_ins( domid_t Domid );
 
 static int
 mwsocket_propogate_listeners( struct work_struct * Work );
+
+static int
+mwsocket_create_sockinst( mwsocket_instance_t **, int, bool, bool );
 
 static mw_xen_per_ins_cb_t mwsocket_ins_sock_replicator;
 
@@ -918,8 +937,48 @@ ErrorExit:
 }
 
 
+/**
+ * @brief Supports mitigation by forwarding block ip data to all INS
+ *        instances
+ */
+int
+MWSOCKET_DEBUG_OPTIMIZE_OFF
+mwsocket_block_ip_mitigation( IN domid_t Domid, IN void * args  )
+{
+    
+    int rc = 0;
+    mt_request_addr_block_t request = { 0 };
+    mw_feature_request_t * feat = args;
+    mwsocket_instance_t * newsock = NULL;
+    
+    request.base.sig     = MT_SIGNATURE_REQUEST;
+    request.base.type    = MtRequestAddrBlock;
+    request.base.size    = MT_REQUEST_ADDR_BLOCK_SIZE;
+    request.base.sockfd  = MT_INVALID_SOCKET_FD;
+        
+    request.block = feat->val.v32;
+    strncpy( request.addr, feat->ident.remote.a, MT_INET_ADDRSTRLEN );
 
-
+    rc = mwsocket_create_sockinst( &newsock, 0, false, false );
+    if( rc )
+    {
+        goto ErrorExit;
+    }
+    
+    rc = mwsocket_send_message( newsock,
+                                (mt_request_generic_t *)&request,
+                                true );
+    if( rc )
+    {
+        pr_err( "Could not forward block request to domid: %d\n",
+                  Domid );
+        goto ErrorExit;
+    }
+    
+ErrorExit:
+ 
+    return rc;
+}
 
 // @brief Reference the socket instance
 static void
@@ -1303,6 +1362,10 @@ mwsocket_destroy_active_request( mwsocket_active_request_t * Request )
         return;
     }
 
+#ifdef MW_DEBUGFS
+    Request->tb->t_mw6 = ktime_get_ns();
+#endif
+
     pr_verbose( "Destroyed active request %p id=%lx\n",
                 Request, (unsigned long) Request->id );
 
@@ -1381,6 +1444,19 @@ mwsocket_create_active_request( IN mwsocket_instance_t * SockInst,
                 actreq, (unsigned long)actreq->id );
 
     *ActReq = actreq;
+
+#ifdef MW_DEBUGFS
+    {
+        unsigned long tbi = atomic64_inc_return(&g_mw_trace_cur) % MW_DEBUGFS_TRACE_BUF_MAX;
+        actreq->tb = &g_mw_trace_buf[tbi];
+        memset(actreq->tb, 0, sizeof(mwsocket_trace_buffer_t));
+        actreq->tb->pid = current->pid;
+        actreq->tb->index = tbi;
+        actreq->tb->fops = SockInst->fops;
+        actreq->tb->t_mw1 = SockInst->t_mw1;
+        actreq->tb->t_mw2 = ktime_get_ns();
+    }
+#endif
 
 ErrorExit:
     return rc;
@@ -1604,6 +1680,7 @@ mwsocket_postproc_emit_netflow( mwsocket_active_request_t * ActiveRequest,
     case MtResponseSocketGetPeer:
     case MtResponseSocketAttrib:
     case MtResponsePollsetQuery:
+    case MtResponseAddrBlock:
         // Ignored cases
         drop = true;
         break;
@@ -1653,6 +1730,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
 
     int status = Response->base.status;
 
+#ifdef MW_DEBUGFS
+    ActiveRequest->sockinst->t_cnt++;
+    ActiveRequest->tb->t_cnt = ActiveRequest->sockinst->t_cnt;
+#endif
+
     if( MT_CLOSE_WAITS( Response ) )
     {
         if( DEBUG_SHOW_TYPE( Response->base.type ) )
@@ -1696,6 +1778,11 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
             }
             pr_debug( "Final batch send: total sent is %d bytes\n",
                       Response->socket_send.count );
+
+#ifdef MW_DEBUGFS
+            ActiveRequest->sockinst->t_cnt = 0;
+#endif
+
         }
         else if( Response->base.flags & _MT_FLAGS_BATCH_SEND )
         {
@@ -1709,6 +1796,9 @@ mwsocket_postproc_no_context( mwsocket_active_request_t * ActiveRequest,
                       (int)Response->socket_send.count );
         }
     }
+#ifdef MW_DEBUGFS
+    else { ActiveRequest->sockinst->t_cnt = 0; }
+#endif
     
     // In case the request failed and the requestor will not process
     // the response, we have to inform the user of the error in some
@@ -2103,6 +2193,7 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
     // Either we don't have a backing remote socket, or else the remote FD is valid
     MYASSERT( MtRequestSocketCreate == base->type ||
               MtRequestPollsetQuery == base->type ||
+              MtRequestAddrBlock    == base->type ||
               MW_SOCKET_IS_FD( base->sockfd ) );
 
     if( !MT_IS_REQUEST( &ActiveRequest->rr.request ) )
@@ -2120,6 +2211,10 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
         mwsocket_set_pollable( ActiveRequest->sockinst, false );
         goto ErrorExit;
     }
+
+#ifdef MW_DEBUGFS
+    ActiveRequest->tb->t_mw3 = ktime_get_ns();
+#endif
 
     // Given the client ID, get a request slot: the pointer to the
     // request buffer and an opaque handle
@@ -2161,14 +2256,19 @@ mwsocket_send_request( IN mwsocket_active_request_t * ActiveRequest,
                   ActiveRequest->rr.request.base.type );
     }
 
-
     memcpy( (void *) req,
             &ActiveRequest->rr.request,
             ActiveRequest->rr.request.base.size );
     send = true;
 
 ErrorExit:
+
     rc = mw_xen_release_request( h, send );
+
+#ifdef MW_DEBUGFS
+    ActiveRequest->tb->t_mw4 = ktime_get_ns();
+    ActiveRequest->tb->type = ActiveRequest->rr.request.base.type & 0xff;
+#endif
 
     return rc;
 }
@@ -2336,24 +2436,32 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
 
                 if( copy_response )
                 {
-                    mt_response_generic_t response = {0};
+                    mt_response_generic_t *response = NULL;
 
-                    response.base.sig = MT_SIGNATURE_RESPONSE;
-                    response.base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
-                    response.base.size = sizeof( response.base );
-                    response.base.id = curr_ar->rr.request.base.id;
-                    response.base.sockfd = curr_ar->rr.request.base.sockfd;
-                    response.base.status = -ENOENT;
-                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+                    response = (mt_response_generic_t *) kmalloc( sizeof(*response), GFP_KERNEL | __GFP_ZERO);
+                    if( NULL == response )
+                    {
+                        rc = -ENOMEM;
+                        MYASSERT( !"kmalloc" );
+                        continue;
+                    }
 
-                    mwsocket_postproc_no_context( curr_ar, &response );
-                    mwsocket_postproc_emit_netflow( curr_ar, &response );
+                    response->base.sig = MT_SIGNATURE_RESPONSE;
+                    response->base.type = MT_RESPONSE( curr_ar->rr.request.base.type );
+                    response->base.size = sizeof( response->base );
+                    response->base.id = curr_ar->rr.request.base.id;
+                    response->base.sockfd = curr_ar->rr.request.base.sockfd;
+                    response->base.status = -ENOENT;
+                    response->base.flags = response->base.flags & _MT_FLAGS_REMOTE_CLOSED;
 
-                    memcpy( &curr_ar->rr.response, &response, response.base.size );
+                    mwsocket_postproc_no_context( curr_ar, response );
+                    mwsocket_postproc_emit_netflow( curr_ar, response );
+
+                    memcpy( &curr_ar->rr.response, response, response->base.size );
+                    kfree(response);
                     curr_ar->response_populated = true;
                     complete( &curr_ar->arrived );
                 }
-
             }
             else
             {
@@ -2417,20 +2525,29 @@ mwsocket_reap_dead_sock_instances( int Dead_INS_Array[ MAX_INS_COUNT ] )
                 // If there is no replacement INS, return failure to user on the accept() actreq
                 if( sockinst == NULL )
                 {
-                    mt_response_generic_t response = {0};
+                    mt_response_generic_t *response = NULL;
 
-                    response.base.sig = MT_SIGNATURE_RESPONSE;
-                    response.base.type = MT_RESPONSE( blockreq->rr.request.base.type );
-                    response.base.size = sizeof( response.base );
-                    response.base.id = blockreq->rr.request.base.id;
-                    response.base.sockfd = blockreq->rr.request.base.sockfd;
-                    response.base.status = -ENOENT;
-                    response.base.flags = response.base.flags & _MT_FLAGS_REMOTE_CLOSED;
+                    response = (mt_response_generic_t *) kmalloc( sizeof(*response), GFP_KERNEL | __GFP_ZERO);
+                    if( NULL == response )
+                    {
+                        rc = -ENOMEM;
+                        MYASSERT( !"kmalloc" );
+                        continue;
+                    }
 
-                    mwsocket_postproc_no_context( blockreq, &response );
-                    mwsocket_postproc_emit_netflow( blockreq, &response );
+                    response->base.sig = MT_SIGNATURE_RESPONSE;
+                    response->base.type = MT_RESPONSE( blockreq->rr.request.base.type );
+                    response->base.size = sizeof( response->base );
+                    response->base.id = blockreq->rr.request.base.id;
+                    response->base.sockfd = blockreq->rr.request.base.sockfd;
+                    response->base.status = -ENOENT;
+                    response->base.flags = response->base.flags & _MT_FLAGS_REMOTE_CLOSED;
 
-                    memcpy( &blockreq->rr.response, &response, response.base.size );
+                    mwsocket_postproc_no_context( blockreq, response );
+                    mwsocket_postproc_emit_netflow( blockreq, response );
+
+                    memcpy( &blockreq->rr.response, response, response->base.size );
+                    kfree(response);
                     blockreq->response_populated = true;
                     complete( &blockreq->arrived );
 
@@ -2549,7 +2666,6 @@ mwsocket_response_consumer( void * Arg )
         rc = mw_xen_get_next_response( &response, h );
         if( rc ) { goto ErrorExit; }
 
-
         MYASSERT( !( response->base.size > MESSAGE_TARGET_MAX_SIZE ) );
         
         if( DEBUG_SHOW_TYPE( response->base.type ) )
@@ -2583,6 +2699,11 @@ mwsocket_response_consumer( void * Arg )
             mw_xen_mark_response_consumed( h );
             continue; // move on
         }
+
+#ifdef MW_DEBUGFS
+        actreq->tb->t_mw5 = ktime_get_ns();
+        actreq->tb->t_ins = response->base.ts_ins;
+#endif
 
         //
         // The active request has been found.
@@ -3045,12 +3166,19 @@ mwsocket_read( struct file * File,
     mt_response_generic_t     * response = NULL;
     mwsocket_instance_t       * sockinst = NULL;
     mwsocket_instance_t       * sockinst_old = NULL;
-
+#ifdef MW_DEBUGFS
+    unsigned long ts_enter = ktime_get_ns();
+#endif
 
     pr_debug( "Processing read()\n" );
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
+#ifdef MW_DEBUGFS
+    sockinst->fops = 1;
+    sockinst->t_mw1 = ts_enter;
+#endif
 
     MYASSERT( sockinst->mwflags & MWSOCKET_FLAG_USER );
 
@@ -3178,6 +3306,9 @@ mwsocket_write( struct file * File,
     mwsocket_instance_t * sockinst = NULL;
     mt_request_base_t base;
     bool sent = false;
+#ifdef MW_DEBUGFS
+    unsigned long ts_enter = ktime_get_ns();
+#endif
 
     if( Len < MT_REQUEST_BASE_SIZE )
     {
@@ -3197,6 +3328,11 @@ mwsocket_write( struct file * File,
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
+#ifdef MW_DEBUGFS
+    sockinst->fops = 2;
+    sockinst->t_mw1 = ts_enter;
+#endif
 
     // No parallel requests per socket
     if( down_interruptible( &sockinst->request_sem ) )
@@ -3313,9 +3449,17 @@ mwsocket_ioctl( struct file * File,
     mwsocket_attrib_t attrib;
     mwsocket_attrib_t * uattrib = (mwsocket_attrib_t *)Arg;
     mwsocket_instance_t * sockinst = NULL;
+#ifdef MW_DEBUGFS
+    unsigned long ts_enter = ktime_get_ns();
+#endif
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
+#ifdef MW_DEBUGFS
+    sockinst->fops = 3;
+    sockinst->t_mw1 = ts_enter;
+#endif
 
     switch( Cmd )
     {
@@ -3363,10 +3507,18 @@ mwsocket_poll( struct file * File,
     ssize_t rc = 0;
     mwsocket_instance_t * sockinst = NULL;
     unsigned long events = 0;
-
+#ifdef MW_DEBUGFS
+    unsigned long ts_enter = ktime_get_ns();
+#endif
 
     rc = mwsocket_find_sockinst( &sockinst, File );
     MYASSERT( 0 == rc );
+
+#ifdef MW_DEBUGFS
+    sockinst->fops = 4;
+    sockinst->t_mw1 = ts_enter;
+#endif
+
     pr_verbose( "Processing poll(), fd %d\n", sockinst->local_fd );
 
     poll_wait( File, &g_mwsocket_state.waitq, PollTbl );
@@ -3395,7 +3547,9 @@ mwsocket_release( struct inode * Inode,
 {
     int rc = 0;
     mwsocket_instance_t * sockinst = NULL;
-
+#ifdef MW_DEBUGFS
+    unsigned long ts_enter = ktime_get_ns();
+#endif
 
     // Do not incur a decrement against our module for this close(),
     // since the file we're closing was not opened by an open()
@@ -3406,6 +3560,11 @@ mwsocket_release( struct inode * Inode,
     
     rc = mwsocket_find_sockinst( &sockinst, File );
     if( rc ) { goto ErrorExit; }
+
+#ifdef MW_DEBUGFS
+    sockinst->fops = 5;
+    sockinst->t_mw1 = ts_enter;
+#endif
 
     // The socket may have been created in mwsocket_create() but
     // creation failed on the INS. In this case, we'll destroy a

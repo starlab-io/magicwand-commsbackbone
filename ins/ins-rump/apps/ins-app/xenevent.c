@@ -766,8 +766,6 @@ process_buffer_item( buffer_item_t * BufferItem )
                  BufferItem->idx, (unsigned long)request->base.id );
     MYASSERT( MT_IS_REQUEST( request ) );
 
-
-    
     switch( request->base.type )
     {
     case MtRequestSocketCreate:
@@ -832,6 +830,11 @@ process_buffer_item( buffer_item_t * BufferItem )
                                  &response.socket_attrib,
                                  worker );
         break;
+    case MtRequestAddrBlock:
+        rc = xe_net_addr_block( &request->addr_block,
+                                &response.addr_block,
+                                worker );
+        break;
     case MtRequestPollsetQuery:
         rc = xe_pollset_query( &request->pollset_query,
                                &response.pollset_query );
@@ -863,6 +866,16 @@ process_buffer_item( buffer_item_t * BufferItem )
 
     log_write( LOG_VERBOSE, "Writing response ID %lx len %hx to ring\n",
                  response.base.id, response.base.size );
+
+#ifdef MW_DEBUGFS
+    {
+        // Time taken by INS to process request
+        struct timespec ts_ins_end;
+        (void) clock_gettime(CLOCK_MONOTONIC, &ts_ins_end);
+        response.base.ts_ins = (((ts_ins_end.tv_sec * 1000000000) + ts_ins_end.tv_nsec) -
+            ((BufferItem->ts_ins_start.tv_sec * 1000000000) + BufferItem->ts_ins_start.tv_nsec));
+    }
+#endif
 
     size_t written = write( g_state.output_fd,
                             &response,
@@ -950,9 +963,9 @@ assign_work_to_thread( IN buffer_item_t   * BufferItem,
         rc = get_worker_thread_for_fd( request->base.sockfd, AssignedThread );
         if ( rc ) goto ErrorExit;
         break;
-
         // Processed in current thread, acquire a new worker
     case MtRequestSocketCreate:
+    case MtRequestAddrBlock:
         MYASSERT( MT_INVALID_SOCKET_FD == request->base.sockfd );
         process_now = true;
         rc = get_worker_thread_for_fd( MT_INVALID_SOCKET_FD, AssignedThread );
@@ -1353,6 +1366,12 @@ message_dispatcher( void )
 
 
         size = read( g_state.input_fd, myitem->region, ONE_REQUEST_REGION_SIZE );
+
+#ifdef MW_DEBUGFS
+        // Timestamp when request is pulled off ring buffer
+        clock_gettime(CLOCK_MONOTONIC, &myitem->ts_ins_start);
+#endif
+
         if ( size < (ssize_t) sizeof(mt_request_base_t)
              || myitem->request->base.size > ONE_REQUEST_REGION_SIZE )
         {
@@ -1441,13 +1460,28 @@ setlimit( void )
     return 0;
 }
 
-
+#include "npfctl.h"
 int main(void)
 {
     int rc = 0;
 
     setlimit();
 
+    char * reload_cmd[64] = {
+        "npfctl",
+        "reload",
+        "/data/npf.conf"
+    };
+
+    char * start_cmd[64] = {
+        "npfctl",
+        "start"
+    };
+
+    do_npfctl_command( 3, reload_cmd );
+    do_npfctl_command( 2, start_cmd );
+
+    
     // LOG_LEVEL comes from Makefile
     rc = log_init( NULL, NULL, NULL, LOG_LEVEL );
     if( rc )

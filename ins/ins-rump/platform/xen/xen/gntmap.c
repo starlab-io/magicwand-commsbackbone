@@ -39,7 +39,7 @@
 #include <bmk-core/string.h>
 #include <bmk-core/memalloc.h>
 
-#define DEFAULT_MAX_GRANTS 128
+#define DEFAULT_MAX_GRANTS 256
 
 struct gntmap_entry {
     unsigned long host_addr;

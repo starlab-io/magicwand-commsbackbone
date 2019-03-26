@@ -101,4 +101,7 @@ int
 mwsocket_send_bare_request( IN    mt_request_generic_t  * Request,
                             INOUT mt_response_generic_t * Response );
 
+int
+mwsocket_block_ip_mitigation( IN domid_t Domid,
+                              IN void * args  );
 #endif // mwcomms_socket_h

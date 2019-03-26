@@ -514,11 +514,15 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
 {
     struct xenbus_event_queue events;
     int rc = 0;
+    int gnt_ref_chunks = 0;
+    int gnt_cnt = 0;
     char * err = NULL;
     char * msg = NULL;
     char * msgptr = NULL;
     char * refstr = NULL;
+    char * gntstr = NULL;
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
+    char gnt_key[ XENEVENT_PATH_STR_LEN ] = {0};
 
     xenbus_event_queue_init(&events);
 
@@ -527,9 +531,10 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
                   INS_XENSTORE_DIR_FMT "/%s",
                   XENEVENT_XENSTORE_ROOT,
                   g_state.local_id,
-                  GNT_REF_KEY ); 
+                  GNT_REF_CHUNKS ); 
 
     xenbus_watch_path_token(XBT_NIL, path, XENEVENT_NO_NODE, &events);
+
     while ( (err = xenbus_read( XBT_NIL, path, &msg ) ) != NULL
             ||  msg[0] == '0')
     {
@@ -540,30 +545,45 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
 
     xenbus_unwatch_path_token( XBT_NIL, path, XENEVENT_NO_NODE );
 
-    DEBUG_PRINT( "Parsing grant references in %s\n", path );
-
+    // read GNT_REF_CHUNKS value
     rc = xe_comms_read_str_from_key( path, &refstr );
-    if ( rc )
-    {
-        goto ErrorExit;
-    }
+    if ( rc ) { goto ErrorExit; }
+    gnt_ref_chunks = (int) bmk_strtoul( refstr, NULL, 10 );
+    bmk_memfree( refstr, BMK_MEMWHO_WIREDBMK );
 
-    // Extract the grant references from XenStore - they are space-delimited hex values
-    msgptr = msg;
-    for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
+    for ( int gnt = 1; gnt <= gnt_ref_chunks; gnt++)
     {
-        char * next = NULL;
-        g_state.grant_refs[i] = bmk_strtoul( msgptr, &next, 16 );
-        if ( *next != XENEVENT_GRANT_REF_DELIM [0] )
+        bmk_snprintf( gnt_key, sizeof( gnt_key ), INS_XENSTORE_DIR_FMT "/%s_%d",
+                      XENEVENT_XENSTORE_ROOT, g_state.local_id, GNT_REF_KEY, gnt ); 
+        rc = xe_comms_read_str_from_key( gnt_key, &gntstr );
+        if ( rc ) { goto ErrorExit; }
+
+        // Extract the grant references from XenStore - they are space-delimited hex values
+        msgptr = gntstr;
+        while (true)
         {
-            rc = BMK_EINVAL;
-            MYASSERT( !"Invalid data in grant ref path" );
-            goto ErrorExit;
-        }
+            char * next = NULL;
+            g_state.grant_refs[gnt_cnt] = bmk_strtoul( msgptr, &next, 16 );
+            gnt_cnt++;
 
-        DEBUG_PRINT( "Found grant reference 0x%x\n", g_state.grant_refs[i] );
-        msgptr = next;         // Advance msgptr to next token
+            // End of this gnt refs chunk
+            if ( *next == XENEVENT_GRANT_REF_END[0] ) { break; }
+
+            if ( *next != XENEVENT_GRANT_REF_DELIM[0] )
+            {
+                rc = BMK_EINVAL;
+                MYASSERT( !"Invalid data in grant ref path" );
+                bmk_memfree( gntstr, BMK_MEMWHO_WIREDBMK );
+                goto ErrorExit;
+            }
+
+            // Advance msgptr to next token
+            msgptr = next;
+        }
+        bmk_memfree( gntstr, BMK_MEMWHO_WIREDBMK );
     }
+
+    MYASSERT( gnt_cnt == XENEVENT_GRANT_REF_COUNT );
 
     gntmap_init( &g_state.gntmap_map );
 
@@ -575,6 +595,7 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
                                0,
                                (grant_ref_t *) g_state.grant_refs,
                                1 ); // region is writable
+
     if ( NULL == g_state.shared_ring )
     {
         MYASSERT( !"gntmap_map_grant_refs failed" );
@@ -584,12 +605,9 @@ xe_comms_rcv_grant_refs( domid_t RemoteId )
 
     g_state.shared_ring_size = XENEVENT_GRANT_REF_COUNT * PAGE_SIZE;
 
-ErrorExit:
-    if ( refstr )
-    {
-        bmk_memfree( refstr, BMK_MEMWHO_WIREDBMK );
-    }
+    DEBUG_PRINT( "g_state.shared_ring_size = %lu\n", g_state.shared_ring_size );
 
+ErrorExit:
     return rc;
 }
 

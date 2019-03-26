@@ -311,7 +311,7 @@ cd ~/${PRODUCTION_DIR}/magicwand-commsbackbone/util
 cp ~/${PRODUCTION_DIR}/magicwand-commsbackbone/ins/ins-rump/apps/ins-app/ins-rump.run .
 
 #todo: change 0000 to some number
-echo sudo rumprun -S xen -d -M 256 -N mw-ins-rump-0000 -I xen0,xenif,mac=00:16:3e:28:2a:58 -W xen0,inet,dhcp ins-rump.run
+echo sudo rumprun -S xen -d -b ./images/data.iso,/data -M 256 -N mw-ins-rump-0000 -I xen0,xenif,mac=00:16:3e:28:2a:58 -W xen0,inet,dhcp ins-rump.run
 sudo rumprun -S xen -d -M 256 -N mw-ins-rump-0000 -I xen0,xenif,mac=00:16:3e:28:2a:58 -W xen0,inet,dhcp ins-rump.run
 
 # sudo XD3_INS_RUN_FILE=/home/twosix/ins-production/magicwand-commsbackbone/ins/ins-rump/apps/ins-app/ins-rump.run python ./mw_distro_ins.py

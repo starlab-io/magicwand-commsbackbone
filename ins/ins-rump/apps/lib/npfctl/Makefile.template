@@ -1,0 +1,49 @@
+CC=x86_64-rumprun-netbsd-gcc
+AR=x86_64-rumprun-netbsd-ar
+
+ARFLAGS = rcs
+
+BIN=libnpfctl
+
+CFLAGS=-c -Wall -static
+
+ifeq ($(DEBUG),1)
+CFLAGS+=	-O0 -DDEBUG -ggdb -fno-omit-frame-pointer
+else
+CFLAGS+=	-DNDEBUG
+endif
+
+LDFLAGS=	-lnpf -lprop -lutil -lpcap
+
+OBJS+=		npfctl.o npf_var.o npf_data.o npf_build.o npf_extmod.o
+OBJS+=		npf_bpf_comp.o npf_show.o
+OBJS+=		npf_parse.o npf_scan.o
+OBJS+=		memintercept.o
+
+SRC+=		npfctl.c npf_var.c npf_data.c npf_build.c npf_extmod.c
+SRC+=		npf_bpf_comp.c npf_show.c
+SRC+=		npf_parse.c npf_scan.c
+SRC+=		memintercept.c
+
+
+all:$(BIN).a
+
+$(BIN).a:$(OBJS)
+	$(AR) $(ARFLAGS) $(BIN).a $^
+	x86_64-rumprun-netbsd-ranlib $(BIN).a
+
+$(OBJS):$(SRC)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS)
+
+npf_parse.c:
+	$(YACC) -y -d --warnings=none -o npf_parse.c npf_parse.y
+
+npf_scan.c:
+	$(LEX) -o npf_scan.c npf_scan.l
+#	$(CC) -Wno-sign-compare -c npf_scan.c -o npf_scan.o
+
+clean:
+	rm -f $(BIN) $(BIN).bin $(BIN).run *.o *.a npf_parse.c npf_parse.h npf_scan.c
+	rm -f ./images/data.iso
+
+.PHONY: all install clean

@@ -541,20 +541,26 @@ ErrorExit:
    return rc;
 }
 
-
 static int
 mw_xen_write_grant_refs_to_key( mwcomms_ins_data_t * Ins )
 {
     int rc = 0;
+    int gnt_cnt = 0;
+    int gnt_chunk = 1;
 
     // Must be large enough for one grant ref, in hex, plus '\0'
     // Make space for 12345678\0
     char one_ref[ 8 + 1 ];
     char path[ XENEVENT_PATH_STR_LEN ] = {0};
-    
+    char gnt_key[ XENEVENT_PATH_STR_LEN ] = {0};
+    char gnt_chunk_total[ XENEVENT_PATH_STR_LEN ] = {0};
     size_t gnt_refs_sz = XENEVENT_GRANT_REF_COUNT * sizeof(one_ref);
 
+    snprintf( path, sizeof(path), "%s/%d", XENEVENT_XENSTORE_ROOT, Ins->domid );
+    snprintf( gnt_key, sizeof(gnt_key), "%s_%d", GNT_REF_KEY, gnt_chunk );
+
     char * gnt_refs = kmalloc( gnt_refs_sz, GFP_KERNEL );
+
     if ( NULL == gnt_refs )
     {
         MYASSERT( "!kmalloc" );
@@ -566,28 +572,54 @@ mw_xen_write_grant_refs_to_key( mwcomms_ins_data_t * Ins )
 
     for ( int i = 0; i < XENEVENT_GRANT_REF_COUNT; i++ )
     {
-        if ( snprintf( one_ref, sizeof(one_ref),
-                       "%x ", Ins->grant_refs[i] ) >= sizeof(one_ref))
+        if ( snprintf( one_ref, sizeof(one_ref), "%x ", Ins->grant_refs[i] ) >= sizeof(one_ref))
         {
-            pr_err( "Insufficient space to write grant ref.\n" );
+            pr_err( "Insufficient space to write grant ref\n" );
             rc = -E2BIG;
             goto ErrorExit;
         }
 
         if ( strlen( gnt_refs ) >= gnt_refs_sz - sizeof(one_ref) )
         {
-            pr_err( "Insufficient space to write all grant refs.\n" );
+            pr_err( "Insufficient space to write all grant refs\n" );
             rc = -E2BIG;
             goto ErrorExit;
         }
 
         (void) strncat( gnt_refs, one_ref, gnt_refs_sz );
+
+        gnt_cnt++;
+
+        // Xenstore writes over 1024 bytes hang INS when it tries to read
+        // the data, break up the list of gnt refs into smaller chunks
+
+        // Store gnt refs chunk
+        if (gnt_cnt == GNT_REF_CHUNK_SIZE)
+        {
+            gnt_refs[strlen(gnt_refs) - 1] = XENEVENT_GRANT_REF_END[0];
+            rc = mw_xen_write_to_key( path, gnt_key, gnt_refs );
+            if ( rc ) { goto ErrorExit; }
+            gnt_cnt = 0;
+            gnt_chunk++;
+            gnt_refs[0] = '\0';
+            snprintf( gnt_key, sizeof(gnt_key), "%s_%d", GNT_REF_KEY, gnt_chunk );
+        }
     }
 
-    snprintf( path, sizeof(path), "%s/%d",
-              XENEVENT_XENSTORE_ROOT, Ins->domid );
+    // Store partial gnt refs chunk if needed
+    if (gnt_cnt > 0)
+    {
+        gnt_refs[strlen(gnt_refs) - 1] = XENEVENT_GRANT_REF_END[0];
+        rc = mw_xen_write_to_key( path, gnt_key, gnt_refs );
+        if ( rc ) { goto ErrorExit; }
+        gnt_chunk++;
+    }
 
-    rc = mw_xen_write_to_key( path, GNT_REF_KEY, gnt_refs );
+    snprintf( gnt_chunk_total, sizeof(gnt_chunk_total), "%d", gnt_chunk - 1 );
+
+    // Store number of gnt refs chunks used
+    rc = mw_xen_write_to_key( path, GNT_REF_CHUNKS, gnt_chunk_total );
+    if ( rc ) { goto ErrorExit; }
 
 ErrorExit:
     if ( NULL != gnt_refs )
@@ -1201,6 +1233,7 @@ ErrorExit:
 
 
 int
+MWSOCKET_DEBUG_OPTIMIZE_OFF
 mw_xen_for_each_live_ins( IN mw_xen_per_ins_cb_t Callback,
                           IN void *              Arg )
 {

@@ -8,6 +8,8 @@ import termios
 import tty
 import select
 import mw_netflow
+import socket
+import struct
 
 outstanding_requests = dict()
 open_socks = dict()
@@ -92,6 +94,7 @@ def input_monitor(conn, term_attr):
                 print("o - netflow information monitor on (enables open socket list")
                 print("O - netflow information monitor off (disables open socket list)")
                 print("c - close socket (mitigation)")
+                print("b - block ip address" )
             elif c == '\x70':    # 'p'
                 if info_display:
                     print("*** Open socket list ***")
@@ -106,14 +109,17 @@ def input_monitor(conn, term_attr):
                 info_muted = True
                 print("*** NetFlow Information Display (Muted) ***")
             elif c == '\x6f':    # 'o'
-                mw_netflow.send_feature_request(conn, 0,
-                    mw_netflow.FEATURES['MtChannelTrafficMonitorOn'][0],
-                    (0,0), mw_netflow.MW_FEATURE_FLAG_READ)
+                mw_netflow.send_feature_request( conn, 0,
+                                                 mw_netflow.FEATURES['MtChannelTrafficMonitorOn'][0],
+                                                 (0,0), mw_netflow.MW_FEATURE_FLAG_READ, "" )
                 info_display = True
                 print("*** NetFlow Information Display (On) ***")
             elif c == '\x4f':    # 'O'
-                mw_netflow.send_feature_request(conn, 0, mw_netflow.FEATURES['MtChannelTrafficMonitorOff'][0],
-                    (0,0), mw_netflow.MW_FEATURE_FLAG_READ)
+                mw_netflow.send_feature_request( conn,
+                                                 0,
+                                                 mw_netflow.FEATURES['MtChannelTrafficMonitorOff'][0],
+                                                 (0,0),
+                                                 mw_netflow.MW_FEATURE_FLAG_READ, "" )
                 info_display = False
                 open_socks.clear()
                 print("*** NetFlow Information Display (Off) ***")
@@ -136,12 +142,35 @@ def input_monitor(conn, term_attr):
                         raise ValueError()
                 except ValueError:
                         print "*** Invalid option, you needed to enter a valid index ***"
+
                 else:
                     kill_sockfd = osa[sock_index-1]
                     print("*** Closing open socket 0x{0:x} ***".format(kill_sockfd))
-                    mw_netflow.send_feature_request(conn, kill_sockfd,
-                        mw_netflow.FEATURES[ 'MtSockAttribOpen' ][0], (0,0),
-                        mw_netflow.MW_FEATURE_FLAG_WRITE + mw_netflow.MW_FEATURE_FLAG_BY_SOCK)
+                    mw_netflow.send_feature_request( conn,
+                                                     kill_sockfd,
+                                                     mw_netflow.FEATURES[ 'MtSockAttribOpen' ][0],
+                                                     (0,0),
+                                                     mw_netflow.MW_FEATURE_FLAG_WRITE + mw_netflow.MW_FEATURE_FLAG_BY_SOCK, "" )
+
+            elif c == '\x62' or c == '\x75':    # 'b' 'u'
+
+                if c == '\x62':
+                    val = 1
+                    prompt_str = "Input address to Block:\n"
+                elif c == '\x75':
+                    val = 0
+                    prompt_str = "Input address to Unblock:\n"
+
+                addr_str = raw_input( prompt_str )
+
+                mw_netflow.send_feature_request( conn,
+                                                 0,
+                                                 mw_netflow.FEATURES['MtSockAttribAddrBlock'][0],
+                                                 ( val, 0 ),
+                                                 mw_netflow.MW_FEATURE_FLAG_WRITE,
+                                                 addr_str )
+
+
                 tty.setcbreak(sys.stdin.fileno())
 
 
