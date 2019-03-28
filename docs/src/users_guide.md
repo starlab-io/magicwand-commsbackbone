@@ -1,36 +1,22 @@
+\newpage
 
 Development Environment
 =======================
 
-***
-
 This chapter describes in detail how to setup and verify a development
 environment for the mwcomms/ins component of Magicwand.
 
-|  Term    | Definition |
-|:---------|------------|
-| ATP      | Application to protect (ex: Apache) |
-| PVM      | Protected Virtual Machine, VM where the ATP runs |
-| Shim     | The LD_PRELOAD library loaded by the ATP providing a interface to the mwcomms driver |
-| mwcomms  | The Linux Kernel driver running on the PVM which interfaces with the Shim and INS |
-| INS      | Instrumented Unikernel Network Stacks |
+| Term    | Definition                                               |
+|:--------|----------------------------------------------------------|
+| ATP     | Application to protect (ex: Apache)                      |
+| PVM     | Protected Virtual Machine, VM where the ATP runs         |
+| Shim    | The LD_PRELOAD library                                   |
+| mwcomms | The Linux Kernel driver component of the network channel |
+| INS     | Instrumented Unikernel Network Stacks                    |
 
-***
 
-### Table of Contents
-1.  [Basic Development Environment Setup](#Section_01)
-2.  [Environment Setup After Dom0 Reboot](#Section_02)
-3.  [Environment Setup After Switching GIT Branches](#Section_03)
-4.  [NetFlow Setup and Use](#Section_04)
-5.  [Multiple INS Startup and Control](#Section_05)
-6.  [DebugFS Interface](#Section_06)
-7.  [Shim Logging](#Section_07)
-8.  [Using GDB with the INS](#Section_08)
-9.  [Makefile Features](#Section_09)
 
-***
-
-### Basic Development Environment Setup <a name="Section_01"></a>
+## Basic Development Environment Setup <a name="Section_01"></a>
 This section explains how to setup a basic development environment on which
 to build, run and test the mwcomms/ins subsystem.
 
@@ -258,7 +244,7 @@ to build, run and test the mwcomms/ins subsystem.
     # apache benchmark 'ab' is another good tool to use
     $ ab -n 100 -c 1 http://<RUMP_IP>:80/
 
-### Environment Setup After Dom0 Reboot <a name="Section_02"></a>
+## Environment Setup After Dom0 Reboot <a name="Section_02"></a>
 Once the full environment is setup this section explains what
 steps are needed after Dom0 is rebooted.
 
@@ -290,7 +276,7 @@ steps are needed after Dom0 is rebooted.
     # browser.cache.memory.enable "false"
     # browser.cache.disk.enable "false"
 
-### Environment Setup After Switching GIT Branches <a name="Section_03"></a>
+## Environment Setup After Switching GIT Branches <a name="Section_03"></a>
 Once the full environment is setup this section explains what
 steps are needed after switching to a new mwcomms/ins git branch.
 
@@ -307,7 +293,7 @@ steps are needed after switching to a new mwcomms/ins git branch.
 
 ***
 
-### NetFlow Setup and Use <a name="Section_04"></a>
+## NetFlow Setup and Use <a name="Section_04"></a>
 Communication channel and API to the mwcomms driver used to monitor protected
 application traffic (syscalls), send requests and receive responses. Requests
 can be used to query the driver for information or to specify an action to be
@@ -411,7 +397,7 @@ Initiate the mitigation while the file is being transferred.
 
 ***
 
-### Multiple INS Startup and Control <a name="Section_05"></a>
+## Multiple INS Startup and Control <a name="Section_05"></a>
 The mwcomms/ins subsystem allows for multiple INS instances to be running
 in parallel. A front end python utility is available for controlling multiple
 INS instances along with routing network requests to specific INS instances
@@ -419,7 +405,7 @@ to regulate load evenly.
 
 ***
 
-### DebugFS Interface <a name="Section_06"></a>
+## DebugFS Interface <a name="Section_06"></a>
 A Linux DebugFS interface is available in the mwcomms driver to allow for
 inspecting driver operation with a minimal impact on timing.
 
@@ -453,7 +439,7 @@ A python utility is available to read the request_trace data, filter it and disp
 
 ***
 
-### Shim Logging <a name="Section_07"></a>
+## Shim Logging <a name="Section_07"></a>
 The Shim is an libraray loaded by the APT using the LD_PRELOAD directive and allows the mwcomms driver to
 intercept ATP system calls associated with socket communication and forward those to the mwcomms driver for
 processing. This subsystem has a debug logging facility that can be enabled through the Makefile and then
@@ -470,7 +456,7 @@ By default logfiles are created in the "/tmp/ins_log" directory, specified in th
 
 ***
 
-### Using GDB with the INS <a name="Section_08"></a>
+## Using GDB with the INS <a name="Section_08"></a>
 GDB can be used to attach to the INS and used to debug problems. The easiest way to start the
 INS with the proper parameters for using GDB is by using the "run.sh" script and supply the
 "-g" paramter:
@@ -481,7 +467,7 @@ to connect to the INS instance.
 
 ***
 
-### Makefile Features <a name="Section_09"></a>
+## Makefile Features <a name="Section_09"></a>
 Many debug debug features for the Shim, mwcomms driver and INS can be enabled
 by uncommenting defines in the various makefiles. In many cases these debug
 features cause messages to be printed and can severly effect the timing and performance

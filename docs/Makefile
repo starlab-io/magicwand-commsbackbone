@@ -3,25 +3,35 @@
 # Unauthorized copying of this file, via any medium is strictly prohibited.
 
 TARGETS := \
-    documentation.pdf \
-	executive_summary.pdf
+    UsersGuide.pdf \
+	ExecutiveSummary.pdf \
+	DevelopersGuide.pdf
 
 OBJS = report.yaml \
-    design.md \
-    development_environment.md
+    development_environment.md \
+    design.md
+
 
 .PHONY: all
 .DEFAULT_GOAL := all
 all:$(TARGETS)
 
-documentation.pdf: $(OBJS)
-	pandoc --latex-engine=xelatex -S -o $@ $^
-	mv $@ ./artifacts
+define build_pdf
+pandoc --latex-engine=xelatex \
+	--toc --toc-depth=2 \
+	-V geometry:margin=3cm \
+	-S -o $@ $^
+endef
 
-executive_summary.pdf: executive_summary.md
-	pandoc --latex-engine=xelatex -S -o $@ $^
-	mv $@ ./artifacts
+DevelopersGuide.pdf: src/developers_guide.md
+	@$(build_pdf)
+
+UsersGuide.pdf: src/users_guide.md
+	@$(build_pdf)
+
+ExecutiveSummary.pdf: src/executive_summary.md
+	@$(build_pdf)
 
 .PHONY: clean
 clean:
-	rm -f ./artifacts/documentation.pdf ./artifacts/executive_summary.pdf
+	rm -f $(TARGETS)

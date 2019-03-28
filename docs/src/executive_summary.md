@@ -1,5 +1,3 @@
-# Executive Summary of the Comms-backbone Component of MAGICWAND
-
 \newpage
 
 Overview
@@ -136,13 +134,14 @@ descriptor or a local socket of a type other than IPv4, the calls are
 forwarded to the correct libraries for the operating system to handle
 and behave as would be expected without the presence of the shim.
 
-  Write      socket    connect    getsockopt
-  ---------- --------- ---------- -------------
-  Read       bind      send       Setsockopt
-  Readv      listen    sendto     getsockname
-  Writev     accept    recv       getpeername
-  Close      accept4   recvfrom   Fcntl
-  shutdown                        
+|          |         |          |             |
+|----------|---------|----------|-------------|
+| write    | socket  | connect  | getsockopt  |
+| read     | bind    | send     | Setsockopt  |
+| readv    | listen  | sendto   | getsockname |
+| writev   | accept  | recv     | getpeername |
+| close    | accept4 | recvfrom | fcntl       |
+| shutdown |         |          |             |
 
 []{#mwcomms-kernel-module .anchor}Table 2 List of system calls
 intercepted by shim

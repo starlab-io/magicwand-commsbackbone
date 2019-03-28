@@ -1,13 +1,28 @@
+\newpage
 
-Design
-======
+# Shim
 
-## Shim
+Location:
 
-The shim works by intercepting all socket related syscalls and forwarding the calls pertaining to IPv4 to the mwcomms driver by converting them to the mwcomms message format defined in message_types.h or by calling the appropriate ioctls on the mwcomms device.
+```
+protvm/user/wrapper
+```
+
+The LD_PRELOAD environment variable is used by the dynamic loader in Linux systems to specify the location of a library to be loaded before any other libraries.  The shim component of the MwComms isolated network channel uses the LD_PRELOAD directive to load a custom shared object library that intercepts all glibc functions that interact with IPv4 sockets.
+
+|          |         |          |             |
+|----------|---------|----------|-------------|
+| write    | socket  | connect  | getsockopt  |
+| read     | bind    | send     | Setsockopt  |
+| readv    | listen  | sendto   | getsockname |
+| writev   | accept  | recv     | getpeername |
+| close    | accept4 | recvfrom | fcntl       |
+| shutdown |         |          |             |
+
+Table 1 glibc functions intercepted by the shim
 
 
-## Mwcomms driver
+# Mwcomms Driver
 
 Location:
 
@@ -15,7 +30,7 @@ Location:
 /protvm/kernel/mwcomms
 ```
 
-### Introduction
+## Introduction
 
 The MagicWand driver (Linux kernel module, or LKM) for the protected virtual machine (PVM) facilitates the passing of requests from a protected application to one or more Isolated Network Stacks (INSs, currently backed by Rump unikernels on the same hardware). It also facilitates the delivery of a response, produced by an INS, to the protected application that expects it. This LKM is intended to be exercised by a custom shared object ("shim") that the protected application loads via LD_PRELOAD. The shim is available in this repo.
 
@@ -25,7 +40,7 @@ The LKM supports a handshake with another Xen virtual machine, the INS unikernel
 
 The LKM supports the usage of an underlying Xen ring buffer. The LKM writes requests to the ring buffer, and reads responses from it. The LKM makes no assumptions about the ordering of responses. The code that interacts with the underlying Xen ring buffer and the Xen event channel is the busiest and most performance-critical part of the system, and is found in mwcomms-xen-iface.c. The sending of an event on the event channel wakes up a thread in the INS, which then reads the next request off the ring buffer (the event indicates that the request is available for consumption). Likewise, the LKM has a special thread that reads responses off the ring buffer(s). It blocks on a semaphore which is up()ed by the LKM's event channel handler.
 
-### Multi-threading
+## Multi-threading
 
 Multithreading support works as follows:
 
@@ -39,7 +54,7 @@ This model implies some strict standards:
 
 - The programs that use this LKM must be well-written: upon writing a request, they must indicate to the LKM whether or not they will read a response. If the program says it will wait but doesn't, then the LKM will signal a completion variable and leak the response until the LKM is unloaded -- the user-provided thread was supposed to consume the response and destroy it.  The moral of the story is that the user-mode shim should be correct. 
 
-### Leveraging the Linux kernel's VFS
+## Leveraging the Linux kernel's VFS
 
 The first iteration of this driver did not leverage the virtual file system (VFS) it presented the shim with pseudo-file objects. This model was mostly adequate until the system was exercised against a more advanced protected application, Apache. Apache makes extensive use of polling, which in turn meant that the shim and LKM had to include support for MagicWand's version of polling. Moreover, there was a design problem wherein the death of a protected application was not always recognized by the LKM, thereby leaking resources.
 
@@ -109,7 +124,7 @@ modify mwsocket behavior --->  | ioctl   |
 
 The significant advantages to this design can be seen in the diagram: the kernel facilities are leveraged to support (1) polling and (2) mwsocket destruction, even in the case of process termination. This alleviates the LKM from those burdens. In a future refactor, this could be simplified so that the mwsocket object uses the main device's functions. In this case, a socket() call would result in a direct opening of /dev/mwcomms for a new file descriptor.
 
-### Multi-INS support
+## Multi-INS support
 
 To facilitate attack mitigation and TCP/IP stack diversification, the driver supports multiple INSs. This feature is considered in beta; there are still some issues to work out.
 
@@ -119,9 +134,8 @@ Once a new INS is registered, any listening sockets must be "replicated" onto it
 
 This behavior means that when an inbound connection on port 80 could come from any known INS. The LKM must direct that connection (a response to an accept) to the thread that originally wrote the accept request, although it may have sent it to a different INS (or set of INSs). The LKM achieves this capability by maintaining a list of inbound connections for each mwsocket. Upon an inbound connection, the response is put in the list and a special semaphore is up()-ed, which the accept()ing thread is blocking on. Moreover, each "replicated" mwsocket has an associated "primary" mwsocket, which is the one exposed to the user.
 
-## Xen Ring Buffer
 
-The xen ring buffer is a non locking data structure used for producer-consumer communication between the INS and the MwComms LKM.  A typical ring buffer has a request pointer and a response pointer, that is updated when requests or responses are written to the ring, and when the pointers reach the end of the buffer and need to wrap around, wrapping the index can be an expensive operation.  Xen avoids this problem by creating the ring buffer in powers of 2 so that the lowest n bits will always act as an index into the buffer, and can be obtained by a simple mask.
+## Xen Ring Buffer
 
 The MwComms ring buffer configuration options are located in the file:
 ```
@@ -134,16 +148,14 @@ Initially the grant ref order was 5, but raised to 8 in order to mitigate slowdo
 ```
 #define XENEVENT_GRANT_REF_ORDER  8 // 256 x 4k pages = 1024k (current default)
 ```
-The ring buffer initialization functions are found in the file mwcomms-xen-iface.c, and is called when a new INS is discovered. by means of xenbus_watch.  The size of the request/response slots in the ring buffer are determined by the 
+The ring buffer initialization functions are found in the file mwcomms-xen-iface.c, and is called when a new INS is discovered by means of xenbus_watch.  The size of the request/response slots in the ring buffer are determined by the 
 
 ## message_types.h
 
 * mt_response_generic_t
 * mt_request_generic_t
 
-
-
-## XenStore
+# XenStore
 
 The xenstore is used by MwComms to publish data needed to coordinate the different parts of the system.  This includes grant refs for the ring buffer, and ip address/port information for the netflow and front-end APIs.
 
@@ -186,9 +198,9 @@ mw/20 is the root directory for the INS
 
 ```
 
-## INS
 
-### INS userspace
+
+# INS
 
 Application for Rump userspace that manages commands from the protected virtual machine (PVM) over xen shared memory, as well as the associated network connections. The application is designed to minimize dynamic memory allocations after startup and to handle multiple blocking network operations simultaneously. 
 
@@ -217,7 +229,7 @@ One runs per worker thread. It waits for requests processes them against the soc
 Finds an available buffer and reads a request into it. Finds the thread that will process the request, and, if applicable, adds the request to its work queue and signals to it that work is there.
 
 
-### INS device driver /dev/xe
+## INS device driver /dev/xe
 
 
-
+## NPF Library
