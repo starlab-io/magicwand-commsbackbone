@@ -1,38 +1,73 @@
 \newpage
 
+# Architecture Diagram
+
+![MwComms Isolated Network Channel Architecture Diagram](./media/image2.png)
+
+
+# Introduction
+
+The MwComms isolated network channel is designed to intercept all network traffic from a process in a Xen virtual domain.  The network traffic is intercepted by a pre-loaded shared library that implements the system calls used to create and interact with sockets.  The data from those calls is then processed and forwarded to the /dev/mwcomms kernel module that then forwards the information to a Rumprun unikernel that behaves as the network stack for the protected process.  The communication between the mwcomms kernel device and the Rumprun unikernel is done through a high speed shared memory channel that Xen provides to facilitate communication between domains.
+
 # Shim
 
-Location:
-
 ```
+Location:
 protvm/user/wrapper
 ```
 
-The LD_PRELOAD environment variable is used by the dynamic loader in Linux systems to specify the location of a library to be loaded before any other libraries.  The shim component of the MwComms isolated network channel uses the LD_PRELOAD directive to load a custom shared object library that intercepts all glibc functions that interact with IPv4 sockets.
+The shim component of the MwComms isolated network channel is a shared library that is preemptively loaded via the LD_PRELOAD environment variable.  Using the LD_PRELOAD environment variable enables the shim to overwrite the functionality of all system calls that create or interact with TCP/IP sockets.  Table 1 contains a list of functions implemented by the shim.
 
 |          |         |          |             |
 |----------|---------|----------|-------------|
 | write    | socket  | connect  | getsockopt  |
-| read     | bind    | send     | Setsockopt  |
+| read     | bind    | send     | setsockopt  |
 | readv    | listen  | sendto   | getsockname |
 | writev   | accept  | recv     | getpeername |
 | close    | accept4 | recvfrom | fcntl       |
 | shutdown |         |          |             |
-
+    
 Table 1 glibc functions intercepted by the shim
 
+It may be noted that the functions listed in Table 1 do not perform operations solely on IPv4 sockets.  Functions such as write, read, close, etc. also perform options on file descriptors so the shim must be able to pass these calls to the operating system. This is accomplished through use of the ```__attribute__((constructor))``` function attribute to specify an initialization function that must run before main is called on the protected process. The constructor function ```init_wrapper()``` stores the addresses of the functions listed in Table 1 as global function pointers so system calls can still be forwarded to glibc if they perform operations on any socket that is not an MwSocket.
 
-# Mwcomms Driver
+Whenever the protected application creates a new IPv4 socket the shim intercepts the call to ```socket()``` and forwards it to the mwcomms kernel module via ioctl.  Once the kernel module recieves the ioctl a new mwsocket file object is created using the Linux virtual file system and the appropriate file descriptor is returned.  After the socket is created, system calls like bind, listen, etc. are converted to the mt_request_generic_t type and written to the mwcomms kernel driver.
 
-Location:
+# MwSocket File Descriptor
 
 ```
+Location:
+common/mwsocket.h
+```
+
+Implements support for MagicWand sockets so it is easy to distingush
+between a "normal" file descriptor and a MW socket fd. A MW socket
+fd has a value that is impossible for a Linux kernel, with a
+standard configuration, to issue. It's value is as follows:
+
+```
+Bit (byte)
+   56(7) |    48(6) |    40(5) |    32(4) |   24(3) |   16(2) |    8(1) |    0(0) |
+76543210 | 76543210 | 76543210 | 76543210 | 7654321 | 7654321 | 7654321 | 7654321 |
+-----------------------------------------------------------------------------------
+01010011 | (     dom ID      ) | (unused) |     (            sock ID        )     |
+
+The MSB evaluates to 'S' in ASCII, its hex value is 0x53.
+```
+
+Note that the mwsock is a 64 bit value that evaluates as a positive
+signed value. The protected VM and each Rump instance must
+understand and interpret this value correctly.
+
+
+# MwComms Driver
+
+```
+Location:
 /protvm/kernel/mwcomms
 ```
 
-## Introduction
-
-The MagicWand driver (Linux kernel module, or LKM) for the protected virtual machine (PVM) facilitates the passing of requests from a protected application to one or more Isolated Network Stacks (INSs, currently backed by Rump unikernels on the same hardware). It also facilitates the delivery of a response, produced by an INS, to the protected application that expects it. This LKM is intended to be exercised by a custom shared object ("shim") that the protected application loads via LD_PRELOAD. The shim is available in this repo.
+The MagicWand driver (Linux kernel module, or LKM) for the protected virtual machine (PVM) facilitates the passing of requests from a protected application to one or more Isolated Network Stacks (INSs, currently backed by Rump unikernels on the same hardware). It also facilitates the delivery of a response, produced by an INS, to the protected application that expects it. This LKM is intended to be exercised by a custom shared object ("shim") that the protected application loads via LD_PRELOAD.
 
 The LKM supports multithreading / multiprocessing - e.g a multi-threaded application above it can read/write to its device, and each request (write) can expect to receive the corresponding response (via read). It is designed to be fast, with expected slowdowns in the 10s of milliseconds relative to native speeds.
 
@@ -80,7 +115,6 @@ When initializing the Xen subsystem, a callback is passed to it. When a new INS 
 
 When a process wants to create a new mwsocket, it sends an IOCTL to the main LKM device. That causes mwcomms-socket to create a new mwsocket, backed by a file object, in the calling process, and return the mwsocket's new file descriptor. Thereafter the process interacts with that file descriptor to perform IO on the mwsocket. Closing the file descriptor will cause the release() callback in mwcomms-socket to be invoked, thus destroying the mwsocket.
 
-The core functionality of this LKM is found in mwcomms-socket.
 
 \newpage
 
@@ -134,26 +168,33 @@ Once a new INS is registered, any listening sockets must be "replicated" onto it
 
 This behavior means that when an inbound connection on port 80 could come from any known INS. The LKM must direct that connection (a response to an accept) to the thread that originally wrote the accept request, although it may have sent it to a different INS (or set of INSs). The LKM achieves this capability by maintaining a list of inbound connections for each mwsocket. Upon an inbound connection, the response is put in the list and a special semaphore is up()-ed, which the accept()ing thread is blocking on. Moreover, each "replicated" mwsocket has an associated "primary" mwsocket, which is the one exposed to the user.
 
-
-## Xen Ring Buffer
-
-The MwComms ring buffer configuration options are located in the file:
-```
-common/common_config.h
-```
-XENEVENT_GRANT_REF_ORDER defines the order of the block of shared memory for the Xen ring buffer. For instance, if the order is 6 and the page size is 4k, we share 2^6 = 64 (0x40) pages, or 262144 (0x40000) bytes. Xen has a default upper limit on how many pages can be shared (256). That limit can be configured by a Xen boot parameter.
-
-Initially the grant ref order was 5, but raised to 8 in order to mitigate slowdowns observed when the system was under heavy load.
+# Netflow
 
 ```
-#define XENEVENT_GRANT_REF_ORDER  8 // 256 x 4k pages = 1024k (current default)
+Kernel component location:
+protvm/kernel/mwcomms/mwcomms-netflow.c
+
+Interface:
+exports/imports/mw_netflow_iface.h
+
+API component:
+util/mw_netflow.py
+util/mw_netflow_consumer.py
 ```
-The ring buffer initialization functions are found in the file mwcomms-xen-iface.c, and is called when a new INS is discovered by means of xenbus_watch.  The size of the request/response slots in the ring buffer are determined by the 
+The netflow component of the MwComms network isolation channel is an open port created in the function ``` mw_netflow_init_listen_port( void ) ``` in the mwcomms-netflow.c source file.  This port is able to receive connection from the netflow library defined in mw_netflow.py.  The netflow port is published to the xenstore directory /mw/pvm/netflow which lists the ip address of the listening interface and port assigned.
 
-## message_types.h
 
-* mt_response_generic_t
-* mt_request_generic_t
+## Messaging Format
+
+```
+location:
+common/message_types.h
+```
+
+The data structures that define the format for data passing over the ring buffer are located in message_types.h.  The basic structure of a mwcomms message is a struct defined for each unique message type that needs to be passed over the ring buffer.  These message types typically take the form of a mt_request_base_t fields with additional fields for message specific data.  What is actually written to the ring buffer is data of the type mt_request_generic_t which is a union of all unique message types.
+
+Once a message is received by either the mwcomms driver or the INS over the ring buffer, a field is checked in the mw_request_base_t field common to all structs in union, and is 
+
 
 # XenStore
 
@@ -162,7 +203,6 @@ The xenstore is used by MwComms to publish data needed to coordinate the differe
 This is an example xenstore configuration between one INS and the PVM:
 
 ```
-
 mw = ""
  pvm = ""
   id = "2"
@@ -170,37 +210,48 @@ mw = ""
  20 = ""
   ins_dom_id = "20"
   vm_evt_chn_prt = "14"
-  gnt_ref_1 = "106c 106d 106e 106f 1070 1071 1072 1073 1074 1075 1076 1077 1078 1079 107a 107b 107c 107d 107e 107f\..."
-  gnt_ref_2 = "10ac 10ad 10ae 10af 10b0 10b1 10b2 10b3 10b4 10b5 10b6 10b7 10b8 10b9 10ba 10bb 10bc 10bd 10be 10bf\..."
-  gnt_ref_3 = "10ec 10ed 10ee 10ef 10f0 10f1 10f2 10f3 10f4 10f5 10f6 10f7 10f8 10f9 10fa 10fb 10fc 10fd 10fe 10ff\..."
-  gnt_ref_4 = "112c 112d 112e 112f 1130 1131 1132 1133 1134 1135 1136 1137 1138 1139 113a 113b 113c 113d 113e 113f\..."
+  gnt_ref_1 = "106c 106d 106e 106f 1070 1071 1072 1073 1074 1075 1076 1077 1078...
+  gnt_ref_2 = "10ac 10ad 10ae 10af 10b0 10b1 10b2 10b3 10b4 10b5 10b6 10b7 10b8...
+  gnt_ref_3 = "10ec 10ed 10ee 10ef 10f0 10f1 10f2 10f3 10f4 10f5 10f6 10f7 10f8...
+  gnt_ref_4 = "112c 112d 112e 112f 1130 1131 1132 1133 1134 1135 1136 1137 1138...
   gnt_ref_chunks = "4"
   vm_evt_chn_is_bound = "1"
   ip_addrs = " 20.60.60.138 127.0.0.1"
   heartbeat = "1807561"
   network_stats = "1f4:0:0:0"
-
-```
-
-```
-mw/pvm/id holds the domain id of the PVM
-mw/pvm/netflow holds the ip address and the port used to connect to the mwcomms LKM netflow channel
-
-mw/20 is the root directory for the INS
-     /ins_dom_id="20" contains the domid as a value to extract it easily from the xenstore
-     /vm_evt_chn_prt holds the value to establish an event channel between the PVM and the INS
-     /gnt_ref_[1..4] contains the indexes into the shared memory pages used for the ring buffer.
-     /gnt_ref_chunks contains the number of chunks that are available for reading.
-     /vm_evt_chn_is_bound is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
-     /ip_addrs is the list of ip addresses associated with the INS
-     /heartbeat is a value that is updated every 1 second to indicate that the INS is still alive
-     /network_stats //TODO fill this in
-
 ```
 
 
+```mw/pvm/id``` holds the domain id of the PVM
 
+``` mw/pvm/netflow ``` holds the ip address and the port used to connect to the mwcomms LKM netflow channel
+
+``` mw/20 ``` is the root directory for the INS
+
+``` /ins_dom_id="20" ``` contains the domid as a value to extract it easily from the xenstore
+
+``` vm_evt_chn_prt ``` holds the value to establish an event channel between the PVM and the INS
+
+```gnt_ref_[1..4]``` contains the indexes into the shared memory pages used for the ring buffer.
+
+```gnt_ref_chunks``` contains the number of chunks that are available for reading.
+
+```vm_evt_chn_is_bound``` is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
+
+```ip_addrs``` is the list of ip addresses associated with the INS
+
+```heartbeat``` is a value that is updated every 1 second to indicate that the INS is still alive
+
+``` network_stats ``` TODO fill this in
+     
 # INS
+
+## Command Dispatcher
+
+```
+Location:
+ins/ins-rump/apps/ins-app/xenevent.c
+```
 
 Application for Rump userspace that manages commands from the protected virtual machine (PVM) over xen shared memory, as well as the associated network connections. The application is designed to minimize dynamic memory allocations after startup and to handle multiple blocking network operations simultaneously. 
 
@@ -231,5 +282,26 @@ Finds an available buffer and reads a request into it. Finds the thread that wil
 
 ## INS device driver /dev/xe
 
+```
+Location:
+/home/alex/workspace/magicwand-commsbackbone/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent/xenevent.c
+```
+
+## Netflow Interface
+
+```
+Location:
+util/mw_netflow.py
+util/mw_netflow_consumer.py
+```
+
+
 
 ## NPF Library
+
+```
+Location:
+
+```
+
+In order to facilitate ip block mitigations, the npfctl command line utility was modified into a library.

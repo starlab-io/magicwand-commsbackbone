@@ -12,10 +12,6 @@ OBJS = report.yaml \
     design.md
 
 
-.PHONY: all
-.DEFAULT_GOAL := all
-all:$(TARGETS)
-
 define build_pdf
 pandoc --latex-engine=xelatex \
 	--toc --toc-depth=2 \
@@ -23,15 +19,16 @@ pandoc --latex-engine=xelatex \
 	-S -o $@ $^
 endef
 
+all:$(TARGETS)
+
 DevelopersGuide.pdf: src/developers_guide.md
-	@$(build_pdf)
+	$(build_pdf)
 
 UsersGuide.pdf: src/users_guide.md
-	@$(build_pdf)
+	$(build_pdf)
 
 ExecutiveSummary.pdf: src/executive_summary.md
-	@$(build_pdf)
+	$(build_pdf)
 
-.PHONY: clean
 clean:
 	rm -f $(TARGETS)
