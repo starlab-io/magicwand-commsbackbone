@@ -222,31 +222,23 @@ mw = ""
 ```
 
 
-```mw/pvm/id``` holds the domain id of the PVM
-
-``` mw/pvm/netflow ``` holds the ip address and the port used to connect to the mwcomms LKM netflow channel
-
-``` mw/20 ``` is the root directory for the INS
-
-``` /ins_dom_id="20" ``` contains the domid as a value to extract it easily from the xenstore
-
-``` vm_evt_chn_prt ``` holds the value to establish an event channel between the PVM and the INS
-
-```gnt_ref_[1..4]``` contains the indexes into the shared memory pages used for the ring buffer.
-
-```gnt_ref_chunks``` contains the number of chunks that are available for reading.
-
-```vm_evt_chn_is_bound``` is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
-
-```ip_addrs``` is the list of ip addresses associated with the INS
-
-```heartbeat``` is a value that is updated every 1 second to indicate that the INS is still alive
-
-``` network_stats ``` TODO fill this in
+```
+mw/pvm/id holds the domain id of the PVM
+mw/pvm/netflow holds the ip address and the port used to connect to the mwcomms LKM netflow channel
+mw/20 is the root directory for the INS
+ins_dom_id="20" contains the domid as a value to extract it easily from the xenstore
+vm_evt_chn_prt  holds the value to establish an event channel between the PVM and the INS
+gnt_ref_[1..4] contains the indexes into the shared memory pages used for the ring buffer.
+gnt_ref_chunks contains the number of chunks that are available for reading.
+vm_evt_chn_is_bound is a boolean flag indicating that the event channel is ready to signal writes to the ring buffer
+ip_addrs is the list of ip addresses associated with the INS
+heartbeat is a value that is updated every 1 second to indicate that the INS is still alive
+```
      
 # INS
 
 ## Command Dispatcher
+
 
 ```
 Location:
@@ -284,10 +276,20 @@ Finds an available buffer and reads a request into it. Finds the thread that wil
 
 ```
 Location:
-/home/alex/workspace/magicwand-commsbackbone/ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent/xenevent.c
+ins/ins-rump/src-netbsd/sys/rump/dev/lib/libxenevent/xenevent.c
+```
+Rumprun unikernel driver that interfaces with the ring buffer and xen components.
+
+## NPF Library
+
+```
+Location:
+ins/ins-rump/apps/lib/npfctl
 ```
 
-## Netflow Interface
+In order to facilitate ip block mitigations, the npfctl command line utility was modified into a library.  The build steps are located in the Makefile in the npfctl directory listed above.
+
+# Netflow Interface
 
 ```
 Location:
@@ -295,13 +297,8 @@ util/mw_netflow.py
 util/mw_netflow_consumer.py
 ```
 
+The netflow interface can be used in two ways: 
 
+1. importing mw_netflow.py into an existing project 
+2. using the supplied command line interface mw_netflow_consumer.py
 
-## NPF Library
-
-```
-Location:
-
-```
-
-In order to facilitate ip block mitigations, the npfctl command line utility was modified into a library.
